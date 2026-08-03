@@ -34,7 +34,7 @@ PROMPT['pdf_recognize'] = r'''
 - 信息密度高：一段 head 应能回答「这是什么产品、关键规格是什么、主要注意什么」
 
 二、body（完整 PDF 识别正文）
-这是对文档内容的完整自然语言描述。
+这是对文档内容的完整自然语言描述,用中文描述。
 
 要求：
 1. 按文档逻辑结构组织逐一描述
@@ -56,12 +56,7 @@ PROMPT['pdf_recognize'] = r'''
 假设某张图片写有：Product: Lithium Acetate Solution；CAS 546-89-4；Assay 22%–26%；Use: battery electrolyte additive；Store cool dry。
 
 正确输出示例：
-{"head":"产品名 Lithium Acetate Solution（醋酸锂溶液）；CAS 546-89-4；主规格 Assay 22%–26%；用途：电池电解液添加剂；储存：阴凉干燥处。","body":"产品概述：本资料描述醋酸锂溶液 Lithium Acetate Solution。\\n标识：CAS 546-89-4。\\n规格：Assay（含量）为 22%–26%。\\n应用：可用作电池电解液添加剂。\\n包装与储存：建议阴凉、干燥处储存。"}
-
-错误示例（禁止）：
-- head/body 写成对象或数组
-- body 只写「详见 PDF」或「内容较多省略」
-- 编造文档中未出现的规格或内容
+{"head":"产品名 Lithium Acetate Solution（醋酸锂溶液）；CAS 546-89-4；主规格 Assay 22%–26%；用途：电池电解液添加剂；储存：阴凉干燥处。","body":"本资料描述醋酸锂溶液 Lithium Acetate Solution。\\nCAS 546-89-4。\\n规格：Assay（含量）为 22%–26%。\\n应用：可用作电池电解液添加剂。\\n包装与储存：建议阴凉、干燥处储存。"}
 
 现在开始识别用户提供的 PDF 页面图片，直接输出JSON。
 Output:
