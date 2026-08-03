@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+cache/
+*.log
+*:Zone.Identifier
+.DS_Store
+product_files/
+master_env.yaml
+example/

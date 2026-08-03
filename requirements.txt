@@ -1,0 +1,39 @@
+# Core API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+pydantic>=2.0
+pydantic-settings>=2.0
+
+# Auth & DB
+sqlalchemy>=2.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0,<4.1.0
+pymysql>=1.1.0
+# cryptography often needed by pymysql for some MySQL auth plugins
+cryptography>=42.0.0
+
+# LLM (OpenAI-compatible clients)
+openai>=1.40.0
+tiktoken>=0.7.0
+httpx>=0.27.0
+
+# Vector / scientific
+numpy>=1.26.0
+faiss-cpu>=1.7.4
+scikit-learn>=1.3.0
+hdbscan>=0.8.33
+pyyaml>=6.0
+tqdm>=4.66.0
+
+# PDF recognition (PyMuPDF)
+pymupdf>=1.24.0
+
+# Aliyun OSS download
+oss2>=2.18.0
+
+# Hypergraph visualization (scripts/draw_hypergraph.py)
+matplotlib>=3.8.0
+networkx>=3.0
