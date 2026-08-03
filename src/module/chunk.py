@@ -15,37 +15,6 @@ class BaseChunk:
 
         self.tokener = tiktoken.get_encoding("cl100k_base")
 
-    def truncated_scalable_sliding_window(self,chunks,grow_max = 1,grow_overlap = 0):
-        length=len(chunks)
-        chunks_=[]
-        s_index = 0
-        e_index = 0
-        while True:
-            include_chunks = chunks[s_index:e_index + 1]
-
-            previous_content=""
-
-            if len(include_chunks) != 1:
-                for chunk in include_chunks[:-1]:
-                    previous_content += chunk["content"] + "\n"
-            
-            chunk_={
-                "content":chunks[e_index]["content"],
-                "previous_content": previous_content
-            }
-            chunks_.append(chunk_)
-
-            if e_index >= length - 1:
-                break
-
-            if e_index-s_index < grow_max-1:
-                e_index += 1
-            else:
-                s_index = e_index + 1 - grow_overlap
-                e_index += 1
-        return chunks_
-
-
     def dynamic_division(self,text,tokener,min_tokens = 100,max_tokens = 400):
 
         lines = text.splitlines(True)
@@ -123,8 +92,12 @@ class BaseChunk:
         text=task['content']
         doc_id=task['id']
 
-        segs = self.dynamic_division(text=text,tokener=self.tokener,min_tokens=self.config.chunk.chunk_size_min,max_tokens=self.config.chunk.chunk_size_max)
-        chunks = self.truncated_scalable_sliding_window(segs,grow_max=self.config.chunk.grow_max,grow_overlap=self.config.chunk.grow_overlap)
+        chunks = self.dynamic_division(
+            text=text,
+            tokener=self.tokener,
+            min_tokens=self.config.chunk.chunk_size_min,
+            max_tokens=self.config.chunk.chunk_size_max,
+        )
         for chunk in chunks:
             add_chunk={
                 "doc_id": doc_id,

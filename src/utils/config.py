@@ -34,8 +34,6 @@ def _none_to_empty(v):
 class SettingsConfig(BaseModel):
     working_path: str
     debug: bool = False
-    # Default OpenAI-compatible endpoint for stages that omit their own keys.
-    # Local GPU servers often need a placeholder key such as "EMPTY".
     api_key: str = "EMPTY"
     base_url: str = ""
 
@@ -49,7 +47,6 @@ class SettingsConfig(BaseModel):
 
 class DocRecognitionConfig(BaseModel):
     """PDF vision recognition settings (multimodal VLM)."""
-    # Empty → fall back to settings.api_key / settings.base_url
     api_key: str = ""
     base_url: str = ""
     model_args: dict = Field(default_factory=lambda: {
@@ -59,7 +56,6 @@ class DocRecognitionConfig(BaseModel):
         'response_format': {'type': 'json_object'},
     })
     use_cache: bool = True
-    # Concurrent workers for PDF recognition. Metrics/log use batch wall-clock only.
     num_thread: int = 4
     prompt: str = 'pdf_recognize'
     dpi: int = 150
@@ -73,21 +69,30 @@ class DocRecognitionConfig(BaseModel):
 
 class DocConfig(BaseModel):
     count_token: bool = True
-    # 'pdf' | 'txt' — source type for insert_default
     source_type: str = 'pdf'
-    # Same as original txt location: working_path/doc (e.g. example/a/doc)
     doc_dir: str = 'doc'
     recognition: DocRecognitionConfig = Field(default_factory=DocRecognitionConfig)
 
 
 class ChunkConfig(BaseModel):
     count_token: bool = True
-    grow_max: int = 1
-    grow_overlap: int = 0
     chunk_size_min: int = 300
     chunk_size_max: int = 512
-    # Prefer one recognition text == one chunk
     force_single_chunk: bool = True
+    chunk_overlap: float = 0.1
+
+    @field_validator("chunk_overlap", mode="before")
+    @classmethod
+    def _normalize_chunk_overlap(cls, v):
+        if v is None or v == "":
+            return 0.1
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return 0.1
+        if x > 1.0:
+            x = x / 100.0
+        return max(0.0, min(x, 0.9))
 
 
 class ExtractConfig(BaseModel):

@@ -13,7 +13,7 @@ class Vectorization(BaseVectorization):
         self.usage_prompt_tokens = 0
         self.usage_total_tokens = 0
 
-    @Retry(max_attempt=5, wait=0.1, timeout=600)
+    @Retry(max_attempt=3, wait=0.1, timeout=60)
     def processing_single_task(self, task, **kwargs):
         emb_content = task['embedding_content']
         if emb_content is None:
@@ -31,6 +31,7 @@ class Vectorization(BaseVectorization):
             use_cache=self.config.vectorization.use_cache,
         )
         if response['status'] != 1:
+            self.logger.error(f"Embedding failed, status: {response['status']}")
             raise Exception(f"Embedding failed, status: {response['status']}")
 
         cache_hit = bool(response.get('_cache_hit'))
