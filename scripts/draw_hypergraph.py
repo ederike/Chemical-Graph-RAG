@@ -9,7 +9,7 @@
 
 示例：
   python scripts/draw_hypergraph.py --db example/b/DB/main.db
-  python scripts/draw_hypergraph.py --db example/b/DB/main.db --max-hyperedges 5 --output outputs/hypergraph.png
+  python scripts/draw_hypergraph.py --db example/a/DB/main.db --max-hyperedges 20 --output outputs/hypergraph_20.png
 """
 
 from __future__ import annotations
