@@ -12,6 +12,7 @@ from .custom_module.retrieve import Retrieve
 from .custom_module.recommend import Recommend
 
 from .utils.OpenAIAPI import LLM
+from .utils.prompt import PROMPT
 
 from .utils.storage import DocDB,ChunkDB,HyperedgeDB,NodeDB,EdgeDB,DocVDB,ChunkVDB,HyperedgeVDB,NodeVDB,EdgeVDB
 from .utils.config import Config
@@ -593,22 +594,11 @@ class DHMF:
         t0 = time.perf_counter()
         retrieval_result = self.retrieve_module.retrive(query)
         retrieve_latency_s = time.perf_counter() - t0
-        system_prompt = (
-            "你是一位资深的化工/材料产品咨询与推荐官,你的任务是分析问题的根本原因，并从推荐中做一定的参考，要从问题的目的和要求出发做一些推荐，而不是一定要从参考中推荐"
-            # "你的回答从“Thought:”开始，你将系统地分解推理过程，说明你是如何得出结论的。"
-            # "以“Answer:”结尾，给出一个清晰、明确的回答，"
-        )
+        system_prompt = PROMPT.get('query_answer_system', '')
         respond_prompt = (
-            retrieval_result
-            + "参考用上面资料和原有知识来回答下面的问题。"
-            "基于资料进行产品匹配、对比与组合推荐：在需求允许时，可将多个产品组成合理方案，但不是必须的，要严格判断这个产品和问题的场景是否适配"
-            "并说明各自角色（如主材料、助燃/阻燃相关助剂、工艺配套等）及组合逻辑。"
-            "安全与相容性优先：若资料提示危险象形图、不相容物、混用禁忌、储存条件冲突，请勿随便推荐，要先判断其使用场景是否符合要求，并在回答中声明"
-            "合理推断某两种产品不宜同时使用，必须给出清晰警告，并说明依据。"
-            "回答中的每一条关键结论、推荐、组合建议与风险提示都必须标明出处"
-            "来源出处取自文档名(如：TDS_90198.pdf)，并非上文给出的资料1等。无出处则不得当作既定事实陈述。"
-            f".Question: {query}"
-            # "Thought: "
+            PROMPT.get('query_answer', '{retrieval_result}\n.Question: {query}')
+            .replace('{retrieval_result}', str(retrieval_result or ''))
+            .replace('{query}', str(query or ''))
         )
         respond = self.llmmodel.generate(
             prompt={'system': system_prompt, 'user': respond_prompt},
