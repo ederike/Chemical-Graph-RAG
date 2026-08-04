@@ -73,7 +73,7 @@ class BaseExtract:
             return None
         return items
 
-    @Retry(max_attempt=5, wait=0.1,timeout=600)
+    @Retry(max_attempt=5, wait=0.1, timeout=600, config_attr='extract.retry')
     def processing_single_task(self,chunk,**kwargs):
         attempt=kwargs.get('attempt',1)
         content=chunk['content']

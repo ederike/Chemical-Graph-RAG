@@ -84,7 +84,7 @@ class Extract(BaseExtract):
 
         return items
 
-    @Retry(max_attempt=3, wait=0.1, timeout=60)
+    @Retry(max_attempt=3, wait=0.1, timeout=60, config_attr='extract.retry')
     def processing_single_task(self, chunk, **kwargs):
         attempt = kwargs.get('attempt', 1)
         max_attempt = kwargs.get('max_attempt', 3)

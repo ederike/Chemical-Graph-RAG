@@ -45,6 +45,31 @@ class SettingsConfig(BaseModel):
         return v
 
 
+class RetryConfig(BaseModel):
+    """Per-stage @Retry parameters (seconds for wait/timeout)."""
+    max_attempt: int = 3
+    wait: float = 0.1
+    timeout: float = 60.0
+
+    @field_validator("max_attempt", mode="before")
+    @classmethod
+    def _coerce_attempt(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 3
+        return max(1, n)
+
+    @field_validator("wait", "timeout", mode="before")
+    @classmethod
+    def _coerce_nonneg_float(cls, v):
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, x)
+
+
 class DocRecognitionConfig(BaseModel):
     """PDF vision recognition settings (multimodal VLM)."""
     api_key: str = ""
@@ -60,6 +85,10 @@ class DocRecognitionConfig(BaseModel):
     prompt: str = 'pdf_recognize'
     dpi: int = 150
     image_format: str = 'png'
+    # 长 PDF / 多图 VL 调用默认给足单次超时
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=300.0)
+    )
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
@@ -107,6 +136,9 @@ class ExtractConfig(BaseModel):
     extract_prompt: str = 'extract'
     use_cache: bool = True
     num_thread: int = 1
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
+    )
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
@@ -129,6 +161,9 @@ class VectorizationConfig(BaseModel):
     default_target: List[str] = Field(default_factory=list)
     use_cache: bool = True
     num_thread: int = 1
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
+    )
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod

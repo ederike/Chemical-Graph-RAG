@@ -1,0 +1,54 @@
+dhmf:
+  config_path: example/a/config_open.yaml
+  query_mode: dual_path
+
+paths:
+  db_path: example/a/DB/main.db
+  output_dir: benchmark_outputs
+  questions_path: null # 留空则自动：{output_dir}/questions_YYYYMMDD_HHMMSS.json
+  report_path: null    # 评测报告 JSON，留空则自动：{output_dir}/eval_report_YYYYMMDD_HHMMSS.json
+  summary_path: null   # 综合统计表 txt；留空则与 report 同名的 .summary.txt
+  dataset_path: null   # 仅 evaluate 时：若 questions_path 为空，可显式指定已有数据集
+
+generate:
+  hop_counts:
+    "1": 5
+    "2": 3
+    "3": 2
+  seed: 42
+  max_chars_per_doc: -1
+  max_retries: 3
+  sleep_between: 0.0
+  use_cache: false
+  api_key: null   # 出题 LLM 端点；留空则继承 dhmf.config → retrieve → settings
+  base_url: null
+  timeout: 180
+  model_args:
+    model: null  # model 留空则继承 dhmf retrieve.model_args.model
+    temperature: 0.2
+    enable_thinking: false
+    # max_tokens: 1024
+    response_format:
+      type: json_object
+
+evaluate:
+  # 评判时送入的完整参考文档单篇最大字符数（-1=不截断，整篇 doc.content）
+  max_source_chars: -1
+  max_retries: 3
+  sleep_between: 0.0
+  save_summary_txt: true  # 是否写 .summary.txt
+  use_cache: false  # RAG 回答 LLM 是否走缓存（一般关，保证评测可复现对比）
+  dhmf_retrieve_use_cache: null  # 是否覆盖 dhmf 侧 retrieve.use_cache（null=不改配置）
+  api_key: null  # 评判 LLM 端点；留空则继承 dhmf retrieve
+  base_url: null
+  timeout: 180
+  model_args:
+    model: null
+    temperature: 0.0
+    enable_thinking: false
+    # max_tokens: 512
+    response_format:
+      type: json_object
+
+logging:
+  level: INFO  # DEBUG / INFO / WARNING / ERROR

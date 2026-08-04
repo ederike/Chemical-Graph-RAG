@@ -15,7 +15,7 @@ class BaseVectorization:
         api_key, base_url = resolve_credentials(config, config.vectorization)
         self.embedding = Embedding(api_key=api_key, base_url=base_url)
 
-    @Retry(max_attempt=5, wait=0.1,timeout=600)
+    @Retry(max_attempt=5, wait=0.1, timeout=600, config_attr='vectorization.retry')
     def processing_single_task(self,task,**kwargs):
         emb_content=task['embedding_content']
         if emb_content is None:

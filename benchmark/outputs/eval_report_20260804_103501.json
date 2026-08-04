@@ -1,0 +1,135 @@
+{
+  "meta": {
+    "created_at": "2026-08-04T10:35:01",
+    "dataset_meta": {
+      "created_at": "2026-08-04T10:35:00",
+      "db_path": "/root/projects/Chemical-Graph-RAG/example/a/DB/main.db",
+      "hop_counts": {
+        "1": 5,
+        "2": 3,
+        "3": 2
+      },
+      "seed": 42,
+      "model": "qwen3.6-27b",
+      "total": 10,
+      "success": 0,
+      "failed": 10,
+      "elapsed_s": 0.487,
+      "benchmark_config": {
+        "config_file": "/root/projects/Chemical-Graph-RAG/benchmark/config.yaml",
+        "dhmf_config_path": "/root/projects/Chemical-Graph-RAG/example/a/config_open.yaml",
+        "query_mode": "dual_path",
+        "db_path": "/root/projects/Chemical-Graph-RAG/example/a/DB/main.db",
+        "output_dir": "/root/projects/Chemical-Graph-RAG/benchmark/outputs",
+        "questions_path": null,
+        "report_path": null,
+        "summary_path": null,
+        "dataset_path": null,
+        "hop_counts": {
+          "1": 5,
+          "2": 3,
+          "3": 2
+        },
+        "seed": 42,
+        "max_chars_per_doc": -1,
+        "gen_model_args": {
+          "model": "qwen3.6-27b",
+          "temperature": 0.2,
+          "enable_thinking": false,
+          "response_format": {
+            "type": "json_object"
+          }
+        },
+        "judge_model_args": {
+          "temperature": 0.0,
+          "enable_thinking": false,
+          "response_format": {
+            "type": "json_object"
+          }
+        },
+        "gen_api_key_set": false,
+        "gen_base_url": null,
+        "judge_api_key_set": false,
+        "judge_base_url": null
+      },
+      "saved_path": "/root/projects/Chemical-Graph-RAG/benchmark/outputs/questions_20260804_103500.json"
+    },
+    "query_mode": "dual_path",
+    "judge_model": "qwen3.6-27b",
+    "n_questions": 0,
+    "n_skipped_gen_fail": 10,
+    "elapsed_s": 0.0,
+    "benchmark_config": {
+      "config_file": "/root/projects/Chemical-Graph-RAG/benchmark/config.yaml",
+      "dhmf_config_path": "/root/projects/Chemical-Graph-RAG/example/a/config_open.yaml",
+      "query_mode": "dual_path",
+      "db_path": "/root/projects/Chemical-Graph-RAG/example/a/DB/main.db",
+      "output_dir": "/root/projects/Chemical-Graph-RAG/benchmark/outputs",
+      "questions_path": null,
+      "report_path": null,
+      "summary_path": null,
+      "dataset_path": null,
+      "hop_counts": {
+        "1": 5,
+        "2": 3,
+        "3": 2
+      },
+      "seed": 42,
+      "max_chars_per_doc": -1,
+      "gen_model_args": {
+        "model": "qwen3.6-27b",
+        "temperature": 0.2,
+        "enable_thinking": false,
+        "response_format": {
+          "type": "json_object"
+        }
+      },
+      "judge_model_args": {
+        "model": "qwen3.6-27b",
+        "temperature": 0.0,
+        "enable_thinking": false,
+        "response_format": {
+          "type": "json_object"
+        }
+      },
+      "gen_api_key_set": false,
+      "gen_base_url": null,
+      "judge_api_key_set": false,
+      "judge_base_url": null
+    }
+  },
+  "results": [],
+  "summary": {
+    "n_total": 0,
+    "llm_acc": {
+      "counts": {
+        "正确": 0,
+        "错误": 0,
+        "未知": 0
+      },
+      "accuracy": null,
+      "error_rate": null,
+      "n_judged": 0
+    },
+    "doc_recall": {
+      "mean_recall": null
+    },
+    "latency": {
+      "mean_query_s": null,
+      "mean_retrieve_s": null,
+      "sum_query_s": null
+    },
+    "tokens": {
+      "sum_prompt": null,
+      "sum_completion": null,
+      "sum_total": null,
+      "mean_prompt": null,
+      "mean_completion": null,
+      "sum_judge_prompt": null,
+      "sum_judge_completion": null,
+      "sum_judge_total": null
+    },
+    "by_hop": {}
+  },
+  "summary_table": "========================================================================\n综合评测统计表\n========================================================================\n样本数: 0\n\n【LLM 准确率 llm-acc】（二分类：正确 / 错误）\n  正确: 0\n  错误: 0\n  准确率 accuracy: N/A\n  错误率: N/A\n\n【文档召回率】命中 gold 文档数 / gold 文档总数（按题平均）\n  平均召回率 mean_recall: N/A\n\n【时延】\n  平均 query 时延: N/A\n  平均 retrieve 时延: N/A\n  query 总时延: N/A\n\n【Token 消耗（RAG 回答）】\n  prompt 合计: None\n  completion 合计: None\n  total 合计: None\n  平均 prompt: N/A\n  平均 completion: N/A\n【Token 消耗（评判 LLM）】\n  judge prompt 合计: None\n  judge completion 合计: None\n  judge total 合计: None\n========================================================================"
+}

@@ -13,7 +13,7 @@ class Vectorization(BaseVectorization):
         self.usage_prompt_tokens = 0
         self.usage_total_tokens = 0
 
-    @Retry(max_attempt=3, wait=0.1, timeout=60)
+    @Retry(max_attempt=3, wait=0.1, timeout=60, config_attr='vectorization.retry')
     def processing_single_task(self, task, **kwargs):
         emb_content = task['embedding_content']
         if emb_content is None:

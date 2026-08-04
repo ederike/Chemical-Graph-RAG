@@ -592,7 +592,8 @@ class DHMF:
         # ---- dual-path RAG ----
         t_all = time.perf_counter()
         t0 = time.perf_counter()
-        retrieval_result = self.retrieve_module.retrive(query)
+        retrieval_items = self.retrieve_module.retrive_items(query)
+        retrieval_result = self.retrieve_module._format_retrieved_chunks(retrieval_items)
         retrieve_latency_s = time.perf_counter() - t0
         system_prompt = PROMPT.get('query_answer_system', '')
         respond_prompt = (
@@ -608,6 +609,20 @@ class DHMF:
         if isinstance(respond, dict):
             respond['retrieve_latency_s'] = retrieve_latency_s
             respond['latency_s'] = time.perf_counter() - t_all
+            # 供评测：检索到的文档来源文件名 / doc_id（去重保序）
+            sources, doc_ids = [], []
+            seen_src, seen_did = set(), set()
+            for it in retrieval_items or []:
+                src = it.get('source')
+                if src and src not in seen_src:
+                    seen_src.add(src)
+                    sources.append(str(src))
+                did = it.get('doc_id')
+                if did is not None and did not in seen_did:
+                    seen_did.add(did)
+                    doc_ids.append(did)
+            respond['retrieval_sources'] = sources
+            respond['retrieval_doc_ids'] = doc_ids
 
         if pretty:
             return self.format_query_response(respond, query=query)

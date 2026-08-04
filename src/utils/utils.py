@@ -153,25 +153,78 @@ class Cache:
         return wrapper
 
 class Retry:
-    def __init__(self,max_attempt=5,wait=0.1,timeout=10000):
+    """
+    方法级重试装饰器。
+
+    参数优先级（高 → 低）：
+      1. 运行时从实例 self.config 读取 config_attr（如 'doc.recognition.retry'）
+      2. 装饰器构造时传入的 max_attempt / wait / timeout 默认值
+
+    config_attr 指向带 max_attempt / wait / timeout 的对象或 dict。
+    """
+
+    def __init__(
+        self,
+        max_attempt: int = 5,
+        wait: float = 0.1,
+        timeout: float = 10000,
+        config_attr: str = None,
+    ):
         self.max_attempt = max_attempt
         self.wait = wait
         self.timeout = timeout
+        self.config_attr = config_attr
 
-    def __call__(self,func):
+    def _resolve_params(self, args):
+        max_attempt, wait, timeout = self.max_attempt, self.wait, self.timeout
+        if not self.config_attr or not args:
+            return max_attempt, wait, timeout
+
+        cfg_root = getattr(args[0], 'config', None)
+        if cfg_root is None:
+            return max_attempt, wait, timeout
+
+        obj = cfg_root
+        try:
+            for part in self.config_attr.split('.'):
+                obj = getattr(obj, part)
+        except AttributeError:
+            return max_attempt, wait, timeout
+
+        if obj is None:
+            return max_attempt, wait, timeout
+
+        if isinstance(obj, dict):
+            max_attempt = int(obj.get('max_attempt', max_attempt))
+            wait = float(obj.get('wait', wait))
+            timeout = float(obj.get('timeout', timeout))
+        else:
+            max_attempt = int(getattr(obj, 'max_attempt', max_attempt))
+            wait = float(getattr(obj, 'wait', wait))
+            timeout = float(getattr(obj, 'timeout', timeout))
+
+        return max(1, max_attempt), max(0.0, wait), max(0.0, timeout)
+
+    def __call__(self, func):
         @wraps(func)
-        def wrapper(*args,**kwargs):
-            
-            for attempt in range(1,self.max_attempt+1):
-                kwargs_with_attempt = {**kwargs, 'attempt': attempt,'max_attempt':self.max_attempt}
+        def wrapper(*args, **kwargs):
+            max_attempt, wait, timeout = self._resolve_params(args)
+
+            for attempt in range(1, max_attempt + 1):
+                kwargs_with_attempt = {
+                    **kwargs,
+                    'attempt': attempt,
+                    'max_attempt': max_attempt,
+                }
                 try:
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(func, *args, **kwargs_with_attempt)
-                        result = future.result(timeout=self.timeout)
+                        result = future.result(timeout=timeout)
                     return result
-                except Exception as e:
-                    time.sleep(self.wait)
+                except Exception:
+                    if attempt < max_attempt and wait > 0:
+                        time.sleep(wait)
 
             return None
-        
+
         return wrapper

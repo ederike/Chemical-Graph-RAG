@@ -774,16 +774,6 @@ class Retrieve(BaseRetrieve):
     ) -> list:
         """
         查询改写 → 双路各自 topk 截取 → 合并去重 → 全部资料组进入上下文。
-
-        不再使用全局 top_k 做最终截断。
-        - chunk 路：取 chunk_candidate_k 个块
-        - node 路：取 node_candidate_k 个节点→块
-        - 合并后所有命中文档（默认：头块+命中索引块）直接进上下文
-        - enable_full_body_context：命中文档改为全部 body（不含头块）
-        - 可选：一层 recommendation 扩展（仅超边 content）
-
-        top_k: 已废弃，保留参数仅兼容旧调用（忽略）。
-        chunk_candidate_k / node_candidate_k: 可覆盖配置。
         """
         t_all = time.perf_counter()
         self._ensure_precompute()

@@ -241,7 +241,7 @@ class Doc(BaseDoc):
     # ------------------------------------------------------------------
     # Vision recognition
     # ------------------------------------------------------------------
-    @Retry(max_attempt=3, wait=0.1, timeout=60)
+    @Retry(max_attempt=3, wait=0.1, timeout=300, config_attr='doc.recognition.retry')
     def recognize_pdf(self, pdf_path: Path, **kwargs):
         """
         PDF → 图像 → 多模态 LLM → JSON {head, body}。
