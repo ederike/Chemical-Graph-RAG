@@ -9,7 +9,7 @@
 
 示例：
   python scripts/draw_hypergraph.py --db example/b/DB/main.db
-  python scripts/draw_hypergraph.py --db example/a/DB/main.db --max-hyperedges 20 --output outputs/hypergraph_20.png
+  python scripts/draw_hypergraph.py --db example/a/DB/main.db --max-hyperedges 20 --output scripts/outputs/hypergraph_20.png
 """
 
 from __future__ import annotations
@@ -35,9 +35,12 @@ def _configure_chinese_font():
     except ImportError:
         return None
 
+    # 字体目录：scripts/assets/fonts（随 scripts 一起维护）
+    scripts_dir = Path(__file__).resolve().parent
     local_font_dirs = [
-        _project_root() / "assets" / "fonts",
-        Path(__file__).resolve().parent / "fonts",
+        scripts_dir / "assets" / "fonts",
+        scripts_dir / "fonts",
+        _project_root() / "assets" / "fonts",  # 兼容旧位置
     ]
     local_patterns = (
         "NotoSansSC-Regular.otf",
@@ -938,7 +941,7 @@ def draw_hypergraph(
     subtitle = f"db={db_path}"
     if font_name is None:
         subtitle += (
-            "  |  未检测到中文字体（可将 NotoSansSC-Regular.otf 放到 assets/fonts/）"
+            "  |  未检测到中文字体（可将 NotoSansSC-Regular.otf 放到 scripts/assets/fonts/）"
         )
     else:
         subtitle += f"  |  font={font_name}"

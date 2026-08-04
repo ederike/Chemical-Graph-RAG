@@ -36,9 +36,12 @@ def _configure_chinese_font():
     except ImportError:
         return None
 
+    # 字体目录：scripts/assets/fonts（随 scripts 一起维护）
+    scripts_dir = Path(__file__).resolve().parent
     local_font_dirs = [
-        _project_root() / "assets" / "fonts",
-        Path(__file__).resolve().parent / "fonts",
+        scripts_dir / "assets" / "fonts",
+        scripts_dir / "fonts",
+        _project_root() / "assets" / "fonts",  # 兼容旧位置
     ]
     local_patterns = (
         "NotoSansSC-Regular.otf",
@@ -1061,7 +1064,7 @@ def draw_recommendation_graph(
 
     subtitle = f"db={db_path}  |  source=hyperedge.id ↔ hyperedge.recommendation"
     if font_name is None:
-        subtitle += "  |  未检测到中文字体（可将字体放到 assets/fonts/）"
+        subtitle += "  |  未检测到中文字体（可将字体放到 scripts/assets/fonts/）"
     else:
         subtitle += f"  |  font={font_name}"
     fig.text(0.5, 0.015, subtitle, ha="center", fontsize=8, color="#64748b")
