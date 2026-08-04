@@ -235,6 +235,45 @@ class RecommendConfig(BaseModel):
     cluster_selection_method: str = 'eom'
 
 
+class AgentConfig(BaseModel):
+    """
+    轻量多跳 Agent（src/agent）。
+    规划 / 依赖改写 / 单跳作答 / 汇总 共用一套 LLM 配置，与 retrieve 解耦。
+    """
+    # Empty → fall back to settings
+    api_key: str = ""
+    base_url: str = ""
+    model_args: dict = Field(default_factory=lambda: {
+        'model': 'qwen3.6-27b',
+        'temperature': 0.2,
+        'enable_thinking': False,
+    })
+    use_cache: bool = True
+    # 规划步骤数上限
+    max_steps: int = 12
+    # 相对 settings.working_path 的临时步骤记事本文件名
+    notebook_path: str = 'agent_scratchpad.md'
+    # 单跳 skill 检索前是否用 agent LLM 改写（不走 retrieve 改写配置）
+    enable_query_rewrite: bool = False
+    # 检索宽度；None 时沿用 retrieve.chunk_candidate_k / node_candidate_k
+    chunk_candidate_k: Optional[int] = None
+    node_candidate_k: Optional[int] = None
+
+    @field_validator("api_key", "base_url", "notebook_path", mode="before")
+    @classmethod
+    def _coerce_str(cls, v):
+        return _none_to_empty(v)
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _coerce_max_steps(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 12
+        return max(1, n)
+
+
 class MysqlConfig(BaseModel):
     """Generic MySQL connection block (e.g. dm_data_mysql)."""
     host: str = ""
@@ -287,6 +326,7 @@ class Config(BaseModel):
     vectorization: VectorizationConfig = Field(default_factory=VectorizationConfig)
     retrieve: RetrieveConfig = Field(default_factory=RetrieveConfig)
     recommend: RecommendConfig = Field(default_factory=RecommendConfig)
+    agent: AgentConfig = Field(default_factory=AgentConfig)
     # Infrastructure (copied from production master_env; optional for pipeline)
     dm_data_mysql: MysqlConfig = Field(default_factory=MysqlConfig)
     ali_oss: dict = Field(default_factory=dict)
@@ -302,7 +342,7 @@ class Config(BaseModel):
         # Known top-level pipeline keys consumed by Config model
         known = {
             'settings', 'doc', 'chunk', 'extract', 'build',
-            'vectorization', 'retrieve', 'recommend',
+            'vectorization', 'retrieve', 'recommend', 'agent',
             'dm_data_mysql', 'ali_oss', 'oss_download',
         }
         # Preserve remaining master_env-style keys under extra_env if present,

@@ -1,19 +1,13 @@
 """
 多跳测试集生成 + DHMF RAG 评测主工作流。
 
-典型用法::
+全部参数写在 benchmark/config.yaml，脚本入口::
 
-    from benchmark.workflow import TestQueryWorkflow
+    python benchmark.py
+    # 或
+    python -m benchmark.run
 
-    # 推荐：全部设置走 config.yaml
-    wf = TestQueryWorkflow.from_config("benchmark/config.yaml")
-    report = wf.run_all()
-
-    # 或代码里覆盖 hop / 路径
-    wf = TestQueryWorkflow.from_config(
-        "benchmark/config.yaml",
-        hop_counts={1: 10, 2: 5},
-    )
+run.mode: generate | evaluate | all
 """
 
 from __future__ import annotations
@@ -21,29 +15,22 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from .config import BenchmarkConfig, DEFAULT_CONFIG_PATH
 from .evaluator import QueryEvaluator
 from .question_gen import QuestionGenerator
-from .utils import parse_hop_spec, project_root, resolve_path
+from .utils import project_root, resolve_path
 
 logger = logging.getLogger("benchmark.workflow")
 
 
 class TestQueryWorkflow:
     """
-    主调用类：把「问题生成」与「RAG 评测」组织成工作流。
+    主调用类：问题生成与 RAG 评测。
 
-    方法：
-      - setup_llm()           初始化出题 LLM
-      - setup_judge_llm()     初始化评判 LLM（可与出题不同端点）
-      - setup_dhmf()          加载 DHMF（评测需要）
-      - generate_questions()  抽样 + LLM 生成多跳问题 JSON
-      - evaluate()            query + 评判 + 汇总
-      - run_all()             生成 → 评测一条龙
+    配置全部来自 yaml；入口调用 run() 按 run.mode 分发。
     """
 
     def __init__(self, cfg: BenchmarkConfig):
@@ -69,24 +56,9 @@ class TestQueryWorkflow:
     def from_config(
         cls,
         config_path: Union[str, Path, None] = DEFAULT_CONFIG_PATH,
-        **flat_overrides,
     ) -> "TestQueryWorkflow":
-        """
-        从 yaml 加载；flat_overrides 可覆盖 BenchmarkConfig 扁平字段，例如::
-
-            hop_counts={1:10}, questions_path='...', seed=1
-        """
-        # 过滤 None，避免把未传 CLI 项冲掉
-        clean = {k: v for k, v in flat_overrides.items() if v is not None}
-        cfg = BenchmarkConfig.from_yaml(config_path, overrides=clean if clean else None)
-        if clean:
-            cfg.apply_flat_overrides(clean)
-        return cls(cfg)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TestQueryWorkflow":
-        """从嵌套 dict（与 yaml 同结构）构造。"""
-        cfg = BenchmarkConfig.from_yaml(None, overrides=data)
+        """从 yaml 加载配置（默认 benchmark/config.yaml）。"""
+        cfg = BenchmarkConfig.from_yaml(config_path)
         return cls(cfg)
 
     # ------------------------------------------------------------------
@@ -125,12 +97,15 @@ class TestQueryWorkflow:
         from src.utils.config import Config
 
         self.dhmf_config = Config.from_yaml(self.cfg.dhmf_config_path)
-        # 可选：覆盖 retrieve.use_cache
+        # 可选：覆盖 retrieve / agent 的 use_cache（评测时常关缓存）
         if self.cfg.dhmf_retrieve_use_cache is not None:
+            flag = bool(self.cfg.dhmf_retrieve_use_cache)
             try:
-                self.dhmf_config.retrieve.use_cache = bool(
-                    self.cfg.dhmf_retrieve_use_cache
-                )
+                self.dhmf_config.retrieve.use_cache = flag
+            except Exception:
+                pass
+            try:
+                self.dhmf_config.agent.use_cache = flag
             except Exception:
                 pass
         return self.dhmf_config
@@ -229,86 +204,15 @@ class TestQueryWorkflow:
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
-    def _stable_questions_path(self) -> Path:
-        """
-        问题集稳定路径（generate / evaluate 独立运行时共用）。
-        优先 config.paths.questions_path；否则 {output_dir}/questions.json
-        """
-        if self.cfg.questions_path:
-            p = Path(self.cfg.questions_path)
-            return p if p.is_absolute() else resolve_path(p)
-        return self.output_dir / "questions.json"
-
-    def _default_dataset_path(self) -> Path:
-        """generate 默认写出路径 = 稳定问题集路径。"""
-        return self._stable_questions_path()
-
-    def _default_report_path(self) -> Path:
-        if self.cfg.report_path:
-            p = Path(self.cfg.report_path)
-            return p if p.is_absolute() else resolve_path(p)
-        # 稳定默认，便于只跑 evaluate 时也能找到最近一次报告之外的新结果
-        # 仍带时间戳避免覆盖历史报告；问题集用稳定名
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.output_dir / f"eval_report_{ts}.json"
-
-    def _summary_path_for(self, report_path: Path) -> Path:
-        if self.cfg.summary_path:
-            p = Path(self.cfg.summary_path)
-            return p if p.is_absolute() else resolve_path(p)
-        return report_path.with_suffix(".summary.txt")
-
     def _resolve_path(self, path: Union[str, Path]) -> Path:
         p = Path(path)
         return p if p.is_absolute() else resolve_path(p)
-
-    def resolve_questions_path(
-        self,
-        dataset_path: Optional[Union[str, Path]] = None,
-    ) -> Optional[Path]:
-        """
-        解析评测用问题集文件路径（存在才返回）。
-
-        查找顺序：
-          1) 显式 dataset_path 参数
-          2) config.paths.dataset_path
-          3) config.paths.questions_path
-          4) {output_dir}/questions.json（稳定默认）
-          5) {output_dir}/questions_*.json 中最新一份（兼容旧时间戳命名）
-        """
-        candidates: list[Path] = []
-        for raw in (
-            dataset_path,
-            self.cfg.dataset_path,
-            self.cfg.questions_path,
-        ):
-            if raw:
-                candidates.append(self._resolve_path(raw))
-
-        stable = self._stable_questions_path()
-        if stable not in candidates:
-            candidates.append(stable)
-
-        for p in candidates:
-            if p.is_file():
-                return p
-
-        # 兼容历史：questions_YYYYMMDD_HHMMSS.json
-        pattern_hits = sorted(
-            self.output_dir.glob("questions_*.json"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True,
-        )
-        if pattern_hits:
-            return pattern_hits[0]
-        return None
 
     def save_json(self, data: dict, path: Union[str, Path]) -> Path:
         path = self._resolve_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        # 结束时一行提示保存位置（非中间过程）
         print(f"[saved] {path}", file=sys.stderr)
         return path
 
@@ -319,35 +223,23 @@ class TestQueryWorkflow:
         if "questions" not in data:
             raise ValueError(f"非法数据集（缺少 questions）: {path}")
         self._dataset = data
-        # 记住路径，便于同进程再次 evaluate / 配置回写
-        self.cfg.questions_path = str(path)
         print(f"[loaded] questions <- {path}", file=sys.stderr)
         return data
 
     # ------------------------------------------------------------------
     # steps
     # ------------------------------------------------------------------
-    def generate_questions(
-        self,
-        hop_counts: Optional[Dict[Any, int]] = None,
-        output_path: Optional[Union[str, Path]] = None,
-        save: bool = True,
-    ) -> Dict[str, Any]:
+    def generate_questions(self, save: bool = True) -> Dict[str, Any]:
         """
-        步骤 1：从 doc 表按跳数抽样，LLM 生成多跳场景问题。
-
-        默认写入稳定路径 {output_dir}/questions.json（或 config.paths.questions_path），
-        之后可单独调用 evaluate() 读取，无需同进程先 generate。
+        步骤 1：生成多跳问题集。
+        写出路径完全由 config.paths 决定。
         """
         self.setup_llm()
-        counts = (
-            parse_hop_spec(hop_counts) if hop_counts is not None else self.cfg.hop_counts
-        )
         gen = QuestionGenerator(
             self.llm,
             model_args=self.cfg.gen_model_args,
             db_path=self.cfg.db_path,
-            hop_counts=counts,
+            hop_counts=self.cfg.hop_counts,
             seed=self.cfg.seed,
             max_chars_per_doc=self.cfg.max_chars_per_doc,
             use_cache=self.cfg.gen_use_cache,
@@ -359,55 +251,35 @@ class TestQueryWorkflow:
         self._dataset = dataset
 
         if save:
-            out = (
-                self._resolve_path(output_path)
-                if output_path
-                else self._default_dataset_path()
-            )
+            out = self.cfg.questions_file()
             self.save_json(dataset, out)
             dataset.setdefault("meta", {})["saved_path"] = str(out)
-            # 回写配置路径，evaluate() 同进程/跨进程都能找到
-            self.cfg.questions_path = str(out)
-            self.cfg.dataset_path = str(out)
+            # 同进程 all 模式：evaluate 直接用内存中的 dataset
 
         return dataset
 
     def evaluate(
         self,
         dataset: Optional[Dict[str, Any]] = None,
-        dataset_path: Optional[Union[str, Path]] = None,
-        output_path: Optional[Union[str, Path]] = None,
         save: bool = True,
-        save_summary_txt: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
-        步骤 2：DHMF.query → LLM 评判 →（可选）文档召回与 token/时延统计。
-
-        可独立运行：自动从 questions_path / output_dir/questions.json /
-        最新 questions_*.json 加载问题集。
+        步骤 2：读问题集 → DHMF.query / agent_query → 评判。
+        问题集与报告路径完全由 config.paths 决定。
         """
         if dataset is None:
-            if self._dataset is not None and dataset_path is None:
+            if self._dataset is not None:
                 dataset = self._dataset
             else:
-                path = self.resolve_questions_path(dataset_path)
-                if path is not None:
-                    dataset = self.load_dataset(path)
-                else:
-                    tried = [
-                        dataset_path,
-                        self.cfg.dataset_path,
-                        self.cfg.questions_path,
-                        str(self._stable_questions_path()),
-                        str(self.output_dir / "questions_*.json"),
-                    ]
-                    tried_s = ", ".join(str(x) for x in tried if x)
+                path = self.cfg.eval_questions_file()
+                if not path.is_file():
                     raise FileNotFoundError(
                         "未找到问题集 JSON，无法 evaluate。\n"
-                        f"  已尝试: {tried_s}\n"
-                        "  请先运行 wf.generate_questions()，或在 config.paths 设置 "
-                        "questions_path / dataset_path，或传入 dataset= / dataset_path=。"
+                        f"  期望路径: {path}\n"
+                        "  请先将 run.mode 设为 generate 生成问题集，或在 "
+                        "paths.eval_questions_filename / eval_questions_path 指定已有文件。"
                     )
+                dataset = self.load_dataset(path)
 
         self.setup_dhmf()
         self.setup_judge_llm()
@@ -431,20 +303,12 @@ class TestQueryWorkflow:
         if table:
             print(table)
 
-        do_summary = (
-            self.cfg.save_summary_txt
-            if save_summary_txt is None
-            else bool(save_summary_txt)
-        )
-
         if save:
-            out = Path(output_path) if output_path else self._default_report_path()
-            if not out.is_absolute():
-                out = resolve_path(out)
+            out = self.cfg.report_file()
             self.save_json(report, out)
             report.setdefault("meta", {})["saved_path"] = str(out)
-            if do_summary and table:
-                txt_path = self._summary_path_for(out)
+            if self.cfg.save_summary_txt and table:
+                txt_path = self.cfg.summary_file(out)
                 txt_path.parent.mkdir(parents=True, exist_ok=True)
                 txt_path.write_text(table, encoding="utf-8")
                 print(f"[saved] {txt_path}", file=sys.stderr)
@@ -452,23 +316,30 @@ class TestQueryWorkflow:
 
         return report
 
-    def run_all(
-        self,
-        hop_counts: Optional[Dict[Any, int]] = None,
-        questions_path: Optional[Union[str, Path]] = None,
-        report_path: Optional[Union[str, Path]] = None,
-    ) -> Dict[str, Any]:
-        """生成问题 + 评测一条龙。"""
-        q_out = questions_path or self.cfg.questions_path
-        r_out = report_path or self.cfg.report_path
-        dataset = self.generate_questions(
-            hop_counts=hop_counts,
-            output_path=q_out,
-            save=True,
+    def run_all(self) -> Dict[str, Any]:
+        """生成 + 评测；路径全部走 config.paths。"""
+        dataset = self.generate_questions(save=True)
+        return self.evaluate(dataset=dataset, save=True)
+
+    def run(self) -> Any:
+        """
+        按 config.run.mode 执行：
+          generate → 只生成问题集
+          evaluate → 只评测
+          all      → 生成 + 评测
+        """
+        mode = (self.cfg.run_mode or "all").strip().lower()
+        print(
+            f"[benchmark] mode={mode} config={self.cfg.config_file}",
+            file=sys.stderr,
         )
-        report = self.evaluate(
-            dataset=dataset,
-            output_path=r_out,
-            save=True,
+        if mode == "generate":
+            return self.generate_questions(save=True)
+        if mode == "evaluate":
+            return self.evaluate(save=True)
+        if mode == "all":
+            return self.run_all()
+        raise ValueError(
+            f"Unknown run.mode={self.cfg.run_mode!r}. "
+            f"Set run.mode in benchmark/config.yaml: generate | evaluate | all"
         )
-        return report

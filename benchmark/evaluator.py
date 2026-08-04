@@ -56,7 +56,7 @@ def normalize_judgment(raw: str) -> Optional[str]:
 class QueryEvaluator:
     """
     对测试集 JSON 中的问题：
-      1) 调用 DHMF.query 作答
+      1) 按 query_mode 调用 DHMF.query（dual_path）或 DHMF.agent_query（agent）
       2) 用 LLM 二分类评判 llm-acc（正确/错误）
       3) 文档召回率 = 命中 gold 文档数 / gold 文档数
       4) 汇总时延、token 等综合统计
@@ -94,13 +94,39 @@ class QueryEvaluator:
             except Exception:
                 pass
 
-        self.query_mode = query_mode
+        self.query_mode = self._normalize_query_mode(query_mode)
         self.use_cache = bool(use_cache)
         self.max_judge_retries = max(1, int(max_judge_retries))
         # -1 = 送入完整文档不截断
         self.max_source_chars = int(max_source_chars)
         self.sleep_between = float(sleep_between)
         self.enable_doc_recall = bool(enable_doc_recall)
+
+    # ------------------------------------------------------------------
+    # query dispatch
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_query_mode(mode: Any) -> str:
+        """
+        规范化查询方式：
+          dual_path / query  →  DHMF.query(mode='dual_path')
+          agent / agent_query →  DHMF.agent_query()
+        """
+        s = str(mode or "dual_path").strip().lower().replace("-", "_")
+        if s in ("agent", "agent_query", "multi_hop", "multihop"):
+            return "agent"
+        if s in ("dual_path", "dualpath", "query", "rag"):
+            return "dual_path"
+        raise ValueError(
+            f"Unknown benchmark query_mode={mode!r}. "
+            f"Supported: 'dual_path' | 'agent'"
+        )
+
+    def _run_query(self, question: str) -> Any:
+        """按 query_mode 调用 DHMF.query 或 DHMF.agent_query。"""
+        if self.query_mode == "agent":
+            return self.dhmf.agent_query(question, pretty=False)
+        return self.dhmf.query(question, mode="dual_path", pretty=False)
 
     # ------------------------------------------------------------------
     # single item
@@ -260,9 +286,7 @@ class QueryEvaluator:
             pass
         try:
             with quiet_loggers(*quiet_names, level=40):
-                respond = self.dhmf.query(
-                    question, mode=self.query_mode, pretty=False
-                )
+                respond = self._run_query(question)
         except Exception as e:
             result["query_error"] = str(e)
             result["metrics"]["total_latency_s"] = time.perf_counter() - t0

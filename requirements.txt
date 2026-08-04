@@ -20,6 +20,10 @@ openai>=1.40.0
 tiktoken>=0.7.0
 httpx>=0.27.0
 
+# Multi-hop agent (src/agent)
+langgraph>=0.2.0
+
+
 # Vector / scientific
 numpy>=1.26.0
 faiss-cpu>=1.7.4

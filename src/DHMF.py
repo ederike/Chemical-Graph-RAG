@@ -584,7 +584,8 @@ class DHMF:
         """
         if mode != 'dual_path':
             raise ValueError(
-                f"Unknown query mode: {mode!r}. Supported: 'dual_path'"
+                f"Unknown query mode: {mode!r}. Supported: 'dual_path'. "
+                f"For multi-hop agent use agent_query()."
             )
 
         # ---- dual-path RAG ----
@@ -625,3 +626,16 @@ class DHMF:
         if pretty:
             return self.format_query_response(respond, query=query)
         return respond
+
+    def agent_query(self, query, pretty=False):
+        """
+        轻量多跳 Agent 查询（薄封装 → src.agent）。
+
+        规划依赖步骤图 → query_skill 单跳检索作答 → 汇总；
+        模型与作答提示词均走 config.agent，与 query()/retrieve 解耦。
+
+        pretty=True: 返回可读多行字符串（含步骤摘要）。
+        返回 dict 时字段与 query() 对齐，并额外含 plan / steps。
+        """
+        from .agent.runner import run_agent_query
+        return run_agent_query(self, query, pretty=pretty)
