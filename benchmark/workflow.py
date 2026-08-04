@@ -230,25 +230,82 @@ class TestQueryWorkflow:
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
-    def _default_dataset_path(self) -> Path:
+    def _stable_questions_path(self) -> Path:
+        """
+        问题集稳定路径（generate / evaluate 独立运行时共用）。
+        优先 config.paths.questions_path；否则 {output_dir}/questions.json
+        """
         if self.cfg.questions_path:
-            return Path(self.cfg.questions_path)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.output_dir / f"questions_{ts}.json"
+            p = Path(self.cfg.questions_path)
+            return p if p.is_absolute() else resolve_path(p)
+        return self.output_dir / "questions.json"
+
+    def _default_dataset_path(self) -> Path:
+        """generate 默认写出路径 = 稳定问题集路径。"""
+        return self._stable_questions_path()
 
     def _default_report_path(self) -> Path:
         if self.cfg.report_path:
-            return Path(self.cfg.report_path)
+            p = Path(self.cfg.report_path)
+            return p if p.is_absolute() else resolve_path(p)
+        # 稳定默认，便于只跑 evaluate 时也能找到最近一次报告之外的新结果
+        # 仍带时间戳避免覆盖历史报告；问题集用稳定名
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return self.output_dir / f"eval_report_{ts}.json"
 
     def _summary_path_for(self, report_path: Path) -> Path:
         if self.cfg.summary_path:
-            return Path(self.cfg.summary_path)
+            p = Path(self.cfg.summary_path)
+            return p if p.is_absolute() else resolve_path(p)
         return report_path.with_suffix(".summary.txt")
 
+    def _resolve_path(self, path: Union[str, Path]) -> Path:
+        p = Path(path)
+        return p if p.is_absolute() else resolve_path(p)
+
+    def resolve_questions_path(
+        self,
+        dataset_path: Optional[Union[str, Path]] = None,
+    ) -> Optional[Path]:
+        """
+        解析评测用问题集文件路径（存在才返回）。
+
+        查找顺序：
+          1) 显式 dataset_path 参数
+          2) config.paths.dataset_path
+          3) config.paths.questions_path
+          4) {output_dir}/questions.json（稳定默认）
+          5) {output_dir}/questions_*.json 中最新一份（兼容旧时间戳命名）
+        """
+        candidates: list[Path] = []
+        for raw in (
+            dataset_path,
+            self.cfg.dataset_path,
+            self.cfg.questions_path,
+        ):
+            if raw:
+                candidates.append(self._resolve_path(raw))
+
+        stable = self._stable_questions_path()
+        if stable not in candidates:
+            candidates.append(stable)
+
+        for p in candidates:
+            if p.is_file():
+                return p
+
+        # 兼容历史：questions_YYYYMMDD_HHMMSS.json
+        pattern_hits = sorted(
+            self.output_dir.glob("questions_*.json"),
+            key=lambda x: x.stat().st_mtime,
+            reverse=True,
+        )
+        if pattern_hits:
+            return pattern_hits[0]
+        return None
+
     def save_json(self, data: dict, path: Union[str, Path]) -> Path:
-        path = Path(path) if Path(path).is_absolute() else resolve_path(path)
+        path = self._resolve_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -257,12 +314,15 @@ class TestQueryWorkflow:
         return path
 
     def load_dataset(self, path: Union[str, Path]) -> Dict[str, Any]:
-        path = resolve_path(path) if not Path(path).is_absolute() else Path(path)
+        path = self._resolve_path(path)
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if "questions" not in data:
             raise ValueError(f"非法数据集（缺少 questions）: {path}")
         self._dataset = data
+        # 记住路径，便于同进程再次 evaluate / 配置回写
+        self.cfg.questions_path = str(path)
+        print(f"[loaded] questions <- {path}", file=sys.stderr)
         return data
 
     # ------------------------------------------------------------------
@@ -274,7 +334,12 @@ class TestQueryWorkflow:
         output_path: Optional[Union[str, Path]] = None,
         save: bool = True,
     ) -> Dict[str, Any]:
-        """步骤 1：从 doc 表按跳数抽样，LLM 生成多跳场景问题。"""
+        """
+        步骤 1：从 doc 表按跳数抽样，LLM 生成多跳场景问题。
+
+        默认写入稳定路径 {output_dir}/questions.json（或 config.paths.questions_path），
+        之后可单独调用 evaluate() 读取，无需同进程先 generate。
+        """
         self.setup_llm()
         counts = (
             parse_hop_spec(hop_counts) if hop_counts is not None else self.cfg.hop_counts
@@ -295,11 +360,16 @@ class TestQueryWorkflow:
         self._dataset = dataset
 
         if save:
-            out = Path(output_path) if output_path else self._default_dataset_path()
-            if not out.is_absolute():
-                out = resolve_path(out)
+            out = (
+                self._resolve_path(output_path)
+                if output_path
+                else self._default_dataset_path()
+            )
             self.save_json(dataset, out)
             dataset.setdefault("meta", {})["saved_path"] = str(out)
+            # 回写配置路径，evaluate() 同进程/跨进程都能找到
+            self.cfg.questions_path = str(out)
+            self.cfg.dataset_path = str(out)
 
         return dataset
 
@@ -311,22 +381,34 @@ class TestQueryWorkflow:
         save: bool = True,
         save_summary_txt: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """步骤 2：DHMF.query → LLM 三分类评判 → 文档召回与 token/时延统计。"""
+        """
+        步骤 2：DHMF.query → LLM 评判 →（可选）文档召回与 token/时延统计。
+
+        可独立运行：自动从 questions_path / output_dir/questions.json /
+        最新 questions_*.json 加载问题集。
+        """
         if dataset is None:
-            path = (
-                dataset_path
-                or self.cfg.dataset_path
-                or self.cfg.questions_path
-            )
-            if path:
-                dataset = self.load_dataset(path)
-            elif self._dataset is not None:
+            if self._dataset is not None and dataset_path is None:
                 dataset = self._dataset
             else:
-                raise ValueError(
-                    "请提供 dataset / dataset_path，或在 config.paths 设置 "
-                    "questions_path / dataset_path，或先 generate_questions()"
-                )
+                path = self.resolve_questions_path(dataset_path)
+                if path is not None:
+                    dataset = self.load_dataset(path)
+                else:
+                    tried = [
+                        dataset_path,
+                        self.cfg.dataset_path,
+                        self.cfg.questions_path,
+                        str(self._stable_questions_path()),
+                        str(self.output_dir / "questions_*.json"),
+                    ]
+                    tried_s = ", ".join(str(x) for x in tried if x)
+                    raise FileNotFoundError(
+                        "未找到问题集 JSON，无法 evaluate。\n"
+                        f"  已尝试: {tried_s}\n"
+                        "  请先运行 wf.generate_questions()，或在 config.paths 设置 "
+                        "questions_path / dataset_path，或传入 dataset= / dataset_path=。"
+                    )
 
         self.setup_dhmf()
         self.setup_judge_llm()
@@ -340,6 +422,7 @@ class TestQueryWorkflow:
             max_judge_retries=self.cfg.eval_max_retries,
             max_source_chars=self.cfg.max_source_chars,
             sleep_between=self.cfg.eval_sleep_between,
+            enable_doc_recall=self.cfg.enable_doc_recall,
         )
         report = evaluator.evaluate_all(dataset)
         report.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()

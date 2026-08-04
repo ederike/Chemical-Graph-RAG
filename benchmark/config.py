@@ -83,6 +83,7 @@ class BenchmarkConfig:
     gen_model_args: Dict[str, Any] = field(default_factory=dict)
 
     # evaluate
+    enable_doc_recall: bool = True  # 是否计算/汇总文档召回率
     max_source_chars: int = -1  # -1 = 评判时送入完整文档
     eval_max_retries: int = 3
     eval_sleep_between: float = 0.0
@@ -168,6 +169,7 @@ class BenchmarkConfig:
             gen_base_url=_opt_str(gen.get("base_url")),
             gen_timeout=float(gen.get("timeout", 180)),
             gen_model_args=_clean_model_args(gen.get("model_args")),
+            enable_doc_recall=_as_bool(ev.get("enable_doc_recall", True), default=True),
             max_source_chars=int(
                 ev.get(
                     "max_source_chars",
@@ -244,6 +246,7 @@ class BenchmarkConfig:
             "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
             "seed": self.seed,
             "max_chars_per_doc": self.max_chars_per_doc,
+            "enable_doc_recall": self.enable_doc_recall,
             "gen_model_args": self.gen_model_args,
             "judge_model_args": self.judge_model_args,
             "gen_api_key_set": bool(self.gen_api_key),
@@ -271,6 +274,20 @@ def _opt_bool(v) -> Optional[bool]:
     s = str(v).strip().lower()
     if s in ("null", "none", ""):
         return None
+    if s in ("1", "true", "yes", "y", "on"):
+        return True
+    if s in ("0", "false", "no", "n", "off"):
+        return False
+    return bool(v)
+
+
+def _as_bool(v, default: bool = False) -> bool:
+    """解析 yaml 布尔；None 时用 default。"""
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
     if s in ("1", "true", "yes", "y", "on"):
         return True
     if s in ("0", "false", "no", "n", "off"):

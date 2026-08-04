@@ -73,6 +73,7 @@ class QueryEvaluator:
         max_judge_retries: int = 3,
         max_source_chars: int = -1,
         sleep_between: float = 0.0,
+        enable_doc_recall: bool = True,
     ):
         self.dhmf = dhmf
         self.judge_llm = judge_llm or getattr(dhmf, "llmmodel", None)
@@ -99,6 +100,7 @@ class QueryEvaluator:
         # -1 = 送入完整文档不截断
         self.max_source_chars = int(max_source_chars)
         self.sleep_between = float(sleep_between)
+        self.enable_doc_recall = bool(enable_doc_recall)
 
     # ------------------------------------------------------------------
     # single item
@@ -239,7 +241,7 @@ class QueryEvaluator:
             "query_error": None,
             "retrieval_sources": [],
             "retrieval_doc_ids": [],
-            "recall": {},
+            "recall": None,  # enable_doc_recall=False 时保持 None
             "llm_acc": None,
             "judge_reason": "",
             "metrics": {},
@@ -302,10 +304,13 @@ class QueryEvaluator:
             "wall_latency_s": time.perf_counter() - t0,
         }
 
-        # 文档召回：命中 gold 数 / gold 总数
-        result["recall"] = self._compute_recall(
-            expected_names, result["retrieval_sources"]
-        )
+        # 文档召回：命中 gold 数 / gold 总数（可关闭）
+        if self.enable_doc_recall:
+            result["recall"] = self._compute_recall(
+                expected_names, result["retrieval_sources"]
+            )
+        else:
+            result["recall"] = None
 
         # LLM 评判：问题 + 标准答案 + 全部完整文档 + RAG 回答
         judge = self._judge_one(
@@ -373,20 +378,25 @@ class QueryEvaluator:
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
 
-        summary = self.build_summary(results)
+        summary = self.build_summary(
+            results, enable_doc_recall=self.enable_doc_recall
+        )
         report = {
             "meta": {
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "dataset_meta": dataset.get("meta"),
                 "query_mode": self.query_mode,
                 "judge_model": (self.judge_model_args or {}).get("model"),
+                "enable_doc_recall": self.enable_doc_recall,
                 "n_questions": len(results),
                 "n_skipped_gen_fail": skipped,
                 "elapsed_s": round(time.perf_counter() - t0, 3),
             },
             "results": results,
             "summary": summary,
-            "summary_table": self.format_summary_table(summary),
+            "summary_table": self.format_summary_table(
+                summary, enable_doc_recall=self.enable_doc_recall
+            ),
         }
         return report
 
@@ -405,7 +415,16 @@ class QueryEvaluator:
                     pass
         return total if any_v else None
 
-    def build_summary(self, results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    def build_summary(
+        self,
+        results: Sequence[Dict[str, Any]],
+        *,
+        enable_doc_recall: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        if enable_doc_recall is None:
+            enable_doc_recall = self.enable_doc_recall
+        enable_doc_recall = bool(enable_doc_recall)
+
         n = len(results)
         acc_counts = {lab: 0 for lab in JUDGMENT_LABELS}
         acc_counts["未知"] = 0
@@ -421,10 +440,11 @@ class QueryEvaluator:
         judged = n_correct + n_wrong
 
         recalls = []
-        for r in results:
-            rec = r.get("recall") or {}
-            if rec.get("recall") is not None:
-                recalls.append(float(rec["recall"]))
+        if enable_doc_recall:
+            for r in results:
+                rec = r.get("recall") or {}
+                if isinstance(rec, dict) and rec.get("recall") is not None:
+                    recalls.append(float(rec["recall"]))
 
         q_lats = [
             (r.get("metrics") or {}).get("query_latency_s")
@@ -450,16 +470,10 @@ class QueryEvaluator:
                     g_acc[r["llm_acc"]] += 1
             g_n = len(group)
             g_judged = sum(g_acc.values())
-            g_recalls = [
-                float((r.get("recall") or {}).get("recall"))
-                for r in group
-                if (r.get("recall") or {}).get("recall") is not None
-            ]
-            by_hop[str(hop)] = {
+            hop_item: Dict[str, Any] = {
                 "n": g_n,
                 "llm_acc_counts": g_acc,
                 "accuracy": safe_div(g_acc["正确"], g_judged) if g_judged else None,
-                "mean_doc_recall": mean(g_recalls),
                 "mean_query_latency_s": mean(
                     [
                         (r.get("metrics") or {}).get("query_latency_s")
@@ -468,18 +482,24 @@ class QueryEvaluator:
                     ]
                 ),
             }
+            if enable_doc_recall:
+                g_recalls = [
+                    float((r.get("recall") or {}).get("recall"))
+                    for r in group
+                    if isinstance(r.get("recall"), dict)
+                    and (r.get("recall") or {}).get("recall") is not None
+                ]
+                hop_item["mean_doc_recall"] = mean(g_recalls)
+            by_hop[str(hop)] = hop_item
 
-        summary = {
+        summary: Dict[str, Any] = {
             "n_total": n,
+            "enable_doc_recall": enable_doc_recall,
             "llm_acc": {
                 "counts": acc_counts,
                 "accuracy": safe_div(n_correct, judged) if judged else None,
                 "error_rate": safe_div(n_wrong, judged) if judged else None,
                 "n_judged": judged,
-            },
-            "doc_recall": {
-                # 唯一指标：各题 (命中gold数/gold总数) 的平均
-                "mean_recall": mean(recalls),
             },
             "latency": {
                 "mean_query_s": mean(q_lats),
@@ -512,11 +532,24 @@ class QueryEvaluator:
             },
             "by_hop": by_hop,
         }
+        if enable_doc_recall:
+            summary["doc_recall"] = {
+                # 唯一指标：各题 (命中gold数/gold总数) 的平均
+                "mean_recall": mean(recalls),
+            }
         return summary
 
     @staticmethod
-    def format_summary_table(summary: Dict[str, Any]) -> str:
-        """生成可读综合统计表（纯文本）。"""
+    def format_summary_table(
+        summary: Dict[str, Any],
+        *,
+        enable_doc_recall: Optional[bool] = None,
+    ) -> str:
+        """生成可读综合统计表（纯文本）。关闭召回时不展示任何召回相关行。"""
+        if enable_doc_recall is None:
+            enable_doc_recall = bool(summary.get("enable_doc_recall", True))
+        enable_doc_recall = bool(enable_doc_recall)
+
         lines = []
         lines.append("=" * 72)
         lines.append("综合评测统计表")
@@ -535,12 +568,13 @@ class QueryEvaluator:
         lines.append(f"  准确率 accuracy: {_pct(acc.get('accuracy'))}")
         lines.append(f"  错误率: {_pct(acc.get('error_rate'))}")
 
-        rec = summary.get("doc_recall") or {}
-        lines.append("")
-        lines.append(
-            "【文档召回率】命中 gold 文档数 / gold 文档总数（按题平均）"
-        )
-        lines.append(f"  平均召回率 mean_recall: {_pct(rec.get('mean_recall'))}")
+        if enable_doc_recall:
+            rec = summary.get("doc_recall") or {}
+            lines.append("")
+            lines.append(
+                "【文档召回率】命中 gold 文档数 / gold 文档总数（按题平均）"
+            )
+            lines.append(f"  平均召回率 mean_recall: {_pct(rec.get('mean_recall'))}")
 
         lat = summary.get("latency") or {}
         lines.append("")
@@ -566,18 +600,30 @@ class QueryEvaluator:
         if by_hop:
             lines.append("")
             lines.append("【分跳数统计】")
-            lines.append(
-                f"{'hop':>4} | {'n':>4} | {'准确率':>8} | "
-                f"{'文档召回':>8} | {'均时延s':>8}"
-            )
-            lines.append("-" * 72)
-            for hop, g in by_hop.items():
+            if enable_doc_recall:
                 lines.append(
-                    f"{str(hop):>4} | {g.get('n', 0):>4} | "
-                    f"{_pct(g.get('accuracy')):>8} | "
-                    f"{_pct(g.get('mean_doc_recall')):>8} | "
-                    f"{_num(g.get('mean_query_latency_s')):>8}"
+                    f"{'hop':>4} | {'n':>4} | {'准确率':>8} | "
+                    f"{'文档召回':>8} | {'均时延s':>8}"
                 )
+                lines.append("-" * 72)
+                for hop, g in by_hop.items():
+                    lines.append(
+                        f"{str(hop):>4} | {g.get('n', 0):>4} | "
+                        f"{_pct(g.get('accuracy')):>8} | "
+                        f"{_pct(g.get('mean_doc_recall')):>8} | "
+                        f"{_num(g.get('mean_query_latency_s')):>8}"
+                    )
+            else:
+                lines.append(
+                    f"{'hop':>4} | {'n':>4} | {'准确率':>8} | {'均时延s':>8}"
+                )
+                lines.append("-" * 72)
+                for hop, g in by_hop.items():
+                    lines.append(
+                        f"{str(hop):>4} | {g.get('n', 0):>4} | "
+                        f"{_pct(g.get('accuracy')):>8} | "
+                        f"{_num(g.get('mean_query_latency_s')):>8}"
+                    )
 
         lines.append("=" * 72)
         return "\n".join(lines)

@@ -4,11 +4,11 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: benchmark_outputs
-  questions_path: null # 留空则自动：{output_dir}/questions_YYYYMMDD_HHMMSS.json
-  report_path: null    # 评测报告 JSON，留空则自动：{output_dir}/eval_report_YYYYMMDD_HHMMSS.json
+  output_dir: benchmark_results
+  questions_path: null
+  report_path: null    # 评测报告 JSON，留空则 {output_dir}/eval_report_时间戳.json
   summary_path: null   # 综合统计表 txt；留空则与 report 同名的 .summary.txt
-  dataset_path: null   # 仅 evaluate 时：若 questions_path 为空，可显式指定已有数据集
+  dataset_path: null
 
 generate:
   hop_counts:
@@ -32,7 +32,7 @@ generate:
       type: json_object
 
 evaluate:
-  # 评判时送入的完整参考文档单篇最大字符数（-1=不截断，整篇 doc.content）
+  enable_doc_recall: False
   max_source_chars: -1
   max_retries: 3
   sleep_between: 0.0

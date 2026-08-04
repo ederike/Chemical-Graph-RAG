@@ -153,6 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="覆盖 evaluate.base_url",
     )
+    p.add_argument(
+        "--enable-doc-recall",
+        action="store_true",
+        help="开启文档召回率评测（覆盖 yaml）",
+    )
+    p.add_argument(
+        "--disable-doc-recall",
+        action="store_true",
+        help="关闭文档召回率评测（覆盖 yaml；总结中也不显示）",
+    )
     return p
 
 
@@ -206,6 +216,11 @@ def _cli_overrides(args) -> dict:
         over["gen_model_args"] = {"model": args.gen_model}
     if args.judge_model is not None:
         over["judge_model_args"] = {"model": args.judge_model}
+
+    if args.disable_doc_recall:
+        over["enable_doc_recall"] = False
+    elif args.enable_doc_recall:
+        over["enable_doc_recall"] = True
 
     return over
 
