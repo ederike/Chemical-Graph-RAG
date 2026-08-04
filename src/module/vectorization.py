@@ -13,7 +13,22 @@ class BaseVectorization:
         self.config = config
         self.logger = logger
         api_key, base_url = resolve_credentials(config, config.vectorization)
-        self.embedding = Embedding(api_key=api_key, base_url=base_url)
+        emb_timeout, emb_retries, emb_wait = 120.0, 3, 0.5
+        try:
+            v_retry = getattr(config.vectorization, 'retry', None)
+            if v_retry is not None:
+                emb_timeout = float(getattr(v_retry, 'timeout', emb_timeout) or emb_timeout)
+                emb_retries = int(getattr(v_retry, 'max_attempt', emb_retries) or emb_retries)
+                emb_wait = float(getattr(v_retry, 'wait', emb_wait) or emb_wait)
+        except Exception:
+            pass
+        self.embedding = Embedding(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=emb_timeout,
+            max_retries=emb_retries,
+            retry_wait=max(0.5, emb_wait),
+        )
 
     @Retry(max_attempt=5, wait=0.1, timeout=600, config_attr='vectorization.retry')
     def processing_single_task(self,task,**kwargs):

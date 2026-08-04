@@ -30,7 +30,6 @@ from .evaluator import QueryEvaluator
 from .question_gen import QuestionGenerator
 from .utils import parse_hop_spec, project_root, resolve_path
 
-# 仅保留极少关键日志；中间过程用进度条
 logger = logging.getLogger("benchmark.workflow")
 
 

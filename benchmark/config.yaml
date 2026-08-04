@@ -12,9 +12,9 @@ paths:
 
 generate:
   hop_counts:
-    "1": 5
-    "2": 3
-    "3": 2
+    "1": 50
+    "2": 0
+    "3": 0
   seed: 42
   max_chars_per_doc: -1
   max_retries: 3

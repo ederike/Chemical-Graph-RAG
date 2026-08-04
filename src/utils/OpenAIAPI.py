@@ -367,12 +367,26 @@ class Embedding:
       POST {base}/nlp/sentence_embedding（失败再试 {base}/sentence_embedding）
       body: source_sentence + access_token + timestamp
     - OpenAI 兼容：当 model_args 含 model 时走 /v1/embeddings。
+
+    超时说明：
+      OpenAI SDK 默认 connect timeout 仅约 5s，内网抖动/服务端排队时
+      极易出现 "Request timed out."。此处默认拉长超时并做有限重试。
     """
 
-    def __init__(self, api_key, base_url):
+    def __init__(
+        self,
+        api_key,
+        base_url,
+        timeout: float = 120.0,
+        max_retries: int = 3,
+        retry_wait: float = 0.5,
+    ):
         self.api_key = api_key or "EMPTY"
         # 兼容配置里带 /v1 的 OpenAI 风格地址；本地 route API 用根路径
         self.base_url = (base_url or "").rstrip("/")
+        self.timeout = float(timeout) if timeout is not None else 120.0
+        self.max_retries = max(1, int(max_retries) if max_retries is not None else 3)
+        self.retry_wait = max(0.0, float(retry_wait) if retry_wait is not None else 0.5)
         self._openai_client = None
 
     def _normalize_local_base(self) -> str:
@@ -384,9 +398,25 @@ class Embedding:
 
     def _openai(self) -> OpenAI:
         if self._openai_client is None:
+            # 显式 timeout：避免默认 connect=5s 导致偶发 Request timed out
+            # max_retries=0：超时重试由本类控制，避免 SDK 与业务双重重试
+            try:
+                import httpx
+
+                t = float(self.timeout)
+                timeout = httpx.Timeout(
+                    connect=min(30.0, t),
+                    read=t,
+                    write=t,
+                    pool=min(30.0, t),
+                )
+            except Exception:
+                timeout = float(self.timeout)
             self._openai_client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
+                timeout=timeout,
+                max_retries=0,
             )
         return self._openai_client
 
@@ -512,25 +542,52 @@ class Embedding:
         response["usage_total_tokens"] = None
         return response
 
+    @staticmethod
+    def _is_retryable_emb_error(exc: BaseException) -> bool:
+        """超时 / 连接 / 5xx 等可重试。"""
+        name = type(exc).__name__
+        msg = str(exc).lower()
+        if "timeout" in name.lower() or "timed out" in msg or "timeout" in msg:
+            return True
+        if "connection" in name.lower() or "connect" in msg:
+            return True
+        if "503" in msg or "502" in msg or "504" in msg or "429" in msg:
+            return True
+        return False
+
     def _generate_openai(self, prompt, model_args):
-        """OpenAI 兼容 embeddings.create（需 model_args.model）。"""
+        """OpenAI 兼容 embeddings.create（需 model_args.model）；超时自动重试。"""
         response = {}
         embedding = None
         create_kwargs, extra_body = split_model_args(model_args)
+        call_kwargs = {
+            **create_kwargs,
+            "input": prompt,
+        }
+        if extra_body:
+            call_kwargs["extra_body"] = extra_body
 
-        try:
-            call_kwargs = {
-                **create_kwargs,
-                "input": prompt,
-            }
-            if extra_body:
-                call_kwargs["extra_body"] = extra_body
-            embedding = self._openai().embeddings.create(**call_kwargs)
-            response["status"] = 1
-            response["answer"] = embedding.data[0].embedding
-        except Exception as e:
+        last_err: Optional[Exception] = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                embedding = self._openai().embeddings.create(**call_kwargs)
+                response["status"] = 1
+                response["answer"] = embedding.data[0].embedding
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < self.max_retries and self._is_retryable_emb_error(e):
+                    # 退避：0.5s, 1s, 1.5s...
+                    time.sleep(self.retry_wait * attempt)
+                    continue
+                response["status"] = 0
+                response["answer"] = str(e)
+                break
+
+        if last_err is not None and response.get("status") != 1:
             response["status"] = 0
-            response["answer"] = str(e)
+            response["answer"] = str(last_err)
 
         try:
             response["usage_prompt_tokens"] = embedding.usage.prompt_tokens

@@ -37,7 +37,25 @@ class Retrieve(BaseRetrieve):
             emb_key = self.config.settings.api_key or 'EMPTY'
         if not emb_url:
             emb_url = self.config.settings.base_url or ''
-        self.embedding = Embedding(api_key=emb_key, base_url=emb_url)
+        # 超时/重试：优先 vectorization.retry，避免默认 connect=5s 导致检索嵌入频繁超时
+        emb_timeout = 120.0
+        emb_retries = 3
+        emb_wait = 0.5
+        try:
+            v_retry = getattr(self.config.vectorization, 'retry', None)
+            if v_retry is not None:
+                emb_timeout = float(getattr(v_retry, 'timeout', emb_timeout) or emb_timeout)
+                emb_retries = int(getattr(v_retry, 'max_attempt', emb_retries) or emb_retries)
+                emb_wait = float(getattr(v_retry, 'wait', emb_wait) or emb_wait)
+        except Exception:
+            pass
+        self.embedding = Embedding(
+            api_key=emb_key,
+            base_url=emb_url,
+            timeout=emb_timeout,
+            max_retries=emb_retries,
+            retry_wait=max(0.5, emb_wait),
+        )
         self._precomputed = False
         self.all_chunks = []
         self.chunk_dict = {}

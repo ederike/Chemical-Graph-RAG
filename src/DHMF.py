@@ -578,10 +578,8 @@ class DHMF:
     def query(self, query, mode='dual_path', pretty=False):
         """
         Query the knowledge base and generate an answer.
-
         mode:
           - 'dual_path': 双路各自 topk（chunk_candidate_k / node_candidate_k）截取后合并，全部资料组进上下文作答
-
         pretty=True: return a formatted multi-line string (Thought / Answer split).
         """
         if mode != 'dual_path':
