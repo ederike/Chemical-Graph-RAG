@@ -19,11 +19,8 @@ ChemicalGraph = DHMF(config)
 # ChemicalGraph.build()
 # ChemicalGraph.vectorization()
 
-for name in config.vectorization.default_target:  # 一般是 ['chunk', 'node']
-    ChemicalGraph.vdb[name].clear()                          # 删该表的 .vdb 并按 config.dim 建空索引
-    ChemicalGraph.db[name].update_key('embedding_status', 'undone')  # 全部重算
-
-ChemicalGraph.vectorization()
+# --- vectorization ---
+ChemicalGraph.vectorization(db_name='node')
 
 # ChemicalGraph.recommend()
 

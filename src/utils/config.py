@@ -161,6 +161,8 @@ class VectorizationConfig(BaseModel):
     default_target: List[str] = Field(default_factory=list)
     use_cache: bool = True
     num_thread: int = 1
+    # 边嵌边写：每处理 N 条就刷 FAISS + SQLite（防 OOM）；与 embedding 缓存无关
+    flush_every: int = 500
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
     )

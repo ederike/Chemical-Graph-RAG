@@ -2,7 +2,6 @@ from ..module.vectorization import BaseVectorization
 from ..utils.utils import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
-import json
 import time
 
 
@@ -60,17 +59,8 @@ class Vectorization(BaseVectorization):
                 accumulate_time=False,
             )
 
-        emb = response['answer']
-        update_task = {
-            'id': task['id'],
-            'embedding_status': 'done',
-        }
-        add_task_vdb = {
-            'id': task['id'],
-            'embedding': json.dumps(emb, ensure_ascii=False),
-        }
-        self.task_db.buffer.append(update_task)
-        self.task_vdb.buffer.append(add_task_vdb)
+        # 每 flush_every 条会边嵌边写 FAISS + SQLite
+        self._append_embedding(task['id'], response['answer'])
 
     def processing(self):
         """Run with a single progress bar; metrics use batch wall-clock."""
@@ -90,6 +80,7 @@ class Vectorization(BaseVectorization):
             return {
                 'real': s['real'],
                 'tok': s['tokens'],
+                'flush': self._flushed_count,
                 'tot_s': f"{s['total_s']:.1f}s",
             }
 

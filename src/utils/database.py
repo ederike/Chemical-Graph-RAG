@@ -124,8 +124,17 @@ class BaseVDB:
         if data_list == []:
             return
         ids = [data['id'] for data in data_list]
-        vectors = np.array([json.loads(data['embedding']) for data in data_list])
-        self.vdb.add(ids,vectors)
+        # 兼容：embedding 可为 list/ndarray，或历史 JSON 字符串
+        vecs = []
+        for data in data_list:
+            emb = data['embedding']
+            if isinstance(emb, str):
+                emb = json.loads(emb)
+            vecs.append(emb)
+        vectors = np.asarray(vecs, dtype=np.float32)
+        # 幂等：同 id 先删再加，避免中断重跑 / 误重嵌时 FAISS 出现重复 id
+        self.vdb.remove(ids)
+        self.vdb.add(ids, vectors)
     
     def search(self,vector: list,topk: int=10):        
         vector = np.array(vector).reshape(1, -1)
