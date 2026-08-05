@@ -42,7 +42,6 @@ class DHMF:
             'edge':EdgeVDB(vdb_path,self.config.vectorization.dim),
         }
 
-        # Cost tracker: recognition → vectorization; lifetime persisted under DB/
         metrics_path = Path(self.config.settings.working_path) / 'DB' / 'build_metrics.json'
         self.metrics = PipelineMetrics(logger=self.logger, persist_path=metrics_path)
         self.metrics.load_lifetime()
@@ -53,12 +52,10 @@ class DHMF:
         self.build_module = Build(db=self.db,logger=self.logger,config=self.config)
         self.vectorization_module = Vectorization(logger=self.logger,config=self.config)
         self.retrieve_module = Retrieve(db=self.db,vdb=self.vdb,logger=self.logger,config=self.config)
-        # 相似超边推荐：离线独立模块，不参与 build；调用 dhmf.recommend()
         self.recommend_module = Recommend(
             db=self.db, vdb=self.vdb, logger=self.logger, config=self.config
         )
 
-        # share metrics with modules
         self.doc_module.metrics = self.metrics
         self.chunk_module.metrics = self.metrics
         self.extract_module.metrics = self.metrics

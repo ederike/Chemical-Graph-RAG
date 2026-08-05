@@ -30,7 +30,7 @@ ChemicalGraph = DHMF(config)
 
 # --- 多跳 Agent（配置见 config.agent）---
 print(ChemicalGraph.agent_query(
-    'Admex™ 6187的密度/比重参数是多少',
+    'Advantex™ DM 与 Advantex™ 和 Advantex™ AR 的自燃温度有什么不同？？',
     pretty=True,
 ))
 
