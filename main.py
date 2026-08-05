@@ -11,7 +11,7 @@ ChemicalGraph = DHMF(config)
 # ChemicalGraph.extract_clear()
 # ChemicalGraph.build_clear()
 
-# ChemicalGraph.download_from_oss()
+ChemicalGraph.download_from_oss()
 # ChemicalGraph.insert_default()
 # ChemicalGraph.chunk()
 # ChemicalGraph.extract()
