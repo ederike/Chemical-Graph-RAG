@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from .prompts import QUESTION_GEN_SYSTEM, QUESTION_GEN_USER
+from .prompts import Benchmark_PROMPT
 from .utils import (
     call_llm,
     extract_json_object,
@@ -87,7 +87,7 @@ class QuestionGenerator:
         return chosen[:n]
 
     def _build_user_prompt(self, hop: int, docs: Sequence[Dict[str, Any]]) -> str:
-        return QUESTION_GEN_USER.format(
+        return Benchmark_PROMPT['QUESTION_GEN_USER'].format(
             hop=hop,
             n_docs=len(docs),
             docs_block=format_docs_block(docs, self.max_chars_per_doc),
@@ -123,7 +123,7 @@ class QuestionGenerator:
         for attempt in range(1, self.max_retries + 1):
             resp = call_llm(
                 self.llm,
-                system=QUESTION_GEN_SYSTEM,
+                system=Benchmark_PROMPT.get('QUESTION_GEN_SYSTEM', ''),
                 user=user,
                 model_args=self.model_args,
                 use_cache=self.use_cache,

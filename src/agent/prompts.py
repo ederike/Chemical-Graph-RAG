@@ -1,9 +1,8 @@
-PLAN_SYSTEM = (
-    '你是化工/材料产品技术资料问答的规划助手。'
-    '你的任务是把用户问题拆成最少、可独立检索的单跳子问题，并标明依赖。'
-)
+Agent_PROMPT = {}
 
-PLAN_USER = """\
+Agent_PROMPT['PLAN_SYSTEM'] = '''你是化工/材料产品技术资料问答的规划助手。你的任务是把用户问题拆成最少、可独立检索的单跳子问题，并标明依赖。'''
+
+Agent_PROMPT['PLAN_USER'] = """
 请将下列用户问题拆解为「单跳检索步骤图」。
 
 规则：
@@ -11,7 +10,7 @@ PLAN_USER = """\
 2. 若后一步需要前一步结论（如：先查公司，再用公司查产品），用 depends_on 标明。
 3. 若多个子问题互不依赖（如：分别查 A/B 产品用途再对比），depends_on 均为 []。
 4. 简单单跳问题只输出 1 个步骤。
-5. 步骤数尽量少，且不超过 {max_steps}。
+5. 步骤数不能超过 {max_steps}。
 6. 只输出合法 JSON（不要 Markdown 代码块、不要解释），格式严格如下：
 {{
   "steps": [
@@ -19,16 +18,27 @@ PLAN_USER = """\
     {{"id": "2", "question": "……", "depends_on": ["1"]}}
   ]
 }}
+7. 每步步骤的问题主体只能有一个，一个单跳原子问题不能有多个主体来，必须分割成更多步骤，例如：
+用户问题：a产品和b产品都有在c公司生产吗？
+不能直接问：{{"id": "1", "question": "a产品和b产品是否有在c公司生产吗？", "depends_on": []}}
+而是分开问：
+{{
+  "steps": [
+    {{"id": "1", "question": "a产品是否有在c公司生产", "depends_on": []}},
+    {{"id": "2", "question": "b产品是否有在c公司生产", "depends_on": []}}
+    {{"id": "3", "question": "确认两个产品是否有在c公司生产", "depends_on": [1,2]}}
+  ]
+}}
 
 用户问题：
 {query}
+output:
 """
 
-RESOLVE_SYSTEM = (
-    '你是检索查询具体化助手。根据已完成步骤的结论，把当前子问题改写成一条可直接检索的单跳查询。'
-)
+Agent_PROMPT['RESOLVE_SYSTEM'] = '你是检索查询具体化助手。根据已完成步骤的结论，把当前子问题改写成一条可直接检索的单跳查询。'
 
-RESOLVE_USER = """\
+
+Agent_PROMPT['RESOLVE_USER'] = """ 
 原始总问题：
 {query}
 
@@ -42,14 +52,14 @@ RESOLVE_USER = """\
 1. 用已有结论替换指代（如「该公司」→ 具体公司名），使问题自洽、可单独检索。
 2. 不要改变信息需求，不要编造资料中没有的产品/数值。
 3. 只输出一行改写后的查询文本，不要解释、不要引号。
+
+Output:
 """
 
-QUERY_SKILL_ANSWER_SYSTEM = (
-    '你是一位资深的化工/材料产品技术资料问答助手。'
-    '你只根据当前检索到的语料回答「单个原子问题」，不负责多跳推理或横向对比。'
-)
 
-QUERY_SKILL_ANSWER_USER = """\
+Agent_PROMPT['QUERY_SKILL_ANSWER_SYSTEM'] = '''你是一位资深的化工/材料产品技术资料问答助手。你只根据当前检索到的语料回答「单个原子问题」，不负责多跳推理或横向对比。'''
+
+Agent_PROMPT['QUERY_SKILL_ANSWER_USER'] = """
 =======================================
 【检索语料】
 {retrieval_result}
@@ -67,18 +77,14 @@ QUERY_SKILL_ANSWER_USER = """\
 【当前单跳问题】
 {query}
 
-【回答】
+Output:
 """
 
-STEP_ANSWER_SYSTEM = QUERY_SKILL_ANSWER_SYSTEM
-STEP_ANSWER_USER = QUERY_SKILL_ANSWER_USER
 
-SYNTH_SYSTEM = (
-    '你是一位资深的化工/材料产品咨询与推荐官。'
-    '请综合各子问题的检索结论，完整回答用户的原始问题；关键结论必须保留出处。'
-)
+Agent_PROMPT['SYNTH_SYSTEM'] = '''你是一位资深的化工/材料产品咨询与推荐官。请综合各子问题的检索结论，完整回答用户的原始问题；关键结论必须保留出处。'''
 
-SYNTH_USER = """\
+
+Agent_PROMPT['SYNTH_USER'] = """
 用户原始问题：
 {query}
 
@@ -93,9 +99,9 @@ SYNTH_USER = """\
 Output:
 """
 
-REWRITE_SYSTEM = '你是化工产品技术资料检索的查询改写器。'
+Agent_PROMPT['REWRITE_SYSTEM'] = '你是化工产品技术资料检索的查询改写器。'
 
-REWRITE_USER = """\
+Agent_PROMPT['REWRITE_USER'] = """
 把用户问题改写成更利于向量检索的一行陈述性查询。
 保留型号、商品名、数值与单位；不要编造；只输出一行，不要解释。
 

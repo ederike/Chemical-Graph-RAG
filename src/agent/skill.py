@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig, resolve_credentials
-from . import prompts as P
+from .prompts import Agent_PROMPT
 
 if TYPE_CHECKING:
     from ..DHMF import DHMF
@@ -94,13 +94,16 @@ class QuerySkill:
                 seen_did.add(did)
                 doc_ids.append(did)
 
-        # 2) 作答：agent 专用提示词 + agent.model_args（不用 retrieve/query_answer）
-        user_prompt = P.QUERY_SKILL_ANSWER_USER.format(
+        # 2) 作答：Agent_PROMPT 专用提示词 + agent.model_args（不用 retrieve/query_answer）
+        user_prompt = Agent_PROMPT['QUERY_SKILL_ANSWER_USER'].format(
             retrieval_result=str(retrieval_text or ''),
             query=q,
         )
         respond = self.llm.generate(
-            prompt={'system': P.QUERY_SKILL_ANSWER_SYSTEM, 'user': user_prompt},
+            prompt={
+                'system': Agent_PROMPT.get('QUERY_SKILL_ANSWER_SYSTEM', ''),
+                'user': user_prompt,
+            },
             model_args=dict(self.cfg.model_args or {}),
             use_cache=bool(self.cfg.use_cache),
         )
@@ -118,8 +121,8 @@ class QuerySkill:
         try:
             resp = self.llm.generate(
                 prompt={
-                    'system': P.REWRITE_SYSTEM,
-                    'user': P.REWRITE_USER.format(query=query),
+                    'system': Agent_PROMPT.get('REWRITE_SYSTEM', ''),
+                    'user': Agent_PROMPT['REWRITE_USER'].format(query=query),
                 },
                 model_args=dict(self.cfg.model_args or {}),
                 use_cache=bool(self.cfg.use_cache),

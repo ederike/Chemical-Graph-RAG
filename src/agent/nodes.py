@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig
-from . import prompts as P
 from .notebook import Notebook
+from .prompts import Agent_PROMPT
 from .skill import QuerySkill
 from .state import AgentState, PlanStep, StepResult
 
@@ -136,9 +136,14 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     query = (state.get('query') or '').strip()
     ctx.logger.info(f'[agent.plan] query={query!r}')
 
-    user = P.PLAN_USER.format(query=query, max_steps=int(ctx.cfg.max_steps))
+    user = Agent_PROMPT['PLAN_USER'].format(
+        query=query, max_steps=int(ctx.cfg.max_steps)
+    )
     resp = ctx.llm.generate(
-        prompt={'system': P.PLAN_SYSTEM, 'user': user},
+        prompt={
+            'system': Agent_PROMPT.get('PLAN_SYSTEM', ''),
+            'user': user,
+        },
         model_args=dict(ctx.cfg.model_args or {}),
         use_cache=bool(ctx.cfg.use_cache),
     )
@@ -207,14 +212,17 @@ def _resolve_question(
         return planned
 
     prior = _format_prior(results, deps)
-    user = P.RESOLVE_USER.format(
+    user = Agent_PROMPT['RESOLVE_USER'].format(
         query=query,
         prior_results=prior,
         step_question=planned,
     )
     try:
         resp = ctx.llm.generate(
-            prompt={'system': P.RESOLVE_SYSTEM, 'user': user},
+            prompt={
+                'system': Agent_PROMPT.get('RESOLVE_SYSTEM', ''),
+                'user': user,
+            },
             model_args=dict(ctx.cfg.model_args or {}),
             use_cache=bool(ctx.cfg.use_cache),
         )
@@ -346,9 +354,14 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
         }
 
     step_text = _format_step_results_for_synth(plan, results)
-    user = P.SYNTH_USER.format(query=query, step_results=step_text)
+    user = Agent_PROMPT['SYNTH_USER'].format(
+        query=query, step_results=step_text
+    )
     resp = ctx.llm.generate(
-        prompt={'system': P.SYNTH_SYSTEM, 'user': user},
+        prompt={
+            'system': Agent_PROMPT.get('SYNTH_SYSTEM', ''),
+            'user': user,
+        },
         model_args=dict(ctx.cfg.model_args or {}),
         use_cache=bool(ctx.cfg.use_cache),
     )

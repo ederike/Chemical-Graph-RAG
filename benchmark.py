@@ -1,5 +1,3 @@
-
-
 from benchmark.config import DEFAULT_CONFIG_PATH
 from benchmark.workflow import TestQueryWorkflow
 

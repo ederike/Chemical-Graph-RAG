@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from .prompts import JUDGE_SYSTEM, JUDGE_USER
+from .prompts import Benchmark_PROMPT
 from .utils import (
     call_llm,
     extract_json_object,
@@ -193,7 +193,7 @@ class QueryEvaluator:
         source_block = format_docs_block(
             full_docs, max_chars_per_doc=self.max_source_chars
         )
-        user = JUDGE_USER.format(
+        user = Benchmark_PROMPT['JUDGE_USER'].format(
             question=question or "",
             ground_truth_answer=ground_truth_answer or "",
             source_block=source_block,
@@ -204,7 +204,7 @@ class QueryEvaluator:
         for _attempt in range(1, self.max_judge_retries + 1):
             resp = call_llm(
                 self.judge_llm,
-                system=JUDGE_SYSTEM,
+                system=Benchmark_PROMPT.get('JUDGE_SYSTEM', ''),
                 user=user,
                 model_args=self.judge_model_args,
                 use_cache=self.use_cache,
