@@ -275,13 +275,12 @@ class TestQueryWorkflow:
             num_thread=self.cfg.gen_num_thread,
         )
         dataset = gen.generate_all()
-        dataset.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+        dataset.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
         self._dataset = dataset
 
         if save:
             out = self.cfg.questions_file()
             self.save_json(dataset, out)
-            dataset.setdefault("meta", {})["saved_path"] = str(out)
 
         return dataset
 
@@ -332,8 +331,7 @@ class TestQueryWorkflow:
         def _on_progress(mid_report: dict, index: int, total: int) -> None:
             if out is None:
                 return
-            mid_report.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
-            mid_report.setdefault("meta", {})["saved_path"] = str(out)
+            mid_report.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
             mid_report.setdefault("meta", {})["progress"] = {
                 "done": index,
                 "total": total,
@@ -345,12 +343,13 @@ class TestQueryWorkflow:
             dataset,
             on_progress=_on_progress if save else None,
         )
-        eval_data.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+        eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
         self._eval_data = eval_data
 
         if save and out is not None:
-            eval_data.setdefault("meta", {})["saved_path"] = str(out)
             eval_data.setdefault("meta", {})["done"] = True
+            # 完成后 progress 无意义，去掉避免冗余
+            eval_data.get("meta", {}).pop("progress", None)
             self.save_json(eval_data, out)
 
         return eval_data
@@ -398,16 +397,24 @@ class TestQueryWorkflow:
             source_path=str(src_path) if src_path is not None else None,
             enable_doc_recall=self.cfg.enable_doc_recall,
         )
-        report_doc.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+        # 用当前配置补全缺失字段
+        meta = report_doc.setdefault("meta", {})
+        snap = self.cfg.to_meta_snapshot()
+        for k in (
+            "db_path",
+            "hop_counts",
+            "seed",
+            "query_mode",
+            "judge_model",
+            "config_file",
+            "dhmf_config_path",
+        ):
+            if meta.get(k) is None and snap.get(k) is not None:
+                meta[k] = snap[k]
         self._report = report_doc
-
-        table = report_doc.get("summary_table") or ""
-        if self.cfg.report_print_table and table:
-            print(table)
 
         if save:
             out = self.cfg.report_file()
-            report_doc.setdefault("meta", {})["saved_path"] = str(out)
             self.save_json(report_doc, out)
 
         return report_doc

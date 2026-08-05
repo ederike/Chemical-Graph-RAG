@@ -11,7 +11,7 @@ paths:
   output_dir: benchmark_results
 
   # generate 写出
-  questions_filename: questions_all-easy_100.json
+  questions_filename: questions_all-hard_50.json
   questions_path: null
 
   # evaluate 读入
@@ -22,7 +22,7 @@ paths:
   eval_results_path: null
 
   # report 读入
-  report_source_filename: null
+  report_source_filename: eval_report_standard_100_agent.json
   report_source_path: null
   # report 写出
   report_filename: report_standard_100_agent.json
@@ -30,14 +30,14 @@ paths:
 
 generate:
   hop_counts:
-    "1": 100
+    "1": 0
     "2": 0
-    "3": 0
+    "3": 50
   seed: 42
   max_chars_per_doc: -1
   max_retries: 3
   sleep_between: 0.0
-  num_thread: 4          #
+  num_thread: 2          #
   use_cache: false
   api_key: null
   base_url: null
@@ -65,9 +65,6 @@ evaluate:
     enable_thinking: false
     response_format:
       type: json_object
-
-report:
-  print_table: true  # 终端打印文本统计表
 
 logging:
   level: INFO

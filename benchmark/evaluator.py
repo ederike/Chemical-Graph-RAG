@@ -371,6 +371,26 @@ class QueryEvaluator:
     # ------------------------------------------------------------------
     # batch + summary
     # ------------------------------------------------------------------
+    @staticmethod
+    def _slim_dataset_meta(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """问题集 meta 精简：只保留出题侧关键字段。"""
+        if not meta or not isinstance(meta, dict):
+            return None
+        keep = (
+            "created_at",
+            "db_path",
+            "hop_counts",
+            "seed",
+            "num_thread",
+            "model",
+            "total",
+            "success",
+            "failed",
+            "elapsed_s",
+        )
+        out = {k: meta[k] for k in keep if k in meta}
+        return out or None
+
     def _make_report(
         self,
         *,
@@ -390,7 +410,7 @@ class QueryEvaluator:
                 "created_at": created_at,
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
                 "done": bool(done),
-                "dataset_meta": dataset.get("meta"),
+                "dataset_meta": self._slim_dataset_meta(dataset.get("meta")),
                 "query_mode": self.query_mode,
                 "judge_model": (self.judge_model_args or {}).get("model"),
                 "enable_doc_recall": self.enable_doc_recall,
@@ -401,9 +421,6 @@ class QueryEvaluator:
             },
             "results": results,
             "summary": summary,
-            "summary_table": self.format_summary_table(
-                summary, enable_doc_recall=self.enable_doc_recall
-            ),
         }
 
     def evaluate_all(
@@ -529,39 +546,29 @@ class QueryEvaluator:
         helper = cls.__new__(cls)
         helper.enable_doc_recall = enable_doc_recall
         summary = helper.build_summary(results, enable_doc_recall=enable_doc_recall)
-        table = cls.format_summary_table(
-            summary, enable_doc_recall=enable_doc_recall
-        )
 
-        # 逐题精简视图（不含大段原文，便于扫一眼）
-        items = []
-        for r in results:
-            items.append({
-                "id": r.get("id"),
-                "hop": r.get("hop"),
-                "question": r.get("question"),
-                "llm_acc": r.get("llm_acc"),
-                "query_status": r.get("query_status"),
-                "query_error": r.get("query_error"),
-                "judge_status": r.get("judge_status"),
-                "judge_error": r.get("judge_error"),
-                "recall": (r.get("recall") or {}).get("recall")
-                if isinstance(r.get("recall"), dict) else r.get("recall"),
-                "query_latency_s": (r.get("metrics") or {}).get("query_latency_s"),
-                "retrieve_latency_s": (r.get("metrics") or {}).get("retrieve_latency_s"),
-                "total_tokens": (r.get("metrics") or {}).get("total_tokens"),
-                "retrieval_sources": r.get("retrieval_sources") or [],
-            })
+        # 从评测 meta / 问题集 meta 抽扁平字段；逐题明细不写入 report（见 eval results）
+        ds_meta = src_meta.get("dataset_meta")
+        if not isinstance(ds_meta, dict):
+            ds_meta = {}
+        slim_ds = cls._slim_dataset_meta(ds_meta) or {}
+        cfg_src = src_meta.get("config")
+        if not isinstance(cfg_src, dict):
+            cfg_src = {}
 
         return {
             "meta": {
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "source_path": source_path,
-                "source_meta": src_meta,
-                "n_results": len(results),
-                "query_mode": src_meta.get("query_mode"),
-                "judge_model": src_meta.get("judge_model"),
+                "config_file": cfg_src.get("config_file"),
+                "dhmf_config_path": cfg_src.get("dhmf_config_path"),
+                "query_mode": src_meta.get("query_mode") or cfg_src.get("query_mode"),
+                "judge_model": src_meta.get("judge_model") or cfg_src.get("judge_model"),
                 "enable_doc_recall": enable_doc_recall,
+                "db_path": slim_ds.get("db_path") or cfg_src.get("db_path"),
+                "hop_counts": slim_ds.get("hop_counts") or cfg_src.get("hop_counts"),
+                "seed": slim_ds.get("seed", cfg_src.get("seed")),
+                "n_results": len(results),
                 "n_questions": src_meta.get("n_questions", len(results)),
                 "n_total_planned": src_meta.get("n_total_planned"),
                 "n_skipped_gen_fail": src_meta.get("n_skipped_gen_fail"),
@@ -569,8 +576,6 @@ class QueryEvaluator:
                 "eval_done": src_meta.get("done"),
             },
             "summary": summary,
-            "summary_table": table,
-            "items": items,
         }
 
     def build_summary(
@@ -718,119 +723,3 @@ class QueryEvaluator:
                 "mean_recall": mean(recalls),
             }
         return summary
-
-    @staticmethod
-    def format_summary_table(
-        summary: Dict[str, Any],
-        *,
-        enable_doc_recall: Optional[bool] = None,
-    ) -> str:
-        """生成可读综合统计表（纯文本）。关闭召回时不展示任何召回相关行。"""
-        if enable_doc_recall is None:
-            enable_doc_recall = bool(summary.get("enable_doc_recall", True))
-        enable_doc_recall = bool(enable_doc_recall)
-
-        lines = []
-        lines.append("=" * 72)
-        lines.append("综合评测统计表")
-        lines.append("=" * 72)
-
-        n = summary.get("n_total") or 0
-        acc = summary.get("llm_acc") or {}
-        counts = acc.get("counts") or {}
-        lines.append(f"样本数: {n}")
-        lines.append("")
-        lines.append("【LLM 准确率 llm-acc】（二分类：正确 / 错误）")
-        lines.append(f"  正确: {counts.get('正确', 0)}")
-        lines.append(f"  错误: {counts.get('错误', 0)}")
-        if counts.get("未知"):
-            lines.append(f"  未知/失败: {counts.get('未知', 0)}")
-        lines.append(f"  准确率 accuracy: {_pct(acc.get('accuracy'))}")
-        lines.append(f"  错误率: {_pct(acc.get('error_rate'))}")
-
-        if enable_doc_recall:
-            rec = summary.get("doc_recall") or {}
-            lines.append("")
-            lines.append(
-                "【文档召回率】命中 gold 文档数 / gold 文档总数（按题平均）"
-            )
-            lines.append(f"  平均召回率 mean_recall: {_pct(rec.get('mean_recall'))}")
-
-        lat = summary.get("latency") or {}
-        lines.append("")
-        lines.append("【时延】")
-        lines.append(f"  平均 query 时延: {_sec(lat.get('mean_query_s'))}")
-        lines.append(f"  平均 retrieve 时延: {_sec(lat.get('mean_retrieve_s'))}")
-        lines.append(f"  query 总时延: {_sec(lat.get('sum_query_s'))}")
-
-        tok = summary.get("tokens") or {}
-        lines.append("")
-        lines.append("【Token 消耗（RAG 回答）】")
-        lines.append(f"  prompt 合计: {tok.get('sum_prompt')}")
-        lines.append(f"  completion 合计: {tok.get('sum_completion')}")
-        lines.append(f"  total 合计: {tok.get('sum_total')}")
-        lines.append(f"  平均 prompt: {_num(tok.get('mean_prompt'))}")
-        lines.append(f"  平均 completion: {_num(tok.get('mean_completion'))}")
-        lines.append("【Token 消耗（评判 LLM）】")
-        lines.append(f"  judge prompt 合计: {tok.get('sum_judge_prompt')}")
-        lines.append(f"  judge completion 合计: {tok.get('sum_judge_completion')}")
-        lines.append(f"  judge total 合计: {tok.get('sum_judge_total')}")
-
-        by_hop = summary.get("by_hop") or {}
-        if by_hop:
-            lines.append("")
-            lines.append("【分跳数统计】")
-            if enable_doc_recall:
-                lines.append(
-                    f"{'hop':>4} | {'n':>4} | {'准确率':>8} | "
-                    f"{'文档召回':>8} | {'均时延s':>8}"
-                )
-                lines.append("-" * 72)
-                for hop, g in by_hop.items():
-                    lines.append(
-                        f"{str(hop):>4} | {g.get('n', 0):>4} | "
-                        f"{_pct(g.get('accuracy')):>8} | "
-                        f"{_pct(g.get('mean_doc_recall')):>8} | "
-                        f"{_num(g.get('mean_query_latency_s')):>8}"
-                    )
-            else:
-                lines.append(
-                    f"{'hop':>4} | {'n':>4} | {'准确率':>8} | {'均时延s':>8}"
-                )
-                lines.append("-" * 72)
-                for hop, g in by_hop.items():
-                    lines.append(
-                        f"{str(hop):>4} | {g.get('n', 0):>4} | "
-                        f"{_pct(g.get('accuracy')):>8} | "
-                        f"{_num(g.get('mean_query_latency_s')):>8}"
-                    )
-
-        lines.append("=" * 72)
-        return "\n".join(lines)
-
-
-def _pct(x) -> str:
-    if x is None:
-        return "N/A"
-    try:
-        return f"{float(x) * 100:.1f}%"
-    except Exception:
-        return str(x)
-
-
-def _sec(x) -> str:
-    if x is None:
-        return "N/A"
-    try:
-        return f"{float(x):.3f}s"
-    except Exception:
-        return str(x)
-
-
-def _num(x) -> str:
-    if x is None:
-        return "N/A"
-    try:
-        return f"{float(x):.2f}"
-    except Exception:
-        return str(x)

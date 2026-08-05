@@ -202,9 +202,6 @@ class BenchmarkConfig:
     judge_timeout: float = 180.0
     judge_model_args: Dict[str, Any] = field(default_factory=dict)
 
-    # report
-    report_print_table: bool = True  # 是否在终端打印文本统计表
-
     # logging
     log_level: int = logging.INFO
 
@@ -249,25 +246,12 @@ class BenchmarkConfig:
         log = raw.get("logging") or {}
 
         hop_counts = parse_hop_spec(gen.get("hop_counts") or {1: 5, 2: 3, 3: 2})
-        rep = raw.get("report") or {}
 
         q_name = _opt_str(paths.get("questions_filename")) or "questions.json"
-
-        # 路径兼容：
-        #   新：eval_results_filename（评测明细）+ report_filename（汇总）
-        #   旧：仅 report_filename → 当作评测明细；汇总默认 {stem}.report.json
-        eval_results_name = _opt_str(paths.get("eval_results_filename"))
-        report_out_name = _opt_str(paths.get("report_filename"))
-        legacy_only_report = eval_results_name is None and report_out_name is not None
-        if eval_results_name is None:
-            # 兼容旧字段：report_filename / 默认 eval_results.json
-            eval_results_name = report_out_name or "eval_results.json"
-        if legacy_only_report:
-            # 旧配置把 report_filename 当评测明细
-            stem = Path(eval_results_name).stem
-            report_out_name = f"{stem}.report.json"
-        elif report_out_name is None:
-            report_out_name = "report.json"
+        eval_results_name = (
+            _opt_str(paths.get("eval_results_filename")) or "eval_results.json"
+        )
+        report_out_name = _opt_str(paths.get("report_filename")) or "report.json"
 
         cfg = cls(
             run_mode=_normalize_run_mode(run.get("mode") or "all"),
@@ -280,23 +264,17 @@ class BenchmarkConfig:
             eval_questions_filename=_opt_str(paths.get("eval_questions_filename")),
             eval_questions_path=_opt_str(paths.get("eval_questions_path")),
             eval_results_filename=eval_results_name,
-            eval_results_path=_opt_str(
-                paths.get("eval_results_path")
-                # 旧配置把 report_path 当评测明细路径
-                or (paths.get("report_path") if legacy_only_report else None)
-            ),
+            eval_results_path=_opt_str(paths.get("eval_results_path")),
             report_source_filename=_opt_str(paths.get("report_source_filename")),
             report_source_path=_opt_str(paths.get("report_source_path")),
             report_filename=report_out_name,
-            report_path=_opt_str(
-                None if legacy_only_report else paths.get("report_path")
-            ),
+            report_path=_opt_str(paths.get("report_path")),
             hop_counts=hop_counts,
             seed=int(gen.get("seed", 42)),
             max_chars_per_doc=int(gen.get("max_chars_per_doc", 4000)),
             gen_max_retries=int(gen.get("max_retries", 3)),
             gen_sleep_between=float(gen.get("sleep_between", 0.0)),
-            gen_num_thread=max(1, int(gen.get("num_thread", gen.get("num_threads", 4)) or 4)),
+            gen_num_thread=max(1, int(gen.get("num_thread", 4) or 4)),
             gen_use_cache=bool(gen.get("use_cache", False)),
             gen_api_key=_opt_str(gen.get("api_key")),
             gen_base_url=_opt_str(gen.get("base_url")),
@@ -314,10 +292,6 @@ class BenchmarkConfig:
             judge_base_url=_opt_str(ev.get("base_url")),
             judge_timeout=float(ev.get("timeout", 180)),
             judge_model_args=_clean_model_args(ev.get("model_args")),
-            report_print_table=_as_bool(
-                rep.get("print_table", ev.get("print_table", True)),
-                default=True,
-            ),
             log_level=_log_level(log.get("level", "INFO")),
             config_file=str(cfg_path) if cfg_path else None,
             raw=raw,
@@ -394,32 +368,16 @@ class BenchmarkConfig:
             timestamp=timestamp,
         )
 
-    def to_dict(self) -> dict:
+    def to_meta_snapshot(self) -> dict:
+        """写入 JSON meta 的精简配置快照。"""
         return {
             "config_file": self.config_file,
-            "run_mode": self.run_mode,
             "dhmf_config_path": self.dhmf_config_path,
             "query_mode": self.query_mode,
             "db_path": self.db_path,
-            "output_dir": self.output_dir,
-            "questions_filename": self.questions_filename,
-            "questions_path": self.questions_path,
-            "eval_questions_filename": self.eval_questions_filename,
-            "eval_questions_path": self.eval_questions_path,
-            "eval_results_filename": self.eval_results_filename,
-            "eval_results_path": self.eval_results_path,
-            "report_source_filename": self.report_source_filename,
-            "report_source_path": self.report_source_path,
-            "report_filename": self.report_filename,
-            "report_path": self.report_path,
             "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
             "seed": self.seed,
-            "max_chars_per_doc": self.max_chars_per_doc,
             "enable_doc_recall": self.enable_doc_recall,
-            "gen_model_args": self.gen_model_args,
-            "judge_model_args": self.judge_model_args,
-            "gen_api_key_set": bool(self.gen_api_key),
-            "gen_base_url": self.gen_base_url,
-            "judge_api_key_set": bool(self.judge_api_key),
-            "judge_base_url": self.judge_base_url,
+            "gen_model": (self.gen_model_args or {}).get("model"),
+            "judge_model": (self.judge_model_args or {}).get("model"),
         }
