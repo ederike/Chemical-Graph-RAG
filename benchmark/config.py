@@ -104,10 +104,13 @@ def _normalize_run_mode(mode: Any) -> str:
         return "generate"
     if s in ("evaluate", "eval", "e"):
         return "evaluate"
+    if s in ("report", "summary", "summarize", "r"):
+        return "report"
     if s in ("all", "both", "full"):
         return "all"
     raise ValueError(
-        f"Unknown run.mode={mode!r}. Supported: 'generate' | 'evaluate' | 'all'"
+        f"Unknown run.mode={mode!r}. "
+        f"Supported: 'generate' | 'evaluate' | 'report' | 'all'"
     )
 
 
@@ -146,7 +149,7 @@ class BenchmarkConfig:
     """工作流全部可配置项的扁平视图。"""
 
     # run：脚本入口按此模式执行（不使用 CLI 传参）
-    run_mode: str = "all"  # generate | evaluate | all
+    run_mode: str = "all"  # generate | evaluate | report | all
 
     # dhmf
     dhmf_config_path: str = "example/a/config_open.yaml"
@@ -162,8 +165,17 @@ class BenchmarkConfig:
     eval_questions_filename: Optional[str] = None  # 空 = questions_filename
     eval_questions_path: Optional[str] = None  # 覆盖评测读取路径
 
-    report_filename: str = "eval_report.json"
-    report_path: Optional[str] = None  # 覆盖报告写出路径
+    # evaluate 写出：逐题详细结果（可增量）
+    eval_results_filename: str = "eval_results.json"
+    eval_results_path: Optional[str] = None
+
+    # report 读入：默认 = eval_results；可单独指定其它评测文件
+    report_source_filename: Optional[str] = None
+    report_source_path: Optional[str] = None
+
+    # report 写出：汇总统计 JSON
+    report_filename: str = "report.json"
+    report_path: Optional[str] = None
 
     # generate
     hop_counts: Dict[int, int] = field(default_factory=lambda: {1: 5, 2: 3, 3: 2})
@@ -182,13 +194,15 @@ class BenchmarkConfig:
     max_source_chars: int = -1
     eval_max_retries: int = 3
     eval_sleep_between: float = 0.0
-    save_summary: bool = True  # 写出 {report}.summary.json 详细统计
     eval_use_cache: bool = False
     dhmf_retrieve_use_cache: Optional[bool] = None
     judge_api_key: Optional[str] = None
     judge_base_url: Optional[str] = None
     judge_timeout: float = 180.0
     judge_model_args: Dict[str, Any] = field(default_factory=dict)
+
+    # report
+    report_print_table: bool = True  # 是否在终端打印文本统计表
 
     # logging
     log_level: int = logging.INFO
@@ -234,9 +248,25 @@ class BenchmarkConfig:
         log = raw.get("logging") or {}
 
         hop_counts = parse_hop_spec(gen.get("hop_counts") or {1: 5, 2: 3, 3: 2})
+        rep = raw.get("report") or {}
 
         q_name = _opt_str(paths.get("questions_filename")) or "questions.json"
-        r_name = _opt_str(paths.get("report_filename")) or "eval_report.json"
+
+        # 路径兼容：
+        #   新：eval_results_filename（评测明细）+ report_filename（汇总）
+        #   旧：仅 report_filename → 当作评测明细；汇总默认 {stem}.report.json
+        eval_results_name = _opt_str(paths.get("eval_results_filename"))
+        report_out_name = _opt_str(paths.get("report_filename"))
+        legacy_only_report = eval_results_name is None and report_out_name is not None
+        if eval_results_name is None:
+            # 兼容旧字段：report_filename / 默认 eval_results.json
+            eval_results_name = report_out_name or "eval_results.json"
+        if legacy_only_report:
+            # 旧配置把 report_filename 当评测明细
+            stem = Path(eval_results_name).stem
+            report_out_name = f"{stem}.report.json"
+        elif report_out_name is None:
+            report_out_name = "report.json"
 
         cfg = cls(
             run_mode=_normalize_run_mode(run.get("mode") or "all"),
@@ -248,8 +278,18 @@ class BenchmarkConfig:
             questions_path=_opt_str(paths.get("questions_path")),
             eval_questions_filename=_opt_str(paths.get("eval_questions_filename")),
             eval_questions_path=_opt_str(paths.get("eval_questions_path")),
-            report_filename=r_name,
-            report_path=_opt_str(paths.get("report_path")),
+            eval_results_filename=eval_results_name,
+            eval_results_path=_opt_str(
+                paths.get("eval_results_path")
+                # 旧配置把 report_path 当评测明细路径
+                or (paths.get("report_path") if legacy_only_report else None)
+            ),
+            report_source_filename=_opt_str(paths.get("report_source_filename")),
+            report_source_path=_opt_str(paths.get("report_source_path")),
+            report_filename=report_out_name,
+            report_path=_opt_str(
+                None if legacy_only_report else paths.get("report_path")
+            ),
             hop_counts=hop_counts,
             seed=int(gen.get("seed", 42)),
             max_chars_per_doc=int(gen.get("max_chars_per_doc", 4000)),
@@ -266,17 +306,16 @@ class BenchmarkConfig:
             ),
             eval_max_retries=int(ev.get("max_retries", 3)),
             eval_sleep_between=float(ev.get("sleep_between", 0.0)),
-            # 兼容旧字段 save_summary_txt
-            save_summary=_as_bool(
-                ev.get("save_summary", ev.get("save_summary_txt", True)),
-                default=True,
-            ),
             eval_use_cache=bool(ev.get("use_cache", False)),
             dhmf_retrieve_use_cache=_opt_bool(ev.get("dhmf_retrieve_use_cache")),
             judge_api_key=_opt_str(ev.get("api_key")),
             judge_base_url=_opt_str(ev.get("base_url")),
             judge_timeout=float(ev.get("timeout", 180)),
             judge_model_args=_clean_model_args(ev.get("model_args")),
+            report_print_table=_as_bool(
+                rep.get("print_table", ev.get("print_table", True)),
+                default=True,
+            ),
             log_level=_log_level(log.get("level", "INFO")),
             config_file=str(cfg_path) if cfg_path else None,
             raw=raw,
@@ -288,24 +327,22 @@ class BenchmarkConfig:
         self.dhmf_config_path = str(resolve_path(self.dhmf_config_path))
         self.db_path = str(resolve_path(self.db_path))
         self.output_dir = str(resolve_path(self.output_dir))
-        # custom path 字段存的是用户配置字符串；真正拼装在 questions_file() 等里做
-        # 这里只规范化非空 custom path 的绝对形式，便于日志
-        if self.questions_path:
-            p = Path(self.questions_path)
-            if not p.is_absolute():
-                self.questions_path = str(resolve_path(p))
-        if self.eval_questions_path:
-            p = Path(self.eval_questions_path)
-            if not p.is_absolute():
-                self.eval_questions_path = str(resolve_path(p))
-        if self.report_path:
-            p = Path(self.report_path)
-            if not p.is_absolute():
-                self.report_path = str(resolve_path(p))
+        for attr in (
+            "questions_path",
+            "eval_questions_path",
+            "eval_results_path",
+            "report_source_path",
+            "report_path",
+        ):
+            val = getattr(self, attr, None)
+            if val:
+                p = Path(val)
+                if not p.is_absolute():
+                    setattr(self, attr, str(resolve_path(p)))
         return self
 
     # ------------------------------------------------------------------
-    # 三类文件路径
+    # 文件路径：questions / eval_results / report
     # ------------------------------------------------------------------
     def questions_file(self) -> Path:
         """生成问题集写出路径。"""
@@ -328,19 +365,32 @@ class BenchmarkConfig:
             self.eval_questions_path,
         )
 
-    def report_file(self, *, timestamp: Optional[str] = None) -> Path:
-        """评测报告写出路径。"""
+    def eval_results_file(self, *, timestamp: Optional[str] = None) -> Path:
+        """evaluate 写出：逐题详细结果。"""
         return resolve_file_path(
             self.output_dir,
-            self.report_filename or "eval_report.json",
-            self.report_path,
+            self.eval_results_filename or "eval_results.json",
+            self.eval_results_path,
             timestamp=timestamp,
         )
 
-    def summary_file(self, report: Optional[Path] = None) -> Path:
-        """summary 与 report 同目录：{stem}.summary.json（详细统计）。"""
-        rp = report or self.report_file()
-        return rp.with_name(rp.stem + ".summary.json")
+    def report_source_file(self) -> Path:
+        """report 读入的评测结果路径（默认 = eval_results）。"""
+        if self.report_source_path:
+            return resolve_file_path(self.output_dir, "", self.report_source_path)
+        fname = _opt_str(self.report_source_filename)
+        if fname:
+            return resolve_file_path(self.output_dir, fname, None)
+        return self.eval_results_file()
+
+    def report_file(self, *, timestamp: Optional[str] = None) -> Path:
+        """report 写出：汇总统计 JSON。"""
+        return resolve_file_path(
+            self.output_dir,
+            self.report_filename or "report.json",
+            self.report_path,
+            timestamp=timestamp,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -354,6 +404,10 @@ class BenchmarkConfig:
             "questions_path": self.questions_path,
             "eval_questions_filename": self.eval_questions_filename,
             "eval_questions_path": self.eval_questions_path,
+            "eval_results_filename": self.eval_results_filename,
+            "eval_results_path": self.eval_results_path,
+            "report_source_filename": self.report_source_filename,
+            "report_source_path": self.report_source_path,
             "report_filename": self.report_filename,
             "report_path": self.report_path,
             "hop_counts": {str(k): v for k, v in self.hop_counts.items()},

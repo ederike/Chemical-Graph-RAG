@@ -496,6 +496,83 @@ class QueryEvaluator:
                     pass
         return total if any_v else None
 
+    @classmethod
+    def build_report_document(
+        cls,
+        eval_data: Dict[str, Any],
+        *,
+        source_path: Optional[str] = None,
+        enable_doc_recall: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        从 evaluate 写出的 JSON（含 results）汇总为独立 report 文档。
+
+        不依赖 DHMF / LLM，可单独跑 report 步骤。
+        """
+        results = list(eval_data.get("results") or [])
+        src_meta = dict(eval_data.get("meta") or {})
+
+        if enable_doc_recall is None:
+            if "enable_doc_recall" in src_meta:
+                enable_doc_recall = bool(src_meta.get("enable_doc_recall"))
+            elif isinstance(eval_data.get("summary"), dict) and (
+                "enable_doc_recall" in (eval_data.get("summary") or {})
+            ):
+                enable_doc_recall = bool(
+                    (eval_data.get("summary") or {}).get("enable_doc_recall")
+                )
+            else:
+                enable_doc_recall = True
+        enable_doc_recall = bool(enable_doc_recall)
+
+        # 借用空实例调用实例方法（build_summary 仅依赖 enable_doc_recall / 静态工具）
+        helper = cls.__new__(cls)
+        helper.enable_doc_recall = enable_doc_recall
+        summary = helper.build_summary(results, enable_doc_recall=enable_doc_recall)
+        table = cls.format_summary_table(
+            summary, enable_doc_recall=enable_doc_recall
+        )
+
+        # 逐题精简视图（不含大段原文，便于扫一眼）
+        items = []
+        for r in results:
+            items.append({
+                "id": r.get("id"),
+                "hop": r.get("hop"),
+                "question": r.get("question"),
+                "llm_acc": r.get("llm_acc"),
+                "query_status": r.get("query_status"),
+                "query_error": r.get("query_error"),
+                "judge_status": r.get("judge_status"),
+                "judge_error": r.get("judge_error"),
+                "recall": (r.get("recall") or {}).get("recall")
+                if isinstance(r.get("recall"), dict) else r.get("recall"),
+                "query_latency_s": (r.get("metrics") or {}).get("query_latency_s"),
+                "retrieve_latency_s": (r.get("metrics") or {}).get("retrieve_latency_s"),
+                "total_tokens": (r.get("metrics") or {}).get("total_tokens"),
+                "retrieval_sources": r.get("retrieval_sources") or [],
+            })
+
+        return {
+            "meta": {
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+                "source_path": source_path,
+                "source_meta": src_meta,
+                "n_results": len(results),
+                "query_mode": src_meta.get("query_mode"),
+                "judge_model": src_meta.get("judge_model"),
+                "enable_doc_recall": enable_doc_recall,
+                "n_questions": src_meta.get("n_questions", len(results)),
+                "n_total_planned": src_meta.get("n_total_planned"),
+                "n_skipped_gen_fail": src_meta.get("n_skipped_gen_fail"),
+                "eval_elapsed_s": src_meta.get("elapsed_s"),
+                "eval_done": src_meta.get("done"),
+            },
+            "summary": summary,
+            "summary_table": table,
+            "items": items,
+        }
+
     def build_summary(
         self,
         results: Sequence[Dict[str, Any]],

@@ -1,8 +1,10 @@
 """
-多跳问答测试集生成 + DHMF RAG 评测。
+多跳问答测试集生成 + DHMF RAG 评测 + 汇总报告。
 
 配置：benchmark/config.yaml
 运行：python benchmark.py  或  python -m benchmark.run
+
+run.mode: generate | evaluate | report | all
 """
 
 from .config import BenchmarkConfig, DEFAULT_CONFIG_PATH

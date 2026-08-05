@@ -1,22 +1,33 @@
 run:
-  
-  mode: generate  # generate| evaluate| all
+  # generate | evaluate | report | all
+  mode: report
 
 dhmf:
   config_path: example/a/config_open.yaml
-  query_mode: agent  #dual_path | agent
+  query_mode: agent  # dual_path | agent
 
 paths:
   db_path: example/a/DB/main.db
   output_dir: benchmark_results
 
-  questions_filename: questions_standard_100.json
+  # generate 写出
+  questions_filename: questions_all-easy_100.json
   questions_path: null
 
+  # evaluate 读入
   eval_questions_filename: questions_standard_100_agent.json
   eval_questions_path: null
 
-  report_filename: eval_report_standard_100_agent.json
+  # evaluate 写出
+  eval_results_filename: eval_report_standard_100_agent.json
+  eval_results_path: null
+
+  # report 读入
+  report_source_filename: null
+  report_source_path: null
+
+  # report 写出
+  report_filename: report_standard_100_agent.json
   report_path: null
 
 generate:
@@ -44,7 +55,6 @@ evaluate:
   max_source_chars: -1
   max_retries: 3
   sleep_between: 0.0
-  save_summary: true  # 写出 eval_report*.summary.json（详细统计）
   use_cache: false
   dhmf_retrieve_use_cache: null
   api_key: null
@@ -56,6 +66,9 @@ evaluate:
     enable_thinking: false
     response_format:
       type: json_object
+
+report:
+  print_table: true  # 终端打印文本统计表
 
 logging:
   level: INFO

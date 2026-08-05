@@ -1,5 +1,5 @@
 """
-多跳测试集生成 + DHMF RAG 评测主工作流。
+多跳测试集生成 + DHMF RAG 评测 + 汇总报告。
 
 全部参数写在 benchmark/config.yaml，脚本入口::
 
@@ -7,7 +7,7 @@
     # 或
     python -m benchmark.run
 
-run.mode: generate | evaluate | all
+run.mode: generate | evaluate | report | all
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ logger = logging.getLogger("benchmark.workflow")
 
 class TestQueryWorkflow:
     """
-    主调用类：问题生成与 RAG 评测。
+    主调用类：问题生成 / RAG 评测 / 汇总报告。
 
-    配置全部来自 yaml；入口调用 run() 按 run.mode 分发。
+    三步均可独立运行；配置全部来自 yaml。
     """
 
     def __init__(self, cfg: BenchmarkConfig):
@@ -45,6 +45,7 @@ class TestQueryWorkflow:
         self.llm = None          # 出题
         self.judge_llm = None    # 评判
         self._dataset: Optional[Dict[str, Any]] = None
+        self._eval_data: Optional[Dict[str, Any]] = None
         self._report: Optional[Dict[str, Any]] = None
 
         self._setup_logging(self.cfg.log_level)
@@ -79,7 +80,6 @@ class TestQueryWorkflow:
                 )
             )
             root_logger.addHandler(handler)
-        # 用户设 DEBUG 时保留细节；否则抬到 ERROR，进度条用 fail_print
         if level <= logging.DEBUG:
             root_logger.setLevel(logging.DEBUG)
         else:
@@ -97,7 +97,6 @@ class TestQueryWorkflow:
         from src.utils.config import Config
 
         self.dhmf_config = Config.from_yaml(self.cfg.dhmf_config_path)
-        # 可选：覆盖 retrieve / agent 的 use_cache（评测时常关缓存）
         if self.cfg.dhmf_retrieve_use_cache is not None:
             flag = bool(self.cfg.dhmf_retrieve_use_cache)
             try:
@@ -129,11 +128,9 @@ class TestQueryWorkflow:
         dcfg = self._load_dhmf_config()
         base = dict(getattr(dcfg.retrieve, "model_args", None) or {})
         over = dict(user_ma or {})
-        # 空 model 不覆盖
         if not over.get("model"):
             over.pop("model", None)
-        merged = {**base, **over}
-        return merged
+        return {**base, **over}
 
     def setup_llm(self, force: bool = False):
         """初始化出题 LLM。"""
@@ -156,7 +153,6 @@ class TestQueryWorkflow:
         self._ensure_sys_path()
         from src.utils.OpenAIAPI import LLM
 
-        # 若评判端点与出题完全一致且已建 llm，可复用
         same_endpoint = (
             (self.cfg.judge_api_key or self.cfg.gen_api_key)
             == (self.cfg.gen_api_key or self.cfg.judge_api_key)
@@ -187,12 +183,10 @@ class TestQueryWorkflow:
         from src.DHMF import DHMF
 
         dcfg = self._load_dhmf_config()
-        # 初始化时也尽量安静
         prev = logging.getLogger("DHMF").level
         logging.getLogger("DHMF").setLevel(logging.ERROR)
         try:
             self.dhmf = DHMF(dcfg)
-            # 实例 logger 名是 DHMF.<id>
             if getattr(self.dhmf, "logger", None) is not None:
                 self.dhmf.logger.setLevel(logging.ERROR)
                 for h in self.dhmf.logger.handlers:
@@ -233,14 +227,30 @@ class TestQueryWorkflow:
             print(f"[saved] {path}", file=sys.stderr)
         return path
 
-    def load_dataset(self, path: Union[str, Path]) -> Dict[str, Any]:
+    def load_json(self, path: Union[str, Path]) -> Dict[str, Any]:
         path = self._resolve_path(path)
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            return json.load(f)
+
+    def load_dataset(self, path: Union[str, Path]) -> Dict[str, Any]:
+        path = self._resolve_path(path)
+        data = self.load_json(path)
         if "questions" not in data:
             raise ValueError(f"非法数据集（缺少 questions）: {path}")
         self._dataset = data
         print(f"[loaded] questions <- {path}", file=sys.stderr)
+        return data
+
+    def load_eval_results(self, path: Union[str, Path]) -> Dict[str, Any]:
+        path = self._resolve_path(path)
+        data = self.load_json(path)
+        if "results" not in data:
+            raise ValueError(
+                f"非法评测结果（缺少 results）: {path}\n"
+                "  需要 evaluate 写出的 JSON（含 results 列表）。"
+            )
+        self._eval_data = data
+        print(f"[loaded] eval_results <- {path}", file=sys.stderr)
         return data
 
     # ------------------------------------------------------------------
@@ -249,7 +259,7 @@ class TestQueryWorkflow:
     def generate_questions(self, save: bool = True) -> Dict[str, Any]:
         """
         步骤 1：生成多跳问题集。
-        写出路径完全由 config.paths 决定。
+        写出路径：paths.questions_filename / questions_path
         """
         self.setup_llm()
         gen = QuestionGenerator(
@@ -271,7 +281,6 @@ class TestQueryWorkflow:
             out = self.cfg.questions_file()
             self.save_json(dataset, out)
             dataset.setdefault("meta", {})["saved_path"] = str(out)
-            # 同进程 all 模式：evaluate 直接用内存中的 dataset
 
         return dataset
 
@@ -282,7 +291,9 @@ class TestQueryWorkflow:
     ) -> Dict[str, Any]:
         """
         步骤 2：读问题集 → DHMF.query / agent_query → 评判。
-        问题集与报告路径完全由 config.paths 决定。
+
+        写出 eval_results（逐题明细，每题增量落盘）；
+        不写汇总 report（由 report 步骤独立完成）。
         """
         if dataset is None:
             if self._dataset is not None:
@@ -293,8 +304,8 @@ class TestQueryWorkflow:
                     raise FileNotFoundError(
                         "未找到问题集 JSON，无法 evaluate。\n"
                         f"  期望路径: {path}\n"
-                        "  请先将 run.mode 设为 generate 生成问题集，或在 "
-                        "paths.eval_questions_filename / eval_questions_path 指定已有文件。"
+                        "  请先 run.mode=generate，或配置 "
+                        "paths.eval_questions_filename / eval_questions_path。"
                     )
                 dataset = self.load_dataset(path)
 
@@ -313,10 +324,9 @@ class TestQueryWorkflow:
             enable_doc_recall=self.cfg.enable_doc_recall,
         )
 
-        # 评测报告路径提前确定：每题评完即写入，便于实时查看
-        out = self.cfg.report_file() if save else None
+        out = self.cfg.eval_results_file() if save else None
         if out is not None:
-            print(f"[eval] 实时报告 → {out}", file=sys.stderr)
+            print(f"[eval] 实时结果 → {out}", file=sys.stderr)
 
         def _on_progress(mid_report: dict, index: int, total: int) -> None:
             if out is None:
@@ -330,61 +340,90 @@ class TestQueryWorkflow:
             }
             self.save_json(mid_report, out, quiet=True)
 
-        report = evaluator.evaluate_all(
+        eval_data = evaluator.evaluate_all(
             dataset,
             on_progress=_on_progress if save else None,
         )
-        report.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
-        self._report = report
-
-        table = report.get("summary_table") or ""
-        if table:
-            print(table)
+        eval_data.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+        self._eval_data = eval_data
 
         if save and out is not None:
-            report.setdefault("meta", {})["saved_path"] = str(out)
-            report.setdefault("meta", {})["done"] = True
-            self.save_json(report, out)
-            # 详细统计单独落一份 summary.json（与 txt 表解耦）
-            if self.cfg.save_summary:
-                summary_path = self.cfg.summary_file(out)
-                summary_doc = {
-                    "meta": {
-                        k: report["meta"].get(k)
-                        for k in (
-                            "created_at",
-                            "updated_at",
-                            "done",
-                            "query_mode",
-                            "judge_model",
-                            "enable_doc_recall",
-                            "n_questions",
-                            "n_total_planned",
-                            "n_skipped_gen_fail",
-                            "elapsed_s",
-                            "saved_path",
-                        )
-                        if k in (report.get("meta") or {})
-                    },
-                    "summary": report.get("summary") or {},
-                }
-                summary_doc["meta"]["report_path"] = str(out)
-                self.save_json(summary_doc, summary_path)
-                report.setdefault("meta", {})["summary_path"] = str(summary_path)
+            eval_data.setdefault("meta", {})["saved_path"] = str(out)
+            eval_data.setdefault("meta", {})["done"] = True
+            self.save_json(eval_data, out)
 
-        return report
+        return eval_data
+
+    def report(
+        self,
+        eval_data: Optional[Dict[str, Any]] = None,
+        *,
+        source_path: Optional[Union[str, Path]] = None,
+        save: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        步骤 3：对指定评测结果文件做统计汇总，写出 report JSON。
+
+        输入优先级：
+          1) 显式 eval_data
+          2) 同进程 evaluate 的内存结果
+          3) paths.report_source_* / 默认 eval_results 文件
+        """
+        src_path: Optional[Path] = None
+        if eval_data is None:
+            if self._eval_data is not None and source_path is None:
+                eval_data = self._eval_data
+                src_path = self.cfg.eval_results_file()
+            else:
+                src_path = (
+                    self._resolve_path(source_path)
+                    if source_path is not None
+                    else self.cfg.report_source_file()
+                )
+                if not src_path.is_file():
+                    raise FileNotFoundError(
+                        "未找到评测结果 JSON，无法 report。\n"
+                        f"  期望路径: {src_path}\n"
+                        "  请先 run.mode=evaluate，或配置 "
+                        "paths.report_source_filename / report_source_path / "
+                        "eval_results_filename。"
+                    )
+                eval_data = self.load_eval_results(src_path)
+        elif source_path is not None:
+            src_path = self._resolve_path(source_path)
+
+        report_doc = QueryEvaluator.build_report_document(
+            eval_data,
+            source_path=str(src_path) if src_path is not None else None,
+            enable_doc_recall=self.cfg.enable_doc_recall,
+        )
+        report_doc.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+        self._report = report_doc
+
+        table = report_doc.get("summary_table") or ""
+        if self.cfg.report_print_table and table:
+            print(table)
+
+        if save:
+            out = self.cfg.report_file()
+            report_doc.setdefault("meta", {})["saved_path"] = str(out)
+            self.save_json(report_doc, out)
+
+        return report_doc
 
     def run_all(self) -> Dict[str, Any]:
-        """生成 + 评测；路径全部走 config.paths。"""
+        """generate → evaluate → report。"""
         dataset = self.generate_questions(save=True)
-        return self.evaluate(dataset=dataset, save=True)
+        eval_data = self.evaluate(dataset=dataset, save=True)
+        return self.report(eval_data=eval_data, save=True)
 
     def run(self) -> Any:
         """
         按 config.run.mode 执行：
           generate → 只生成问题集
-          evaluate → 只评测
-          all      → 生成 + 评测
+          evaluate → 只评测（写 eval_results）
+          report   → 只汇总（读评测结果，写 report）
+          all      → 生成 + 评测 + 汇总
         """
         mode = (self.cfg.run_mode or "all").strip().lower()
         print(
@@ -395,9 +434,12 @@ class TestQueryWorkflow:
             return self.generate_questions(save=True)
         if mode == "evaluate":
             return self.evaluate(save=True)
+        if mode == "report":
+            return self.report(save=True)
         if mode == "all":
             return self.run_all()
         raise ValueError(
             f"Unknown run.mode={self.cfg.run_mode!r}. "
-            f"Set run.mode in benchmark/config.yaml: generate | evaluate | all"
+            f"Set run.mode in benchmark/config.yaml: "
+            f"generate | evaluate | report | all"
         )
