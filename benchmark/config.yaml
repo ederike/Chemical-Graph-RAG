@@ -1,6 +1,6 @@
 run:
   
-  mode: all  # generate| evaluate| all
+  mode: generate  # generate| evaluate| all
 
 dhmf:
   config_path: example/a/config_open.yaml

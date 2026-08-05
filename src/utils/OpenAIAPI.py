@@ -1,5 +1,5 @@
 """
-OpenAI 兼容客户端 + 本地 modelscope 嵌入。
+OpenAI 兼容客户端 + 本地 modelscope 嵌入 + xinference 重排。
 
 LLM 调用对齐 ai_experiment_project/tools/llms_chat_server/ky_ollama.py 的 KyOpenAIServer：
   - OpenAI(api_key, base_url).chat.completions.create(model, messages, stream=False)
@@ -10,11 +10,16 @@ Embedding 对齐 tools/model_server.py 的 NlpModelServer：
   - POST {host}/nlp/sentence_embedding（兼容无 nlp/ 前缀）
   - access_token + timestamp 写入 JSON body（make_sign）
   - 解析 {code:200, result:{text_embedding:...}} 或扁平 text_embedding
+
+Reranker 对齐 xinference / OpenAI 兼容重排：
+  - POST {base}/v1/rerank（base 已含 /v1 时为 {base}/rerank）
+  - body: model + query + documents (+ 可选 top_n)
+  - 解析 results[{index, relevance_score}]
 """
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from openai import OpenAI
@@ -610,3 +615,211 @@ class Embedding:
         if model_args.get("model"):
             return self._generate_openai(prompt, model_args)
         return self._generate_local(prompt)
+
+
+class Reranker:
+    """
+    文本重排（xinference / OpenAI 兼容 /v1/rerank）。
+
+    典型用法::
+
+        rr = Reranker(api_key='EMPTY', base_url='http://host:9998/v1')
+        ranked = rr.rerank(
+            query='ABS 722 用途',
+            documents=['文档全文1', '文档全文2'],
+            model='Qwen3-Reranker-0.6B',
+            top_n=4,
+        )
+        # → [{'index': 1, 'relevance_score': 0.91}, ...]  按分数降序
+    """
+
+    def __init__(
+        self,
+        api_key: str = "EMPTY",
+        base_url: str = "",
+        timeout: float = 120.0,
+        max_retries: int = 3,
+        retry_wait: float = 0.5,
+    ):
+        self.api_key = api_key or "EMPTY"
+        self.base_url = (base_url or "").rstrip("/")
+        self.timeout = float(timeout) if timeout is not None else 120.0
+        self.max_retries = max(1, int(max_retries) if max_retries is not None else 3)
+        self.retry_wait = max(0.0, float(retry_wait) if retry_wait is not None else 0.5)
+
+    def _endpoint_candidates(self) -> List[str]:
+        """
+        解析重排 URL 候选。
+          - base 已含 /v1 → {base}/rerank
+          - 否则 → {base}/v1/rerank，再回退 {base}/rerank
+        """
+        base = self.base_url.rstrip("/")
+        if not base:
+            return []
+        if base.endswith("/v1"):
+            return [f"{base}/rerank"]
+        return [f"{base}/v1/rerank", f"{base}/rerank"]
+
+    @staticmethod
+    def _parse_results(data: Any) -> List[Dict[str, Any]]:
+        """
+        兼容：
+          {"results": [{"index": 0, "relevance_score": 0.9}, ...]}
+          {"data":    [{"index": 0, "score": 0.9}, ...]}
+          直接 list
+        """
+        if isinstance(data, list):
+            raw = data
+        elif isinstance(data, dict):
+            raw = data.get("results") or data.get("data") or data.get("result") or []
+            if isinstance(raw, dict):
+                raw = raw.get("results") or raw.get("data") or []
+        else:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            idx = item.get("index")
+            if idx is None:
+                continue
+            score = item.get("relevance_score")
+            if score is None:
+                score = item.get("score")
+            if score is None:
+                score = item.get("relevance")
+            try:
+                idx = int(idx)
+                score = float(score) if score is not None else 0.0
+            except Exception:
+                continue
+            out.append({"index": idx, "relevance_score": score})
+        out.sort(key=lambda x: -x["relevance_score"])
+        return out
+
+    def rerank(
+        self,
+        query: str,
+        documents: Sequence[str],
+        *,
+        model: str = "Qwen3-Reranker-0.6B",
+        top_n: Optional[int] = None,
+        model_args: Optional[dict] = None,
+        **kwargs,
+    ) -> List[Dict[str, Any]]:
+        """
+        对 documents 按与 query 的相关性重排。
+
+        返回按 relevance_score 降序的列表::
+            [{"index": 原下标, "relevance_score": float}, ...]
+        top_n 非空时服务端/本地截断到前 N；失败抛异常（由调用方决定回退）。
+        """
+        docs = [str(d) if d is not None else "" for d in (documents or [])]
+        if not docs:
+            return []
+        q = (query or "").strip()
+        if not q:
+            # 无 query 时保持原序
+            n = len(docs) if top_n is None else min(int(top_n), len(docs))
+            return [{"index": i, "relevance_score": 0.0} for i in range(n)]
+
+        ma = dict(model_args or {})
+        model_name = (ma.get("model") or model or "Qwen3-Reranker-0.6B").strip()
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "query": q,
+            "documents": docs,
+        }
+        if top_n is not None:
+            payload["top_n"] = max(1, int(top_n))
+        # 透传其余 model_args（如 instruct），避开 model 键
+        for k, v in ma.items():
+            if k == "model" or k in payload or v is None:
+                continue
+            payload[k] = v
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+        # 部分网关读 access_token
+        if self.api_key:
+            headers["access_token"] = self.api_key
+
+        import httpx
+
+        endpoints = self._endpoint_candidates()
+        if not endpoints:
+            raise ValueError("Reranker base_url is empty")
+
+        last_err: Optional[Exception] = None
+        t = float(self.timeout)
+        try:
+            timeout = httpx.Timeout(
+                connect=min(30.0, t), read=t, write=t, pool=min(30.0, t)
+            )
+        except Exception:
+            timeout = t
+
+        with httpx.Client(timeout=timeout) as client:
+            for attempt in range(1, self.max_retries + 1):
+                for url in endpoints:
+                    try:
+                        resp = client.post(url, json=payload, headers=headers)
+                        if resp.status_code == 404:
+                            last_err = httpx.HTTPStatusError(
+                                f"404 for {url}",
+                                request=resp.request,
+                                response=resp,
+                            )
+                            continue
+                        resp.raise_for_status()
+                        data = resp.json() if resp.content else {}
+                        ranked = self._parse_results(data)
+                        if not ranked:
+                            raise ValueError(
+                                f"{url} empty rerank results: {str(data)[:200]}"
+                            )
+                        if top_n is not None:
+                            ranked = ranked[: max(1, int(top_n))]
+                        return ranked
+                    except httpx.HTTPStatusError as e:
+                        last_err = e
+                        if e.response is not None and e.response.status_code == 404:
+                            continue
+                        break  # 非 404：换 attempt 重试
+                    except Exception as e:
+                        last_err = e
+                        break
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_wait * attempt)
+
+        raise RuntimeError(f"Reranker failed after {self.max_retries} attempts: {last_err}")
+
+    def rank_documents(
+        self,
+        query: str,
+        documents: Sequence[str],
+        *,
+        model: str = "Qwen3-Reranker-0.6B",
+        top_n: Optional[int] = None,
+        model_args: Optional[dict] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        便捷封装：返回带原文的排序结果::
+            [{"index", "relevance_score", "document"}, ...]
+        """
+        ranked = self.rerank(
+            query, documents, model=model, top_n=top_n, model_args=model_args
+        )
+        docs = list(documents or [])
+        out = []
+        for item in ranked:
+            idx = item["index"]
+            out.append({
+                "index": idx,
+                "relevance_score": item["relevance_score"],
+                "document": docs[idx] if 0 <= idx < len(docs) else "",
+            })
+        return out

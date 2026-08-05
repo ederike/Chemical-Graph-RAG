@@ -1,5 +1,5 @@
 from ..module.retrieve import BaseRetrieve
-from ..utils.OpenAIAPI import Embedding, LLM
+from ..utils.OpenAIAPI import Embedding, LLM, Reranker
 from ..utils.prompt import PROMPT
 from ..utils.config import resolve_credentials
 import json
@@ -16,8 +16,9 @@ class Retrieve(BaseRetrieve):
       0) LLM 将用户查询改写得更具体
       1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k
       2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k → 映射所属 chunk
-      3) 两路按 chunk 合并去重；命中文档全部进上下文（无全局 top_k）
-         默认每文档：头块 + 命中索引块（原文序、块去重）；资料组仅按最高分排序
+      3) 两路按 chunk 合并去重 + 文档扩展
+      4) 可选：文档级 Reranker 重排，只保留 rerank_top_k 份完整文档进上下文
+         默认每文档：头块 + 命中索引块（原文序、块去重）
          enable_full_body_context=True 时：每命中文档写入该文全部 body 索引块，不含头块
     """
 
@@ -56,6 +57,18 @@ class Retrieve(BaseRetrieve):
             max_retries=emb_retries,
             retry_wait=max(0.5, emb_wait),
         )
+        # Reranker：默认与 embedding 同机（xinference /v1/rerank）
+        rr_key = (getattr(self.config.retrieve, 'rerank_api_key', None) or '').strip()
+        rr_url = (getattr(self.config.retrieve, 'rerank_base_url', None) or '').strip()
+        rr_key = rr_key or emb_key
+        rr_url = rr_url or emb_url
+        self.reranker = Reranker(
+            api_key=rr_key or 'EMPTY',
+            base_url=rr_url or '',
+            timeout=emb_timeout,
+            max_retries=emb_retries,
+            retry_wait=max(0.5, emb_wait),
+        )
         self._precomputed = False
         self.all_chunks = []
         self.chunk_dict = {}
@@ -66,8 +79,9 @@ class Retrieve(BaseRetrieve):
         self.chunks_by_doc = defaultdict(list)
         self.doc_head_chunk = {}
         self.doc_dict = {}
-        # 最近一次检索的改写结果（便于调试）
+        # 最近一次检索的改写 / 重排结果（便于调试）
         self.last_rewrite = {'original': '', 'rewritten': ''}
+        self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
 
     def _ensure_precompute(self):
         if self._precomputed:
@@ -782,6 +796,177 @@ class Retrieve(BaseRetrieve):
         return list(passages) + extra
 
     # ------------------------------------------------------------------
+    # document-level rerank
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _concat_doc_text(items: list, *, max_chars: int = -1) -> str:
+        """
+        将同一文档的块按当前列表顺序拼接为纯文本。
+        不加「资料N / 头块 / 文档1」等标注，块与块之间仅用换行连接。
+        """
+        parts = []
+        for it in items or []:
+            chunk = it.get('chunk') or {}
+            text = (chunk.get('content') or it.get('content') or '').strip()
+            if text:
+                parts.append(text)
+        body = '\n'.join(parts)
+        if max_chars is not None and int(max_chars) > 0 and len(body) > int(max_chars):
+            body = body[: int(max_chars)]
+        return body
+
+    def _group_main_materials(self, passages: list) -> list:
+        """
+        主检索资料按 material_id（缺省 doc_id）分组，保留块原有顺序。
+        推荐扩展（role=recommendation）不参与文档级重排。
+        返回 [{key, doc_id, source, items, score}, ...]，顺序 = 当前资料序。
+        """
+        groups = {}
+        order = []
+        for p in passages or []:
+            if p.get('role') == 'recommendation':
+                continue
+            mid = p.get('material_id')
+            did = p.get('doc_id')
+            key = mid if mid is not None else (f'doc:{did}' if did is not None else id(p))
+            g = groups.get(key)
+            if g is None:
+                g = {
+                    'key': key,
+                    'doc_id': did,
+                    'source': p.get('source') or self._source_label(p.get('chunk') or {}),
+                    'items': [],
+                    'score': float(p.get('material_score') or p.get('score') or 0.0),
+                }
+                groups[key] = g
+                order.append(key)
+            g['items'].append(p)
+            sc = float(p.get('material_score') or p.get('score') or 0.0)
+            if sc > g['score']:
+                g['score'] = sc
+        return [groups[k] for k in order]
+
+    def _rerank_materials(self, query: str, passages: list) -> list:
+        """
+        文档级重排：
+          1) 主资料按文档聚合成完整文本（块序拼接、无标注）
+          2) Qwen3-Reranker 打分排序
+          3) 只保留 top_k 文档；重排 material_id = 1..k
+          4) 推荐扩展不进入最终上下文（上下文仅 top_k 完整文档）
+        失败时回退：按原 material 分截 top_k。
+        """
+        enable = bool(getattr(self.config.retrieve, 'enable_rerank', False))
+        top_k = int(getattr(self.config.retrieve, 'rerank_top_k', 4) or 4)
+        top_k = max(1, top_k)
+        max_chars = int(getattr(self.config.retrieve, 'rerank_max_chars', -1) or -1)
+        model_args = dict(
+            getattr(self.config.retrieve, 'rerank_model_args', None) or {}
+        )
+        model_args.setdefault('model', 'Qwen3-Reranker-0.6B')
+
+        groups = self._group_main_materials(passages)
+        self.last_rerank = {
+            'enabled': enable,
+            'n_in': len(groups),
+            'n_out': 0,
+            'scores': [],
+            'top_k': top_k,
+        }
+        if not groups:
+            return []
+
+        if not enable:
+            # 关闭重排：保留全部主资料 + 推荐（调用方已拼好）
+            return passages
+
+        docs_text = [
+            self._concat_doc_text(g['items'], max_chars=max_chars) for g in groups
+        ]
+        # 空文档仍占位，避免 index 错位
+        docs_text = [t if t else ' ' for t in docs_text]
+
+        t0 = time.perf_counter()
+        try:
+            ranked = self.reranker.rerank(
+                query,
+                docs_text,
+                model=model_args.get('model') or 'Qwen3-Reranker-0.6B',
+                top_n=top_k,
+                model_args=model_args,
+            )
+        except Exception as e:
+            self.logger.warning(
+                f"[retrieve] rerank failed, fallback to retrieval score top_k={top_k}: {e}"
+            )
+            # 回退：按已有 material_score 截断
+            ranked_groups = sorted(groups, key=lambda g: -float(g['score']))[:top_k]
+            out = []
+            scores = []
+            for new_i, g in enumerate(ranked_groups, start=1):
+                scores.append({
+                    'rank': new_i,
+                    'doc_id': g['doc_id'],
+                    'source': g['source'],
+                    'relevance_score': float(g['score']),
+                    'fallback': True,
+                })
+                for it in g['items']:
+                    row = dict(it)
+                    row['material_id'] = new_i
+                    row['material_score'] = float(g['score'])
+                    row['rerank_score'] = float(g['score'])
+                    out.append(row)
+            self.last_rerank.update({
+                'n_out': len(ranked_groups),
+                'scores': scores,
+                'fallback': True,
+                'latency_s': round(time.perf_counter() - t0, 3),
+            })
+            return out
+
+        # 按 rerank 结果重装 passages
+        out = []
+        scores = []
+        seen_idx = set()
+        for new_i, item in enumerate(ranked, start=1):
+            idx = int(item.get('index', -1))
+            if idx < 0 or idx >= len(groups) or idx in seen_idx:
+                continue
+            seen_idx.add(idx)
+            g = groups[idx]
+            rel = float(item.get('relevance_score') or 0.0)
+            scores.append({
+                'rank': new_i,
+                'doc_id': g['doc_id'],
+                'source': g['source'],
+                'relevance_score': rel,
+                'index': idx,
+            })
+            for it in g['items']:
+                row = dict(it)
+                row['material_id'] = new_i
+                row['material_score'] = rel
+                row['rerank_score'] = rel
+                out.append(row)
+            if len(seen_idx) >= top_k:
+                break
+
+        self.last_rerank.update({
+            'n_out': len(seen_idx),
+            'scores': scores,
+            'fallback': False,
+            'latency_s': round(time.perf_counter() - t0, 3),
+            'model': model_args.get('model'),
+        })
+        self.logger.info(
+            f"[retrieve] rerank model={model_args.get('model')!r} "
+            f"in={len(groups)} out={len(seen_idx)} top_k={top_k} "
+            f"dt={self.last_rerank['latency_s']:.3f}s "
+            f"top={[(s.get('source'), round(s.get('relevance_score', 0), 4)) for s in scores[:top_k]]}"
+        )
+        return out
+
+    # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------
     def retrive_items(
@@ -791,7 +976,7 @@ class Retrieve(BaseRetrieve):
         node_candidate_k=None,
     ) -> list:
         """
-        查询改写 → 双路各自 topk 截取 → 合并去重 → 全部资料组进入上下文。
+        查询改写 → 双路各自 topk 截取 → 合并扩展去重 → 文档级重排(top_k) → 上下文。
         """
         t_all = time.perf_counter()
         self._ensure_precompute()
@@ -811,6 +996,9 @@ class Retrieve(BaseRetrieve):
         use_cache = getattr(self.config.retrieve, 'use_cache', True)
         full_body = bool(
             getattr(self.config.retrieve, 'enable_full_body_context', False)
+        )
+        enable_rerank = bool(
+            getattr(self.config.retrieve, 'enable_rerank', False)
         )
 
         # 0) 查询改写
@@ -843,13 +1031,20 @@ class Retrieve(BaseRetrieve):
         node_hits = self._search_nodes_by_query(query_embedding, topk=node_cand)
         t_node = time.perf_counter() - t0
 
-        # 4) 合并去重 → 按文档成组，全部进上下文（无全局 top_k）
+        # 4) 合并去重 → 按文档成组扩展
         merged = self._merge_chunk_hits(chunk_hits, node_hits)
         passages = self._build_materials(merged)
         passages = self._enrich_passage_ids(passages)
 
         # 5) 可选：一层推荐扩展（仅 content；与主检索去重）
-        passages = self._expand_recommendations(passages)
+        #    若开启文档重排，推荐扩展不进最终上下文，故跳过以省开销
+        if not enable_rerank:
+            passages = self._expand_recommendations(passages)
+
+        # 6) 文档级重排：完整文档纯文本拼接 → top_k
+        t0 = time.perf_counter()
+        passages = self._rerank_materials(rewritten or query, passages)
+        t_rerank = time.perf_counter() - t0
 
         n_mat = len({p.get('material_id') for p in passages if p.get('material_id') is not None})
         n_rec = sum(1 for p in passages if p.get('role') == 'recommendation')
@@ -860,13 +1055,14 @@ class Retrieve(BaseRetrieve):
             f"[retrieve] dual-path "
             f"rewrite={rewritten!r} "
             f"chunk_k={chunk_cand} node_k={node_cand} "
-            f"full_body={full_body} "
+            f"full_body={full_body} rerank={enable_rerank} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "
             f"rec_expand={n_rec} passages={len(passages)} "
             f"timing rewrite={t_rewrite:.3f}s embed={t_emb:.3f}s "
             f"chunk={t_chunk:.3f}s node={t_node:.3f}s "
+            f"rerank={t_rerank:.3f}s "
             f"total={time.perf_counter()-t_all:.3f}s"
         )
         return passages

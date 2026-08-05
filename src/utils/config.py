@@ -175,7 +175,7 @@ class RetrieveConfig(BaseModel):
     use_cache: bool = True
     # 已废弃：双路合并后不再做全局资料组截断。保留字段仅为兼容旧 yaml。
     top_k: Optional[int] = None
-    # 双路各自截断（合并后全部进上下文）：
+    # 双路各自截断（合并后全部进上下文 / 或再经 rerank 截断）：
     #   chunk 路：query ↔ chunk 向量 Top-K
     #   node 路：query ↔ node 向量 Top-K → 映射到所属块
     chunk_candidate_k: int = 30
@@ -205,10 +205,38 @@ class RetrieveConfig(BaseModel):
     # 仅命中头块时同样只扩 body，不写 head。
     enable_full_body_context: bool = False
 
-    @field_validator("api_key", "base_url", "embedding_api_key", "embedding_base_url", mode="before")
+    # ── 文档级重排（双路合并/扩展/去重之后） ────────────────────────────
+    # 将每份完整文档（块按原文序纯文本拼接，无「资料N」标注）送入 Reranker，
+    # 只保留 top_k 份进入最终 LLM 上下文。
+    enable_rerank: bool = True
+    rerank_top_k: int = 4
+    # 空 → embedding_api_key / embedding_base_url → vectorization → settings
+    rerank_api_key: str = ""
+    rerank_base_url: str = ""
+    rerank_model_args: dict = Field(default_factory=lambda: {
+        'model': 'Qwen3-Reranker-0.6B',
+    })
+    # 送入重排模型的单文档最大字符；-1 / 0 = 不截断
+    rerank_max_chars: int = -1
+
+    @field_validator(
+        "api_key", "base_url",
+        "embedding_api_key", "embedding_base_url",
+        "rerank_api_key", "rerank_base_url",
+        mode="before",
+    )
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("rerank_top_k", mode="before")
+    @classmethod
+    def _coerce_rerank_top_k(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return max(1, n)
 
 
 class RecommendConfig(BaseModel):
