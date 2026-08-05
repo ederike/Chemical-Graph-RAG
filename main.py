@@ -19,19 +19,25 @@ ChemicalGraph = DHMF(config)
 # ChemicalGraph.build()
 # ChemicalGraph.vectorization()
 
+for name in config.vectorization.default_target:  # 一般是 ['chunk', 'node']
+    ChemicalGraph.vdb[name].clear()                          # 删该表的 .vdb 并按 config.dim 建空索引
+    ChemicalGraph.db[name].update_key('embedding_status', 'undone')  # 全部重算
+
+ChemicalGraph.vectorization()
+
 # ChemicalGraph.recommend()
 
 
 # --- dual-path RAG ---
-start = time.time()
+# start = time.time()
 print(ChemicalGraph.query(
     'Admex™ 6187的密度/比重参数是多少',
     mode='dual_path',
     pretty=True,
 ))
-end = time.time()
-with open('query_time_候选.jsonl', 'a') as f:
-    f.write(json.dumps({'query_time': end - start}) + '\n')
+# end = time.time()
+# with open('query_time_候选.jsonl', 'a') as f:
+#     f.write(json.dumps({'query_time': end - start}) + '\n')
 
 
 # --- 多跳 Agent（配置见 config.agent）---

@@ -272,6 +272,7 @@ class TestQueryWorkflow:
             use_cache=self.cfg.gen_use_cache,
             max_retries=self.cfg.gen_max_retries,
             sleep_between=self.cfg.gen_sleep_between,
+            num_thread=self.cfg.gen_num_thread,
         )
         dataset = gen.generate_all()
         dataset.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()

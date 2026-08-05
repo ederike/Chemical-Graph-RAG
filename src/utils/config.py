@@ -1,5 +1,5 @@
 from typing import Any, List, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
 
@@ -170,6 +170,35 @@ class VectorizationConfig(BaseModel):
     def _coerce_str(cls, v):
         return _none_to_empty(v)
 
+    @model_validator(mode="after")
+    def _normalize_emb_args_and_dim(self):
+        """
+        model_args.dimension / dim / dims → dimensions；
+        若写了维度，同步到 vectorization.dim（FAISS 索引维）。
+        """
+        try:
+            from .OpenAIAPI import normalize_embedding_model_args
+            ma = normalize_embedding_model_args(self.model_args)
+        except Exception:
+            ma = dict(self.model_args or {})
+            for src in ("dimension", "dim", "dims"):
+                if "dimensions" not in ma and ma.get(src) is not None:
+                    try:
+                        ma["dimensions"] = int(ma[src])
+                    except (TypeError, ValueError):
+                        pass
+                ma.pop(src, None)
+        self.model_args = ma
+        d = ma.get("dimensions")
+        if d is not None:
+            try:
+                d = int(d)
+                if d > 0:
+                    self.dim = d
+            except (TypeError, ValueError):
+                pass
+        return self
+
 
 class RetrieveConfig(BaseModel):
     use_cache: bool = True
@@ -237,6 +266,26 @@ class RetrieveConfig(BaseModel):
         except (TypeError, ValueError):
             return 4
         return max(1, n)
+
+    @model_validator(mode="after")
+    def _normalize_embedding_model_args(self):
+        """embedding_model_args：dimension/dim/dims → dimensions。"""
+        try:
+            from .OpenAIAPI import normalize_embedding_model_args
+            self.embedding_model_args = normalize_embedding_model_args(
+                self.embedding_model_args
+            )
+        except Exception:
+            ma = dict(self.embedding_model_args or {})
+            for src in ("dimension", "dim", "dims"):
+                if "dimensions" not in ma and ma.get(src) is not None:
+                    try:
+                        ma["dimensions"] = int(ma[src])
+                    except (TypeError, ValueError):
+                        pass
+                ma.pop(src, None)
+            self.embedding_model_args = ma
+        return self
 
 
 class RecommendConfig(BaseModel):

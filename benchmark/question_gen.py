@@ -1,11 +1,13 @@
-"""多跳问题生成：从 doc 表抽样 + 本地 LLM 出题。"""
+"""多跳问题生成：从 doc 表抽样 + 本地 LLM 出题（可多线程）。"""
 
 from __future__ import annotations
 
 import random
+import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .prompts import Benchmark_PROMPT
 from .utils import (
@@ -19,6 +21,11 @@ from .utils import (
     resolve_path,
 )
 
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:  # pragma: no cover
+    _tqdm = None
+
 
 class QuestionGenerator:
     """
@@ -29,6 +36,8 @@ class QuestionGenerator:
     - 2 跳：每次抽 2 条 content
     - n 跳：每次抽 n 条 content
     跨题可重复抽样；同一题内尽量不重复文档。
+
+    多线程：主线程按 seed 预抽样（可复现），线程池只并行 LLM 出题。
     """
 
     def __init__(
@@ -43,6 +52,7 @@ class QuestionGenerator:
         use_cache: bool = False,
         max_retries: int = 3,
         sleep_between: float = 0.0,
+        num_thread: int = 1,
     ):
         self.llm = llm
         self.model_args = dict(model_args or {})
@@ -61,6 +71,11 @@ class QuestionGenerator:
         self.use_cache = bool(use_cache)
         self.max_retries = max(1, int(max_retries))
         self.sleep_between = float(sleep_between)
+        try:
+            nt = int(num_thread)
+        except (TypeError, ValueError):
+            nt = 1
+        self.num_thread = max(1, nt)
 
         self._rng = random.Random(self.seed)
         self.docs: List[Dict[str, Any]] = []
@@ -93,9 +108,14 @@ class QuestionGenerator:
             docs_block=format_docs_block(docs, self.max_chars_per_doc),
         )
 
-    def generate_one(self, hop: int, q_index: int) -> Dict[str, Any]:
-        """生成单条问题；失败时带 error 字段仍返回结构。"""
-        docs = self.sample_docs(hop)
+    def generate_one(
+        self,
+        hop: int,
+        q_index: int,
+        docs: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """生成单条问题；失败时带 error 字段仍返回结构。docs 可预传入（多线程时主线程抽样）。"""
+        docs = list(docs) if docs is not None else self.sample_docs(hop)
         source_docs = [
             {
                 "doc_id": d["doc_id"],
@@ -158,55 +178,142 @@ class QuestionGenerator:
             base["explanation"] = exp
             base["gen_status"] = 1
             base["gen_error"] = None
+            if self.sleep_between > 0:
+                time.sleep(self.sleep_between)
             return base
 
         base["gen_error"] = last_err or "unknown failure"
+        if self.sleep_between > 0:
+            time.sleep(self.sleep_between)
         return base
 
-    def generate_all(self) -> Dict[str, Any]:
-        """按 hop_counts 批量生成，返回完整数据集 dict。"""
+    def _plan_tasks(self) -> List[Tuple[int, int, List[Dict[str, Any]]]]:
+        """
+        主线程按 seed 顺序预抽样，保证多线程下文档抽样可复现。
+        返回 [(hop, q_index, docs), ...]
+        """
         if not self.docs:
             self.load_docs()
-
-        # 展开任务列表，统一进度条
-        tasks: List[tuple] = []
+        planned: List[Tuple[int, int, List[Dict[str, Any]]]] = []
         for hop, count in self.hop_counts.items():
-            for i in range(1, count + 1):
-                tasks.append((hop, i))
+            for i in range(1, int(count) + 1):
+                planned.append((int(hop), i, self.sample_docs(int(hop))))
+        return planned
 
-        questions: List[Dict[str, Any]] = []
+    def generate_all(self) -> Dict[str, Any]:
+        """按 hop_counts 批量生成（num_thread>1 时并行 LLM），返回完整数据集 dict。"""
+        planned = self._plan_tasks()
+        n = len(planned)
+        questions: List[Optional[Dict[str, Any]]] = [None] * n
         fail_n = 0
+        done_n = 0
         t0 = time.perf_counter()
-        pbar = progress_iter(tasks, total=len(tasks), desc="生成问题", unit="题")
-        for hop, i in pbar:
-            item = self.generate_one(hop, i)
-            questions.append(item)
+        workers = min(self.num_thread, max(1, n))
+
+        def _on_item(item: Dict[str, Any]) -> None:
+            nonlocal fail_n, done_n
+            done_n += 1
             if item.get("gen_status") != 1:
                 fail_n += 1
                 err = item.get("gen_error") or "unknown"
                 fail_print(
-                    f"生成 {item.get('id')} hop={hop} | {err} | "
+                    f"生成 {item.get('id')} hop={item.get('hop')} | {err} | "
                     f"sources={item.get('source_names')}"
                 )
-            # 进度条 postfix 只显示计数，不刷内容
-            if hasattr(pbar, "set_postfix"):
-                pbar.set_postfix(ok=len(questions) - fail_n, fail=fail_n, refresh=False)
-            if self.sleep_between > 0:
-                time.sleep(self.sleep_between)
 
-        ok_n = sum(1 for q in questions if q.get("gen_status") == 1)
+        if workers <= 1:
+            pbar = progress_iter(range(n), total=n, desc="生成问题", unit="题")
+            for idx in pbar:
+                hop, i, docs = planned[idx]
+                item = self.generate_one(hop, i, docs=docs)
+                questions[idx] = item
+                _on_item(item)
+                if hasattr(pbar, "set_postfix"):
+                    pbar.set_postfix(
+                        ok=done_n - fail_n, fail=fail_n, thr=1, refresh=False
+                    )
+        else:
+            if _tqdm is not None:
+                pbar = _tqdm(
+                    total=n,
+                    desc=f"生成问题×{workers}",
+                    unit="题",
+                    file=sys.stderr,
+                    dynamic_ncols=True,
+                    leave=True,
+                    mininterval=0.2,
+                )
+            else:
+                pbar = None
+
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                fut_to_idx = {
+                    pool.submit(self.generate_one, hop, i, docs): idx
+                    for idx, (hop, i, docs) in enumerate(planned)
+                }
+                for fut in as_completed(fut_to_idx):
+                    idx = fut_to_idx[fut]
+                    try:
+                        item = fut.result()
+                    except Exception as e:
+                        hop, i, docs = planned[idx]
+                        item = {
+                            "id": f"q_{hop}hop_{i:04d}",
+                            "hop": hop,
+                            "question": "",
+                            "ground_truth_answer": "",
+                            "explanation": "",
+                            "source_docs": [
+                                {
+                                    "doc_id": d.get("doc_id"),
+                                    "name": d.get("name"),
+                                    "content": d.get("content"),
+                                }
+                                for d in docs
+                            ],
+                            "source_names": [d.get("name") for d in docs],
+                            "gen_status": 0,
+                            "gen_error": f"worker exception: {e}",
+                            "gen_latency_s": None,
+                            "gen_usage": {},
+                        }
+                    questions[idx] = item
+                    _on_item(item)
+                    if pbar is not None:
+                        pbar.update(1)
+                        pbar.set_postfix(
+                            ok=done_n - fail_n, fail=fail_n, thr=workers, refresh=False
+                        )
+                    else:
+                        print(
+                            f"\r生成问题×{workers}: {done_n}/{n} "
+                            f"ok={done_n - fail_n} fail={fail_n}",
+                            end="",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+            if pbar is not None:
+                pbar.close()
+            elif n:
+                print(file=sys.stderr)
+
+        out_questions: List[Dict[str, Any]] = [
+            q for q in questions if q is not None
+        ]
+        ok_n = sum(1 for q in out_questions if q.get("gen_status") == 1)
         dataset = {
             "meta": {
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "db_path": self.db_path,
                 "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
                 "seed": self.seed,
+                "num_thread": workers,
                 "model": (self.model_args or {}).get("model"),
-                "total": len(questions),
+                "total": len(out_questions),
                 "success": ok_n,
-                "failed": len(questions) - ok_n,
+                "failed": len(out_questions) - ok_n,
                 "elapsed_s": round(time.perf_counter() - t0, 3),
             },
-            "questions": questions,
+            "questions": out_questions,
         }
         return dataset

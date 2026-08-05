@@ -183,6 +183,7 @@ class BenchmarkConfig:
     max_chars_per_doc: int = 4000
     gen_max_retries: int = 3
     gen_sleep_between: float = 0.0
+    gen_num_thread: int = 4  # 出题并行线程数；1 = 串行
     gen_use_cache: bool = False
     gen_api_key: Optional[str] = None
     gen_base_url: Optional[str] = None
@@ -295,6 +296,7 @@ class BenchmarkConfig:
             max_chars_per_doc=int(gen.get("max_chars_per_doc", 4000)),
             gen_max_retries=int(gen.get("max_retries", 3)),
             gen_sleep_between=float(gen.get("sleep_between", 0.0)),
+            gen_num_thread=max(1, int(gen.get("num_thread", gen.get("num_threads", 4)) or 4)),
             gen_use_cache=bool(gen.get("use_cache", False)),
             gen_api_key=_opt_str(gen.get("api_key")),
             gen_base_url=_opt_str(gen.get("base_url")),

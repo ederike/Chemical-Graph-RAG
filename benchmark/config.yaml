@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | all
-  mode: report
+  mode: generate
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -17,7 +17,6 @@ paths:
   # evaluate 读入
   eval_questions_filename: questions_standard_100_agent.json
   eval_questions_path: null
-
   # evaluate 写出
   eval_results_filename: eval_report_standard_100_agent.json
   eval_results_path: null
@@ -25,20 +24,20 @@ paths:
   # report 读入
   report_source_filename: null
   report_source_path: null
-
   # report 写出
   report_filename: report_standard_100_agent.json
   report_path: null
 
 generate:
   hop_counts:
-    "1": 50
-    "2": 25
-    "3": 25
+    "1": 100
+    "2": 0
+    "3": 0
   seed: 42
   max_chars_per_doc: -1
   max_retries: 3
   sleep_between: 0.0
+  num_thread: 4          #
   use_cache: false
   api_key: null
   base_url: null

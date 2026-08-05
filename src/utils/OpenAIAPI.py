@@ -363,6 +363,35 @@ class LLM:
         return response
 
 
+def normalize_embedding_model_args(model_args: Optional[dict] = None) -> dict:
+    """
+    规范化 embedding model_args，供 API 与缓存键共用。
+
+    维度别名统一为 OpenAI / xinference 标准字段 ``dimensions``：
+      dimension / dim / dims  →  dimensions
+    若同时写了 dimensions 与别名，以 ``dimensions`` 为准。
+    """
+    ma = dict(model_args or {})
+    dim_val = ma.get("dimensions")
+    if dim_val is None:
+        for k in ("dimension", "dim", "dims"):
+            if ma.get(k) is not None:
+                dim_val = ma.get(k)
+                break
+    for k in ("dimension", "dim", "dims"):
+        ma.pop(k, None)
+    if dim_val is not None:
+        try:
+            d = int(dim_val)
+            if d > 0:
+                ma["dimensions"] = d
+            else:
+                ma.pop("dimensions", None)
+        except (TypeError, ValueError):
+            ma.pop("dimensions", None)
+    return ma
+
+
 class Embedding:
     """
     文本向量。
@@ -372,6 +401,9 @@ class Embedding:
       POST {base}/nlp/sentence_embedding（失败再试 {base}/sentence_embedding）
       body: source_sentence + access_token + timestamp
     - OpenAI 兼容：当 model_args 含 model 时走 /v1/embeddings。
+
+    model_args 维度字段：
+      dimensions（标准）/ dimension / dim / dims 均可；调用前统一为 dimensions。
 
     超时说明：
       OpenAI SDK 默认 connect timeout 仅约 5s，内网抖动/服务端排队时
@@ -564,6 +596,7 @@ class Embedding:
         """OpenAI 兼容 embeddings.create（需 model_args.model）；超时自动重试。"""
         response = {}
         embedding = None
+        # 已规范化：dimensions 可直接进 create kwargs
         create_kwargs, extra_body = split_model_args(model_args)
         call_kwargs = {
             **create_kwargs,
@@ -605,12 +638,19 @@ class Embedding:
 
         return response
 
-    @Cache(cache_dir="cache/OpenAI", cache_name="emb_cache")
     def generate(self, prompt, model_args=None, **kwargs):
         """
         统一入口。model_args 无 model 时走本地 sentence_embedding（不必设模型名）；
         有 model 时走 OpenAI 兼容接口。
+
+        先规范化 dimension/dim/dims → dimensions，再进缓存键与 API，
+        避免「写了 dimension 但服务端不认 / 缓存键不一致」。
         """
+        model_args = normalize_embedding_model_args(model_args)
+        return self._generate_cached(prompt, model_args, **kwargs)
+
+    @Cache(cache_dir="cache/OpenAI", cache_name="emb_cache")
+    def _generate_cached(self, prompt, model_args=None, **kwargs):
         model_args = model_args or {}
         if model_args.get("model"):
             return self._generate_openai(prompt, model_args)
