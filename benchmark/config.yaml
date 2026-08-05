@@ -1,6 +1,6 @@
 run:
   
-  mode: evaluate  # generate| evaluate| all
+  mode: all  # generate| evaluate| all
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -10,20 +10,20 @@ paths:
   db_path: example/a/DB/main.db
   output_dir: benchmark_results
 
-  questions_filename: questions_hard_10.json
+  questions_filename: questions_standard_100.json
   questions_path: null
 
-  eval_questions_filename: questions_hard_10.json
+  eval_questions_filename: questions_standard_100_agent.json
   eval_questions_path: null
 
-  report_filename: eval_report_hard_10.json
+  report_filename: eval_report_standard_100_agent.json
   report_path: null
 
 generate:
   hop_counts:
-    "1": 0
-    "2": 0
-    "3": 10
+    "1": 50
+    "2": 25
+    "3": 25
   seed: 42
   max_chars_per_doc: -1
   max_retries: 3
@@ -44,7 +44,7 @@ evaluate:
   max_source_chars: -1
   max_retries: 3
   sleep_between: 0.0
-  save_summary_txt: true
+  save_summary: true  # 写出 eval_report*.summary.json（详细统计）
   use_cache: false
   dhmf_retrieve_use_cache: null
   api_key: null

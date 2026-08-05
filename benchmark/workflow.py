@@ -208,12 +208,29 @@ class TestQueryWorkflow:
         p = Path(path)
         return p if p.is_absolute() else resolve_path(p)
 
-    def save_json(self, data: dict, path: Union[str, Path]) -> Path:
+    def save_json(
+        self,
+        data: dict,
+        path: Union[str, Path],
+        *,
+        quiet: bool = False,
+        atomic: bool = True,
+    ) -> Path:
+        """
+        写 JSON。默认原子写入（先 .tmp 再 replace），避免读到半截文件。
+        quiet=True 时不打 [saved]（用于逐题增量保存）。
+        """
         path = self._resolve_path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"[saved] {path}", file=sys.stderr)
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        if atomic:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(path)
+        else:
+            path.write_text(payload, encoding="utf-8")
+        if not quiet:
+            print(f"[saved] {path}", file=sys.stderr)
         return path
 
     def load_dataset(self, path: Union[str, Path]) -> Dict[str, Any]:
@@ -295,7 +312,28 @@ class TestQueryWorkflow:
             sleep_between=self.cfg.eval_sleep_between,
             enable_doc_recall=self.cfg.enable_doc_recall,
         )
-        report = evaluator.evaluate_all(dataset)
+
+        # 评测报告路径提前确定：每题评完即写入，便于实时查看
+        out = self.cfg.report_file() if save else None
+        if out is not None:
+            print(f"[eval] 实时报告 → {out}", file=sys.stderr)
+
+        def _on_progress(mid_report: dict, index: int, total: int) -> None:
+            if out is None:
+                return
+            mid_report.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
+            mid_report.setdefault("meta", {})["saved_path"] = str(out)
+            mid_report.setdefault("meta", {})["progress"] = {
+                "done": index,
+                "total": total,
+                "pct": round(100.0 * index / total, 1) if total else None,
+            }
+            self.save_json(mid_report, out, quiet=True)
+
+        report = evaluator.evaluate_all(
+            dataset,
+            on_progress=_on_progress if save else None,
+        )
         report.setdefault("meta", {})["benchmark_config"] = self.cfg.to_dict()
         self._report = report
 
@@ -303,16 +341,36 @@ class TestQueryWorkflow:
         if table:
             print(table)
 
-        if save:
-            out = self.cfg.report_file()
-            self.save_json(report, out)
+        if save and out is not None:
             report.setdefault("meta", {})["saved_path"] = str(out)
-            if self.cfg.save_summary_txt and table:
-                txt_path = self.cfg.summary_file(out)
-                txt_path.parent.mkdir(parents=True, exist_ok=True)
-                txt_path.write_text(table, encoding="utf-8")
-                print(f"[saved] {txt_path}", file=sys.stderr)
-                report.setdefault("meta", {})["summary_path"] = str(txt_path)
+            report.setdefault("meta", {})["done"] = True
+            self.save_json(report, out)
+            # 详细统计单独落一份 summary.json（与 txt 表解耦）
+            if self.cfg.save_summary:
+                summary_path = self.cfg.summary_file(out)
+                summary_doc = {
+                    "meta": {
+                        k: report["meta"].get(k)
+                        for k in (
+                            "created_at",
+                            "updated_at",
+                            "done",
+                            "query_mode",
+                            "judge_model",
+                            "enable_doc_recall",
+                            "n_questions",
+                            "n_total_planned",
+                            "n_skipped_gen_fail",
+                            "elapsed_s",
+                            "saved_path",
+                        )
+                        if k in (report.get("meta") or {})
+                    },
+                    "summary": report.get("summary") or {},
+                }
+                summary_doc["meta"]["report_path"] = str(out)
+                self.save_json(summary_doc, summary_path)
+                report.setdefault("meta", {})["summary_path"] = str(summary_path)
 
         return report
 

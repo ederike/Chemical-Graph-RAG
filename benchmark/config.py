@@ -182,7 +182,7 @@ class BenchmarkConfig:
     max_source_chars: int = -1
     eval_max_retries: int = 3
     eval_sleep_between: float = 0.0
-    save_summary_txt: bool = True
+    save_summary: bool = True  # 写出 {report}.summary.json 详细统计
     eval_use_cache: bool = False
     dhmf_retrieve_use_cache: Optional[bool] = None
     judge_api_key: Optional[str] = None
@@ -266,7 +266,11 @@ class BenchmarkConfig:
             ),
             eval_max_retries=int(ev.get("max_retries", 3)),
             eval_sleep_between=float(ev.get("sleep_between", 0.0)),
-            save_summary_txt=bool(ev.get("save_summary_txt", True)),
+            # 兼容旧字段 save_summary_txt
+            save_summary=_as_bool(
+                ev.get("save_summary", ev.get("save_summary_txt", True)),
+                default=True,
+            ),
             eval_use_cache=bool(ev.get("use_cache", False)),
             dhmf_retrieve_use_cache=_opt_bool(ev.get("dhmf_retrieve_use_cache")),
             judge_api_key=_opt_str(ev.get("api_key")),
@@ -334,9 +338,9 @@ class BenchmarkConfig:
         )
 
     def summary_file(self, report: Optional[Path] = None) -> Path:
-        """summary 与 report 同目录：{stem}.summary.txt。"""
+        """summary 与 report 同目录：{stem}.summary.json（详细统计）。"""
         rp = report or self.report_file()
-        return rp.with_name(rp.stem + ".summary.txt")
+        return rp.with_name(rp.stem + ".summary.json")
 
     def to_dict(self) -> dict:
         return {

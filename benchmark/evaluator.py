@@ -371,7 +371,54 @@ class QueryEvaluator:
     # ------------------------------------------------------------------
     # batch + summary
     # ------------------------------------------------------------------
-    def evaluate_all(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
+    def _make_report(
+        self,
+        *,
+        dataset: Dict[str, Any],
+        results: List[Dict[str, Any]],
+        skipped: int,
+        t0: float,
+        created_at: str,
+        done: bool = False,
+    ) -> Dict[str, Any]:
+        """组装评测报告（可中途调用，summary 随 results 增量更新）。"""
+        summary = self.build_summary(
+            results, enable_doc_recall=self.enable_doc_recall
+        )
+        return {
+            "meta": {
+                "created_at": created_at,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "done": bool(done),
+                "dataset_meta": dataset.get("meta"),
+                "query_mode": self.query_mode,
+                "judge_model": (self.judge_model_args or {}).get("model"),
+                "enable_doc_recall": self.enable_doc_recall,
+                "n_questions": len(results),
+                "n_total_planned": None,  # evaluate_all 写入
+                "n_skipped_gen_fail": skipped,
+                "elapsed_s": round(time.perf_counter() - t0, 3),
+            },
+            "results": results,
+            "summary": summary,
+            "summary_table": self.format_summary_table(
+                summary, enable_doc_recall=self.enable_doc_recall
+            ),
+        }
+
+    def evaluate_all(
+        self,
+        dataset: Dict[str, Any],
+        *,
+        on_progress: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        逐题评测。
+
+        on_progress:
+          可选回调 ``on_progress(report, index, total)``。
+          每评完一题调用一次（含增量 summary），便于实时落盘。
+        """
         questions = list(dataset.get("questions") or [])
         items = [
             q for q in questions if q.get("gen_status", 1) == 1 and q.get("question")
@@ -382,11 +429,15 @@ class QueryEvaluator:
 
         results: List[Dict[str, Any]] = []
         fail_n = 0
+        total = len(items)
         t0 = time.perf_counter()
-        pbar = progress_iter(items, total=len(items), desc="评测问答", unit="题")
+        created_at = datetime.now().isoformat(timespec="seconds")
+
+        pbar = progress_iter(items, total=total, desc="评测问答", unit="题")
         for item in pbar:
             r = self.evaluate_one(item)
             results.append(r)
+
             if self._is_eval_failure(r):
                 fail_n += 1
                 parts = [f"评测 {r.get('id')}"]
@@ -398,30 +449,36 @@ class QueryEvaluator:
                     parts.append("query_status=0")
                 fail_print(" | ".join(parts))
             if hasattr(pbar, "set_postfix"):
-                pbar.set_postfix(fail=fail_n, refresh=False)
+                ok_n = sum(1 for x in results if x.get("llm_acc") == "正确")
+                pbar.set_postfix(fail=fail_n, ok=ok_n, refresh=False)
+
+            if on_progress is not None:
+                mid = self._make_report(
+                    dataset=dataset,
+                    results=results,
+                    skipped=skipped,
+                    t0=t0,
+                    created_at=created_at,
+                    done=False,
+                )
+                mid["meta"]["n_total_planned"] = total
+                try:
+                    on_progress(mid, len(results), total)
+                except Exception as e:
+                    fail_print(f"on_progress 保存失败: {e}")
+
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
 
-        summary = self.build_summary(
-            results, enable_doc_recall=self.enable_doc_recall
+        report = self._make_report(
+            dataset=dataset,
+            results=results,
+            skipped=skipped,
+            t0=t0,
+            created_at=created_at,
+            done=True,
         )
-        report = {
-            "meta": {
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "dataset_meta": dataset.get("meta"),
-                "query_mode": self.query_mode,
-                "judge_model": (self.judge_model_args or {}).get("model"),
-                "enable_doc_recall": self.enable_doc_recall,
-                "n_questions": len(results),
-                "n_skipped_gen_fail": skipped,
-                "elapsed_s": round(time.perf_counter() - t0, 3),
-            },
-            "results": results,
-            "summary": summary,
-            "summary_table": self.format_summary_table(
-                summary, enable_doc_recall=self.enable_doc_recall
-            ),
-        }
+        report["meta"]["n_total_planned"] = total
         return report
 
     @staticmethod
@@ -516,19 +573,41 @@ class QueryEvaluator:
                 hop_item["mean_doc_recall"] = mean(g_recalls)
             by_hop[str(hop)] = hop_item
 
+        n_query_fail = sum(1 for r in results if self._is_eval_failure(r) and (
+            r.get("query_error") or r.get("query_status") == 0
+        ))
+        n_judge_fail = sum(
+            1 for r in results
+            if r.get("judge_status") == 0 or r.get("judge_error")
+        )
+        w_lats = [
+            (r.get("metrics") or {}).get("wall_latency_s")
+            for r in results
+            if (r.get("metrics") or {}).get("wall_latency_s") is not None
+        ]
+
         summary: Dict[str, Any] = {
             "n_total": n,
             "enable_doc_recall": enable_doc_recall,
+            "pipeline": {
+                "n_query_fail": n_query_fail,
+                "n_judge_fail": n_judge_fail,
+                "n_ok": n - sum(1 for r in results if self._is_eval_failure(r)),
+            },
             "llm_acc": {
                 "counts": acc_counts,
                 "accuracy": safe_div(n_correct, judged) if judged else None,
                 "error_rate": safe_div(n_wrong, judged) if judged else None,
                 "n_judged": judged,
+                "n_correct": n_correct,
+                "n_wrong": n_wrong,
             },
             "latency": {
                 "mean_query_s": mean(q_lats),
                 "mean_retrieve_s": mean(r_lats),
+                "mean_wall_s": mean(w_lats),
                 "sum_query_s": sum(q_lats) if q_lats else None,
+                "sum_wall_s": sum(w_lats) if w_lats else None,
             },
             "tokens": {
                 "sum_prompt": self._sum_tokens(results, "prompt_tokens"),
