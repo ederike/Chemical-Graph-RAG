@@ -1584,7 +1584,7 @@ class Retrieve(BaseRetrieve):
             f"[retrieve] rerank({stage}) model={model_args.get('model')!r} "
             f"in={len(groups)} out={len(seen_idx)} top_k={top_k} "
             f"dt={meta.get('latency_s', 0):.3f}s "
-            f"top={[(s.get('source'), round(s.get('relevance_score', 0), 4)) for s in scores[:top_k]]}"
+            # f"top={[(s.get('source'), round(s.get('relevance_score', 0), 4)) for s in scores[:top_k]]}"
         )
         return out
 
