@@ -221,10 +221,21 @@ class LLM:
             )
         self.local_mode = bool(local_mode)
 
+        # 连接超时单独放宽：默认 float 超时在部分环境下 connect 仍偏短，
+        # 多模态并发时易出现 connect timeout → 识别整批失败。
+        try:
+            import httpx
+            http_timeout = httpx.Timeout(
+                self.timeout,
+                connect=min(60.0, max(10.0, self.timeout / 4.0)),
+            )
+        except Exception:
+            http_timeout = self.timeout
+
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            timeout=self.timeout,
+            timeout=http_timeout,
             max_retries=self.max_retries,
         )
 

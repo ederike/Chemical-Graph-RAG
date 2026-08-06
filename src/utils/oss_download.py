@@ -18,21 +18,26 @@ _ILLEGAL_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 def sanitize_product_filename(product_name: str, row_id: Any) -> Optional[str]:
     """
     Build local filename: {sanitized_product_name}_{id}.pdf
-    - empty / None product_name → None (caller should skip)
+    - empty / None product_name → null_name_{id}.pdf（仍下载，不用产品名）
     - illegal path chars → '_'
     - trailing .pdf stripped before appending _{id}.pdf (no double suffix)
+    - row_id 为空时无法生成文件名 → None
     """
-    if product_name is None:
+    if row_id is None or str(row_id).strip() == '':
         return None
+    rid = str(row_id).strip()
+
+    if product_name is None:
+        return f"null_name_{rid}.pdf"
     name = str(product_name).strip()
     if not name:
-        return None
+        return f"null_name_{rid}.pdf"
     if name.lower().endswith('.pdf'):
         name = name[:-4]
     name = _ILLEGAL_FILENAME_RE.sub('_', name).strip(' ._')
     if not name:
-        return None
-    return f"{name}_{row_id}.pdf"
+        return f"null_name_{rid}.pdf"
+    return f"{name}_{rid}.pdf"
 
 
 def _normalize_file_type(file_type: Union[str, int, None]) -> Optional[int]:
@@ -158,7 +163,8 @@ def download_rows_from_oss(
 ) -> dict:
     """
     Download each row's oss_url object key into download_dir as {product_name}_{id}.pdf.
-    Skip when product_name empty, oss_url empty, or local file already exists.
+    product_name 为空时用 null_name_{id}.pdf，不跳过。
+    Skip when id 无效、oss_url empty, or local file already exists.
     Returns summary dict.
     """
     log = logger or logger_default
@@ -191,6 +197,7 @@ def download_rows_from_oss(
         'downloaded': 0,
         'skipped_existing': 0,
         'skipped_invalid': 0,
+        'null_name': 0,
         'failed': 0,
         'files': [],
     }
@@ -203,10 +210,15 @@ def download_rows_from_oss(
 
         if not filename:
             log.warning(
-                f"[oss_download] skip id={row_id}: empty product_name"
+                f"[oss_download] skip id={row_id!r}: missing id (cannot build filename)"
             )
             summary['skipped_invalid'] += 1
             continue
+        if filename.startswith('null_name_'):
+            summary['null_name'] = summary.get('null_name', 0) + 1
+            log.info(
+                f"[oss_download] empty product_name id={row_id} -> {filename}"
+            )
         if not oss_url:
             log.warning(
                 f"[oss_download] skip id={row_id}: empty oss_url"
@@ -240,6 +252,7 @@ def download_rows_from_oss(
         f"[oss_download] done: downloaded={summary['downloaded']} "
         f"skipped_existing={summary['skipped_existing']} "
         f"skipped_invalid={summary['skipped_invalid']} "
+        f"null_name={summary.get('null_name', 0)} "
         f"failed={summary['failed']} / total={summary['total']}"
     )
     return summary

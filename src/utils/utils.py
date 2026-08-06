@@ -152,6 +152,10 @@ class Cache:
     
         return wrapper
 
+class NonRetryableError(Exception):
+    """明确不可恢复的错误：@Retry 遇到后不再重试，直接失败。"""
+
+
 class Retry:
     """
     方法级重试装饰器。
@@ -209,22 +213,58 @@ class Retry:
         @wraps(func)
         def wrapper(*args, **kwargs):
             max_attempt, wait, timeout = self._resolve_params(args)
+            # 尽量从 self.logger 打日志（Doc/Extract 等实例方法）
+            logger = None
+            if args:
+                logger = getattr(args[0], 'logger', None)
 
+            last_err = None
             for attempt in range(1, max_attempt + 1):
                 kwargs_with_attempt = {
                     **kwargs,
                     'attempt': attempt,
                     'max_attempt': max_attempt,
                 }
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = None
                 try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(func, *args, **kwargs_with_attempt)
-                        result = future.result(timeout=timeout)
+                    future = executor.submit(func, *args, **kwargs_with_attempt)
+                    result = future.result(timeout=timeout)
                     return result
-                except Exception:
+                except NonRetryableError as e:
+                    last_err = e
+                    if logger is not None:
+                        logger.error(
+                            f"[Retry] {func.__qualname__} non-retryable: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                    return None
+                except Exception as e:
+                    last_err = e
+                    err_msg = f"{type(e).__name__}: {e}"
+                    if logger is not None:
+                        # 每次失败都打出原因（此前静默吞掉，日志只剩 Failed after retries）
+                        level = logger.warning if attempt >= max_attempt else logger.info
+                        level(
+                            f"[Retry] {func.__qualname__} "
+                            f"attempt {attempt}/{max_attempt} failed "
+                            f"(timeout={timeout}s): {err_msg}"
+                        )
                     if attempt < max_attempt and wait > 0:
                         time.sleep(wait)
+                finally:
+                    # 超时后不要 wait=True 堵死下一次重试（后台请求仍可能跑完）
+                    try:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        # Python <3.9 无 cancel_futures
+                        executor.shutdown(wait=False)
 
+            if logger is not None and last_err is not None:
+                logger.error(
+                    f"[Retry] {func.__qualname__} exhausted "
+                    f"{max_attempt} attempts; last_error={type(last_err).__name__}: {last_err}"
+                )
             return None
 
         return wrapper

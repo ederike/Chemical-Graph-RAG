@@ -10,7 +10,7 @@ import time
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.prompt import PROMPT
-from ..utils.utils import hash_str, CacheDB, Retry
+from ..utils.utils import hash_str, CacheDB, Retry, NonRetryableError
 from ..utils.config import resolve_credentials
 
 
@@ -20,7 +20,21 @@ class Doc(BaseDoc):
         super().__init__(*args, **kwargs)
         recog = getattr(self.config.doc, 'recognition', None)
         api_key, base_url = resolve_credentials(self.config, recog)
-        self.llmmodel = LLM(api_key, base_url)
+        # 识别常为多图长请求：超时与重试用 recognition.retry，避免默认 120s / connect 过短
+        llm_timeout = 300.0
+        llm_retries = 0
+        try:
+            r = getattr(recog, 'retry', None) if recog is not None else None
+            if r is not None:
+                llm_timeout = float(getattr(r, 'timeout', llm_timeout) or llm_timeout)
+        except Exception:
+            pass
+        self.llmmodel = LLM(
+            api_key,
+            base_url,
+            timeout=max(60.0, llm_timeout),
+            max_retries=llm_retries,
+        )
         self._recog_cache = CacheDB('cache/OpenAI', 'pdf_recognize_cache')
         self.metrics = None  # set by DHMF to PipelineMetrics
 
@@ -71,6 +85,26 @@ class Doc(BaseDoc):
                 "Install with: pip install pymupdf"
             ) from e
 
+        pdf_path = Path(pdf_path)
+        if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+            raise NonRetryableError(f"PDF missing or empty: {pdf_path}")
+
+        # OSS 偶发把 png/jpg/html/ole 也存成 .pdf 名，先做魔数检查
+        magic = pdf_path.read_bytes()[:8]
+        if not magic.startswith(b'%PDF'):
+            kind = 'unknown'
+            if magic.startswith(b'\x89PNG'):
+                kind = 'PNG'
+            elif magic[:2] == b'\xff\xd8':
+                kind = 'JPEG'
+            elif magic.startswith(b'PK'):
+                kind = 'ZIP/OOXML'
+            elif magic.lstrip().startswith(b'<!') or magic.lstrip().startswith(b'<'):
+                kind = 'HTML'
+            raise NonRetryableError(
+                f"Not a real PDF (magic={magic!r}, kind={kind}): {pdf_path.name}"
+            )
+
         dpi = self.config.doc.recognition.dpi
         zoom = dpi / 72.0
         matrix = fitz.Matrix(zoom, zoom)
@@ -78,6 +112,8 @@ class Doc(BaseDoc):
 
         doc = fitz.open(str(pdf_path))
         try:
+            if doc.page_count <= 0:
+                raise ValueError(f"PDF has 0 pages: {pdf_path.name}")
             for page in doc:
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
                 img_bytes = pix.tobytes('png')
@@ -315,18 +351,26 @@ class Doc(BaseDoc):
         )
 
         if response.get('status') != 1:
+            err = str(response.get('answer') or '')[:500]
             raise RuntimeError(
-                f"PDF recognition failed for {pdf_path.name} "
-                f"(attempt {attempt}/{max_attempt}): {response.get('answer')}"
+                f"PDF recognition API failed for {pdf_path.name} "
+                f"(attempt {attempt}/{max_attempt}, pages={len(images_b64)}, "
+                f"model={model_args.get('model')!r}): {err}"
             )
 
         raw_answer = (response.get('answer') or '').strip()
+        if not raw_answer:
+            raise RuntimeError(
+                f"PDF recognition empty answer for {pdf_path.name} "
+                f"(attempt {attempt}/{max_attempt}, pages={len(images_b64)})"
+            )
         try:
             parsed = self.normalize_recognition(raw_answer, require_json=require_json)
         except ValueError as e:
             raise RuntimeError(
                 f"PDF recognition JSON parse failed for {pdf_path.name} "
-                f"(attempt {attempt}/{max_attempt}): {e}"
+                f"(attempt {attempt}/{max_attempt}): {e}; "
+                f"raw[:200]={raw_answer[:200]!r}"
             ) from e
 
         head = parsed.get('head') or ''
