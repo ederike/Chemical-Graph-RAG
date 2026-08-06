@@ -23,17 +23,17 @@ ChemicalGraph = DHMF(config)
 
 
 # --- dual-path RAG ---
-# print(ChemicalGraph.query(
-#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么',
-#     mode='dual_path',
-#     pretty=True,
-# ))
-
 print(ChemicalGraph.query(
-    'CAS号为25120-20-1的东西是什么',
+    'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么',
     mode='dual_path',
     pretty=True,
 ))
+
+# print(ChemicalGraph.query(
+#     'CAS号为25120-20-1的东西是什么',
+#     mode='dual_path',
+#     pretty=True,
+# ))
 
 
 # --- 多跳 Agent（配置见 config.agent）---

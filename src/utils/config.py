@@ -207,8 +207,8 @@ class RetrieveConfig(BaseModel):
     # 已废弃：双路合并后不再做全局资料组截断。保留字段仅为兼容旧 yaml。
     top_k: Optional[int] = None
     # 双路各自截断（合并后全部进上下文 / 或再经 rerank 截断）：
-    #   chunk 路：query ↔ chunk 向量 Top-K
-    #   node 路：query ↔ node 向量 Top-K → 映射到所属块
+    #   chunk 路：query ↔ chunk 向量 Top-K；0 = 跳过该路
+    #   node 路：query ↔ node 向量 Top-K → 映射到所属块；0 = 跳过该路
     chunk_candidate_k: int = 30
     node_candidate_k: int = 20
     # LLM answer / rewrite endpoint (empty → settings)
@@ -236,9 +236,27 @@ class RetrieveConfig(BaseModel):
     # 仅命中头块时同样只扩 body，不写 head。
     enable_full_body_context: bool = False
 
+    # ── 关键词精确匹配第三路 ───────────────────────────────────────────
+    # LLM 从查询中抽取 minority（少数值标识）/ majority（多数值字段键），
+    # 在 chunk.content 上做精确包含匹配 → 大候选池 → 文档级首轮 rerank →
+    # keyword_top_k →（可选全文扩展）→ 与双路文档取交集 → 终轮 rerank。
+    enable_keyword_exact: bool = True
+    # 关键词路候选块池大小（少数值优先 + 多数值命中数排序后截断）；0 = 跳过关键词路
+    keyword_candidate_k: int = 50
+    # 关键词路首轮文档 rerank 后保留的文档数；0 = 跳过关键词路
+    keyword_top_k: int = 10
+    # 抽取专用覆盖（合并进 model_args）
+    keyword_extract_model_args: dict = Field(default_factory=lambda: {
+        'enable_thinking': False,
+        'max_tokens': 256,
+        'temperature': 0.0,
+        'response_format': {'type': 'json_object'},
+    })
+
     # ── 文档级重排（双路合并/扩展/去重之后） ────────────────────────────
     # 将每份完整文档（块按原文序纯文本拼接，无「资料N」标注）送入 Reranker，
     # 只保留 top_k 份进入最终 LLM 上下文。
+    # rerank_top_k=0 视为关闭终轮截断（等价于 enable_rerank=False，保留全部主资料）。
     enable_rerank: bool = True
     rerank_top_k: int = 4
     # 空 → embedding_api_key / embedding_base_url → vectorization → settings
@@ -260,14 +278,33 @@ class RetrieveConfig(BaseModel):
     def _coerce_str(cls, v):
         return _none_to_empty(v)
 
-    @field_validator("rerank_top_k", mode="before")
+    @field_validator(
+        "chunk_candidate_k",
+        "node_candidate_k",
+        "keyword_candidate_k",
+        "keyword_top_k",
+        "rerank_top_k",
+        mode="before",
+    )
     @classmethod
-    def _coerce_rerank_top_k(cls, v):
+    def _coerce_topk_allow_zero(cls, v, info):
+        """
+        各路 topk：>=1 正常截断；0（或负数）= 跳过该路 / 关闭截断。
+        非法值回落到字段默认。
+        """
+        defaults = {
+            'chunk_candidate_k': 30,
+            'node_candidate_k': 20,
+            'keyword_candidate_k': 50,
+            'keyword_top_k': 10,
+            'rerank_top_k': 4,
+        }
+        fallback = defaults.get(getattr(info, 'field_name', '') or '', 0)
         try:
             n = int(v)
         except (TypeError, ValueError):
-            return 4
-        return max(1, n)
+            return fallback
+        return max(0, n)
 
     @model_validator(mode="after")
     def _normalize_embedding_model_args(self):

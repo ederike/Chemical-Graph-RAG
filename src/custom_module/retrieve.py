@@ -12,12 +12,16 @@ import numpy as np
 
 class Retrieve(BaseRetrieve):
     """
-    双路检索（先查询改写，再两路各自 topk 截断后合并）：
-      0) LLM 将用户查询改写得更具体
-      1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k
-      2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k → 映射所属 chunk
-      3) 两路按 chunk 合并去重 + 文档扩展
-      4) 可选：文档级 Reranker 重排，只保留 rerank_top_k 份完整文档进上下文
+    三路检索（查询改写可选）：
+      0) LLM 将用户查询改写得更具体（可选）
+      1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k（0=跳过）
+      2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k（0=跳过）→ 映射所属 chunk
+      3) 关键词精确匹配（可选 enable_keyword_exact；candidate/top 任一为 0 则跳过）：
+         LLM 抽取 minority/majority 关键词 → chunk.content 精确包含匹配
+         → 少数值优先、多数值命中数排序取 keyword_candidate_k
+         → 文档级首轮 rerank → keyword_top_k
+      4) 关键词路与双路（chunk∪node）按文档取交集（空集时回退）
+      5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          默认每文档：头块 + 命中索引块（原文序、块去重）
          enable_full_body_context=True 时：每命中文档写入该文全部 body 索引块，不含头块
     """
@@ -79,9 +83,17 @@ class Retrieve(BaseRetrieve):
         self.chunks_by_doc = defaultdict(list)
         self.doc_head_chunk = {}
         self.doc_dict = {}
-        # 最近一次检索的改写 / 重排结果（便于调试）
+        # 最近一次检索的改写 / 重排 / 关键词结果（便于调试）
         self.last_rewrite = {'original': '', 'rewritten': ''}
         self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
+        self.last_keyword = {
+            'enabled': False,
+            'minority': [],
+            'majority': [],
+            'pool_chunks': 0,
+            'top_docs': 0,
+            'doc_ids': [],
+        }
 
     def _ensure_precompute(self):
         if self._precomputed:
@@ -316,11 +328,569 @@ class Retrieve(BaseRetrieve):
             return original
 
     # ------------------------------------------------------------------
+    # keyword exact match path
+    # ------------------------------------------------------------------
+    def _keyword_extract_model_args(self) -> dict:
+        """Merge retrieve.model_args + keyword_extract_model_args; default thinking off."""
+        model_args = dict(self.config.retrieve.model_args or {})
+        over = dict(
+            getattr(self.config.retrieve, 'keyword_extract_model_args', None) or {}
+        )
+        model_args.update(over)
+        model_args.setdefault('temperature', 0.0)
+        model_args.setdefault('max_tokens', 256)
+        if 'enable_thinking' not in model_args:
+            model_args['enable_thinking'] = False
+        # 强制 JSON，便于解析
+        if 'response_format' not in model_args:
+            model_args['response_format'] = {'type': 'json_object'}
+        return model_args
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        text = (text or '').strip()
+        if not text.startswith('```'):
+            return text
+        lines = text.splitlines()
+        if lines and lines[0].startswith('```'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        return '\n'.join(lines).strip()
+
+    @staticmethod
+    def _normalize_keyword_list(raw) -> list:
+        """Normalize LLM keyword list: strip, drop empty, dedupe (casefold), preserve order."""
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)):
+            return []
+        out = []
+        seen = set()
+        for item in raw:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if not s:
+                continue
+            # 过短的多数值键易误伤（如 "NO" 单独出现），但仍允许少数值短编号；
+            # 统一下限 2 字符；单字符几乎无检索价值。
+            if len(s) < 2:
+                continue
+            key = s.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
+        return out
+
+    def extract_keywords(self, query: str) -> dict:
+        """
+        LLM 抽取 minority / majority 关键词。
+        返回 {'minority': [...], 'majority': [...]}；失败时空列表。
+        """
+        original = (query or '').strip()
+        empty = {'minority': [], 'majority': []}
+        if not original:
+            return empty
+
+        prompt = PROMPT.get('keyword_extract', '').format(query=original)
+        if not prompt:
+            self.logger.warning('[retrieve] keyword_extract prompt missing')
+            return empty
+
+        model_args = self._keyword_extract_model_args()
+        t0 = time.perf_counter()
+        try:
+            response = self.llmmodel.generate(
+                prompt={'system': '', 'user': prompt},
+                model_args=model_args,
+                use_cache=getattr(self.config.retrieve, 'use_cache', True),
+            )
+            if response.get('status') != 1:
+                self.logger.warning(
+                    f"[retrieve] keyword extract failed status={response.get('status')} "
+                    f"answer={str(response.get('answer'))[:200]!r}"
+                )
+                return empty
+
+            text = self._strip_code_fence(response.get('answer') or '')
+            data = None
+            try:
+                data = json.loads(text)
+            except Exception:
+                # 尝试截取首个 JSON 对象
+                m = re.search(r'\{[\s\S]*\}', text)
+                if m:
+                    try:
+                        data = json.loads(m.group(0))
+                    except Exception:
+                        data = None
+            if not isinstance(data, dict):
+                self.logger.warning(
+                    f"[retrieve] keyword extract non-json: {text[:200]!r}"
+                )
+                return empty
+
+            minority = self._normalize_keyword_list(
+                data.get('minority') or data.get('rare') or data.get('values')
+            )
+            majority = self._normalize_keyword_list(
+                data.get('majority') or data.get('common') or data.get('keys')
+            )
+            # 同一词同时出现在两类时保留 minority（高区分度优先）
+            min_cf = {k.casefold() for k in minority}
+            majority = [k for k in majority if k.casefold() not in min_cf]
+
+            dt = time.perf_counter() - t0
+            self.logger.info(
+                f"[retrieve] keyword extract dt={dt:.3f}s "
+                f"cache_hit={bool(response.get('_cache_hit'))} "
+                f"minority={minority!r} majority={majority!r}"
+            )
+            return {'minority': minority, 'majority': majority}
+        except Exception as e:
+            self.logger.warning(f"[retrieve] keyword extract error: {e}")
+            return empty
+
+    @staticmethod
+    def _content_contains(content: str, keyword: str) -> bool:
+        if not content or not keyword:
+            return False
+        return keyword.casefold() in content.casefold()
+
+    def _search_chunks_by_keywords(
+        self,
+        minority: list,
+        majority: list,
+        candidate_k: int,
+    ) -> list:
+        """
+        在预加载的 chunk.content 上做精确包含匹配，构造候选池：
+          1) 优选取 minority 命中块（有少数值时）
+          2) 再按 majority 命中个数降序补齐
+          3) 截到 candidate_k；candidate_k<=0 时返回空（跳过）
+
+        返回 hit 列表，含 score / match_type / keyword 统计字段。
+        """
+        try:
+            candidate_k = int(candidate_k)
+        except (TypeError, ValueError):
+            candidate_k = 0
+        if candidate_k <= 0:
+            return []
+
+        minority = [k for k in (minority or []) if k]
+        majority = [k for k in (majority or []) if k]
+        if not minority and not majority:
+            return []
+
+        scored = []
+        for chunk in self.all_chunks:
+            content = chunk.get('content') or ''
+            if not content:
+                continue
+            min_hits = [k for k in minority if self._content_contains(content, k)]
+            maj_hits = [k for k in majority if self._content_contains(content, k)]
+            if not min_hits and not maj_hits:
+                continue
+            n_min = len(min_hits)
+            n_maj = len(maj_hits)
+            # 排序键：少数值优先，再多数值命中数；score 供后续展示
+            # minority 权重远高于 majority，便于 max 合并时保留
+            score = float(n_min) * 10.0 + float(n_maj)
+            scored.append({
+                'chunk_id': chunk.get('id'),
+                'chunk': chunk,
+                'doc_id': chunk.get('doc_id'),
+                'score': score,
+                'match_type': 'keyword',
+                'keyword_minority_hits': min_hits,
+                'keyword_majority_hits': maj_hits,
+                'n_minority': n_min,
+                'n_majority': n_maj,
+                '_sort': (
+                    1 if n_min > 0 else 0,
+                    n_min,
+                    n_maj,
+                    score,
+                ),
+            })
+
+        # 少数值块优先，再按少数值命中数、多数值命中数
+        scored.sort(
+            key=lambda h: (
+                -h['_sort'][0],
+                -h['_sort'][1],
+                -h['_sort'][2],
+                -h['_sort'][3],
+                h.get('chunk_id') if h.get('chunk_id') is not None else 0,
+            )
+        )
+        out = []
+        for h in scored[:candidate_k]:
+            h = dict(h)
+            h.pop('_sort', None)
+            out.append(h)
+        return out
+
+    def _hits_to_doc_passages(self, hits: list) -> list:
+        """
+        将 chunk hit 列表转成可供文档级 rerank 的临时 passages
+        （按文档聚合，块序拼接由 _rerank_materials 完成）。
+        """
+        by_doc = {}
+        for hit in hits or []:
+            chunk = hit.get('chunk') or self.chunk_dict.get(hit.get('chunk_id')) or {}
+            doc_id = hit.get('doc_id')
+            if doc_id is None:
+                doc_id = chunk.get('doc_id')
+            if doc_id is None:
+                continue
+            g = by_doc.get(doc_id)
+            if g is None:
+                by_doc[doc_id] = {
+                    'doc_id': doc_id,
+                    'score': float(hit.get('score') or 0.0),
+                    'chunks': [],
+                    'seen': set(),
+                }
+                g = by_doc[doc_id]
+            sc = float(hit.get('score') or 0.0)
+            if sc > g['score']:
+                g['score'] = sc
+            cid = chunk.get('id') if chunk else hit.get('chunk_id')
+            if cid is not None and cid in g['seen']:
+                continue
+            if cid is not None:
+                g['seen'].add(cid)
+            if chunk:
+                g['chunks'].append(chunk)
+
+        passages = []
+        # 稳定顺序：高分文档在前
+        ordered = sorted(
+            by_doc.values(),
+            key=lambda g: (-float(g['score']), g['doc_id'] if g['doc_id'] is not None else 0),
+        )
+        for mat_i, g in enumerate(ordered, start=1):
+            doc_id = g['doc_id']
+            source = self._source_label(g['chunks'][0] if g['chunks'] else {'doc_id': doc_id})
+            # 用全文块（若有预计算）做更稳的文档级 rerank 文本
+            full_chunks = list(self.chunks_by_doc.get(doc_id) or [])
+            use_chunks = full_chunks if full_chunks else sorted(
+                g['chunks'], key=self._chunk_order_key
+            )
+            for c in use_chunks:
+                if self._is_head_chunk(c) and full_chunks:
+                    # 关键词首轮 rerank 优先 body；无 body 时仍用 head
+                    body_only = [x for x in use_chunks if not self._is_head_chunk(x)]
+                    if body_only:
+                        continue
+                passages.append({
+                    'chunk': c,
+                    'score': float(g['score']),
+                    'match_type': 'keyword',
+                    'doc_id': doc_id,
+                    'role': 'index' if not self._is_head_chunk(c) else 'head',
+                    'material_id': mat_i,
+                    'material_score': float(g['score']),
+                    'source': source,
+                })
+        return passages
+
+    def _keyword_path_retrieve(
+        self,
+        query: str,
+        *,
+        candidate_k: int = 50,
+        top_k: int = 10,
+    ) -> dict:
+        """
+        关键词精确匹配整条支路：
+          extract → content 精确匹配 → 候选池排序截断
+          → 文档级首轮 rerank → keyword_top_k 文档
+        返回 {
+          hits_by_chunk: {cid: hit},
+          doc_ids: set,
+          minority, majority,
+          has_minority: bool,
+          pool_n, top_n,
+        }
+        """
+        empty = {
+            'hits_by_chunk': {},
+            'doc_ids': set(),
+            'minority': [],
+            'majority': [],
+            'has_minority': False,
+            'pool_n': 0,
+            'top_n': 0,
+        }
+        try:
+            candidate_k = int(candidate_k)
+        except (TypeError, ValueError):
+            candidate_k = 0
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            top_k = 0
+        # 任一 k<=0：跳过整条关键词路
+        if candidate_k <= 0 or top_k <= 0:
+            self.logger.info(
+                f"[retrieve] keyword path skipped "
+                f"(candidate_k={candidate_k}, top_k={top_k})"
+            )
+            return empty
+
+        q = (query or '').strip()
+        if not q:
+            return empty
+
+        kw = self.extract_keywords(q)
+        minority = kw.get('minority') or []
+        majority = kw.get('majority') or []
+        if not minority and not majority:
+            self.logger.info('[retrieve] keyword path: no keywords extracted')
+            return {**empty, 'minority': minority, 'majority': majority}
+
+        pool = self._search_chunks_by_keywords(
+            minority, majority, candidate_k=candidate_k
+        )
+        if not pool:
+            self.logger.info(
+                f"[retrieve] keyword path: no content hits "
+                f"minority={minority!r} majority={majority!r}"
+            )
+            return {
+                **empty,
+                'minority': minority,
+                'majority': majority,
+                'has_minority': bool(minority),
+            }
+
+        # 文档级首轮 rerank（关键词路强制启用，不受 enable_rerank 开关影响）
+        passages = self._hits_to_doc_passages(pool)
+        reranked = self._rerank_materials(
+            q,
+            passages,
+            top_k=top_k,
+            enable=True,
+            update_last=False,
+            stage='keyword',
+        )
+        # 取保留文档
+        keep_docs = set()
+        for p in reranked or []:
+            did = p.get('doc_id')
+            if did is not None:
+                keep_docs.add(did)
+
+        # 若 rerank 失败/关闭回退仍可能有 passages
+        if not keep_docs:
+            for p in passages:
+                did = p.get('doc_id')
+                if did is not None:
+                    keep_docs.add(did)
+            # 按 material 分截断（top_k 已保证 >0）
+            keep_docs = set(list(keep_docs)[: top_k])
+
+        hits_by_chunk = {}
+        for hit in pool:
+            did = hit.get('doc_id')
+            chunk = hit.get('chunk') or {}
+            if did is None:
+                did = chunk.get('doc_id')
+            if did not in keep_docs:
+                continue
+            cid = hit.get('chunk_id') or chunk.get('id')
+            if cid is None:
+                continue
+            item = dict(hit)
+            item['chunk_id'] = cid
+            item['doc_id'] = did
+            item['match_type'] = 'keyword'
+            hits_by_chunk[cid] = item
+
+        # 文档被 top_k 选中但 pool 里该文块被截掉时：补一条代表 hit（头块或首块）
+        docs_with_hits = {
+            (h.get('doc_id') or (h.get('chunk') or {}).get('doc_id'))
+            for h in hits_by_chunk.values()
+        }
+        for did in keep_docs:
+            if did in docs_with_hits:
+                continue
+            head = self.doc_head_chunk.get(did)
+            c = head or ((self.chunks_by_doc.get(did) or [None])[0])
+            if not c:
+                continue
+            cid = c.get('id')
+            if cid is None:
+                continue
+            hits_by_chunk[cid] = {
+                'chunk_id': cid,
+                'chunk': c,
+                'doc_id': did,
+                'score': 1.0,
+                'match_type': 'keyword',
+                'keyword_minority_hits': minority,
+                'keyword_majority_hits': [],
+                'n_minority': len(minority),
+                'n_majority': 0,
+            }
+
+        self.logger.info(
+            f"[retrieve] keyword path pool={len(pool)} docs_in={len({h.get('doc_id') for h in pool})} "
+            f"rerank_top_docs={len(keep_docs)} hits={len(hits_by_chunk)} "
+            f"minority={minority!r} majority={majority!r}"
+        )
+        return {
+            'hits_by_chunk': hits_by_chunk,
+            'doc_ids': keep_docs,
+            'minority': minority,
+            'majority': majority,
+            'has_minority': any(
+                (h.get('n_minority') or 0) > 0 for h in pool
+            ) or bool(minority and hits_by_chunk),
+            'pool_n': len(pool),
+            'top_n': len(keep_docs),
+        }
+
+    def _intersect_hits_by_docs(
+        self,
+        dual_hits: dict,
+        keyword_hits: dict,
+        keyword_doc_ids: set,
+        *,
+        has_minority: bool = False,
+    ) -> dict:
+        """
+        关键词路与双路按文档取交集：
+          keep = keyword_docs ∩ dual_docs
+        空交集回退：
+          - 有少数值命中 → 保留关键词路（高精确）
+          - 否则 → 保留双路
+        仅关键词 / 仅双路时直接用非空一侧。
+        合并时 score 取 max，match_type 合并。
+        """
+        dual_hits = dual_hits or {}
+        keyword_hits = keyword_hits or {}
+
+        def _doc_ids_from_hits(hits: dict) -> set:
+            ids = set()
+            for h in hits.values():
+                did = h.get('doc_id')
+                if did is None:
+                    chunk = h.get('chunk') or {}
+                    did = chunk.get('doc_id')
+                if did is not None:
+                    ids.add(did)
+            return ids
+
+        dual_docs = _doc_ids_from_hits(dual_hits)
+        kw_docs = set(keyword_doc_ids or ()) or _doc_ids_from_hits(keyword_hits)
+
+        if kw_docs and dual_docs:
+            keep = kw_docs & dual_docs
+            if not keep:
+                if has_minority:
+                    keep = kw_docs
+                    self.logger.info(
+                        '[retrieve] keyword∩dual empty; fallback to keyword (minority)'
+                    )
+                else:
+                    keep = dual_docs
+                    self.logger.info(
+                        '[retrieve] keyword∩dual empty; fallback to dual-path'
+                    )
+            else:
+                self.logger.info(
+                    f"[retrieve] keyword∩dual docs={len(keep)} "
+                    f"(kw={len(kw_docs)} dual={len(dual_docs)})"
+                )
+        elif kw_docs:
+            keep = kw_docs
+            self.logger.info(f"[retrieve] keyword-only docs={len(keep)}")
+        else:
+            keep = dual_docs
+
+        # 过滤 + 合并
+        merged = {}
+
+        def _absorb(hit, extra_mt=None):
+            cid = hit.get('chunk_id')
+            if cid is None:
+                chunk = hit.get('chunk') or {}
+                cid = chunk.get('id')
+            if cid is None:
+                return
+            did = hit.get('doc_id')
+            if did is None:
+                did = (hit.get('chunk') or {}).get('doc_id')
+            if did is not None and did not in keep:
+                return
+            if did is None and keep:
+                # 无 doc_id 时若在做文档过滤则丢弃
+                return
+            cur = merged.get(cid)
+            if cur is None:
+                item = dict(hit)
+                item['chunk_id'] = cid
+                if did is not None:
+                    item['doc_id'] = did
+                item.setdefault('chunk', hit.get('chunk') or self.chunk_dict.get(cid))
+                if extra_mt and item.get('match_type') != extra_mt:
+                    # 首写
+                    pass
+                merged[cid] = item
+                return
+            score = float(hit.get('score') or 0.0)
+            if score > float(cur.get('score') or 0.0):
+                cur['score'] = score
+            mt_a = cur.get('match_type') or ''
+            mt_b = hit.get('match_type') or ''
+            parts = set()
+            for mt in (mt_a, mt_b):
+                if not mt:
+                    continue
+                for p in str(mt).split('+'):
+                    p = p.strip()
+                    if p:
+                        parts.add(p)
+            if parts:
+                # 稳定顺序：chunk, node, keyword
+                order = {'chunk': 0, 'node': 1, 'keyword': 2}
+                cur['match_type'] = '+'.join(
+                    sorted(parts, key=lambda x: (order.get(x, 9), x))
+                )
+            for key in (
+                'node_id', 'node_name', 'hyperedge_id', 'doc_id',
+                'keyword_minority_hits', 'keyword_majority_hits',
+                'n_minority', 'n_majority',
+            ):
+                if cur.get(key) is None and hit.get(key) is not None:
+                    cur[key] = hit[key]
+
+        for h in dual_hits.values():
+            _absorb(h)
+        for h in keyword_hits.values():
+            _absorb(h)
+        return merged
+
+    # ------------------------------------------------------------------
     # dual-path vector search
     # ------------------------------------------------------------------
     def _search_chunks_by_query(self, query_embedding, topk: int) -> list:
-        """改写 query ↔ chunk 向量。"""
-        raw = self.vector_match('chunk', query_embedding, topk=max(1, topk))
+        """改写 query ↔ chunk 向量。topk<=0 时跳过本路。"""
+        try:
+            topk = int(topk)
+        except (TypeError, ValueError):
+            topk = 0
+        if topk <= 0:
+            return []
+        raw = self.vector_match('chunk', query_embedding, topk=topk)
         hits = []
         for r in raw:
             dist = r.get('distance')
@@ -335,8 +905,13 @@ class Retrieve(BaseRetrieve):
         return hits
 
     def _search_nodes_by_query(self, query_embedding, topk: int) -> list:
-        """改写 query ↔ node 内容向量 → 映射到所属 chunk。"""
-        topk = max(1, int(topk))
+        """改写 query ↔ node 内容向量 → 映射到所属 chunk。topk<=0 时跳过本路。"""
+        try:
+            topk = int(topk)
+        except (TypeError, ValueError):
+            topk = 0
+        if topk <= 0:
+            return []
         raw = self.vector_match('node', query_embedding, topk=topk)
         best_by_chunk = {}
 
@@ -853,7 +1428,16 @@ class Retrieve(BaseRetrieve):
                 g['score'] = sc
         return [groups[k] for k in order]
 
-    def _rerank_materials(self, query: str, passages: list) -> list:
+    def _rerank_materials(
+        self,
+        query: str,
+        passages: list,
+        *,
+        top_k: int | None = None,
+        enable: bool | None = None,
+        update_last: bool = True,
+        stage: str = 'final',
+    ) -> list:
         """
         文档级重排：
           1) 主资料按文档聚合成完整文本（块序拼接、无标注）
@@ -861,10 +1445,28 @@ class Retrieve(BaseRetrieve):
           3) 只保留 top_k 文档；重排 material_id = 1..k
           4) 推荐扩展不进入最终上下文（上下文仅 top_k 完整文档）
         失败时回退：按原 material 分截 top_k。
+
+        top_k / enable: 覆盖配置（关键词路首轮 rerank 用）。
+        update_last: 是否写入 self.last_rerank（中间轮可关，避免覆盖终轮统计）。
+        stage: 日志标签 final / keyword。
         """
-        enable = bool(getattr(self.config.retrieve, 'enable_rerank', False))
-        top_k = int(getattr(self.config.retrieve, 'rerank_top_k', 4) or 4)
-        top_k = max(1, top_k)
+        if enable is None:
+            enable = bool(getattr(self.config.retrieve, 'enable_rerank', False))
+        else:
+            enable = bool(enable)
+        if top_k is None:
+            raw_k = getattr(self.config.retrieve, 'rerank_top_k', 4)
+            try:
+                top_k = int(raw_k) if raw_k is not None else 4
+            except (TypeError, ValueError):
+                top_k = 4
+        try:
+            top_k = int(top_k)
+        except (TypeError, ValueError):
+            top_k = 4
+        # top_k<=0：跳过截断/重排，保留全部（与 enable=False 同效）
+        if top_k <= 0:
+            enable = False
         max_chars = int(getattr(self.config.retrieve, 'rerank_max_chars', -1) or -1)
         model_args = dict(
             getattr(self.config.retrieve, 'rerank_model_args', None) or {}
@@ -872,18 +1474,26 @@ class Retrieve(BaseRetrieve):
         model_args.setdefault('model', 'Qwen3-Reranker-0.6B')
 
         groups = self._group_main_materials(passages)
-        self.last_rerank = {
+        meta = {
             'enabled': enable,
             'n_in': len(groups),
             'n_out': 0,
             'scores': [],
             'top_k': top_k,
+            'stage': stage,
         }
+        if update_last:
+            self.last_rerank = dict(meta)
         if not groups:
             return []
 
         if not enable:
-            # 关闭重排：保留全部主资料 + 推荐（调用方已拼好）
+            # 关闭重排 / top_k=0：保留全部主资料 + 推荐（调用方已拼好）
+            if update_last:
+                self.last_rerank.update({
+                    'n_out': len(groups),
+                    'skipped': top_k <= 0,
+                })
             return passages
 
         docs_text = [
@@ -903,7 +1513,8 @@ class Retrieve(BaseRetrieve):
             )
         except Exception as e:
             self.logger.warning(
-                f"[retrieve] rerank failed, fallback to retrieval score top_k={top_k}: {e}"
+                f"[retrieve] rerank({stage}) failed, fallback to retrieval score "
+                f"top_k={top_k}: {e}"
             )
             # 回退：按已有 material_score 截断
             ranked_groups = sorted(groups, key=lambda g: -float(g['score']))[:top_k]
@@ -923,12 +1534,14 @@ class Retrieve(BaseRetrieve):
                     row['material_score'] = float(g['score'])
                     row['rerank_score'] = float(g['score'])
                     out.append(row)
-            self.last_rerank.update({
+            meta.update({
                 'n_out': len(ranked_groups),
                 'scores': scores,
                 'fallback': True,
                 'latency_s': round(time.perf_counter() - t0, 3),
             })
+            if update_last:
+                self.last_rerank.update(meta)
             return out
 
         # 按 rerank 结果重装 passages
@@ -958,17 +1571,19 @@ class Retrieve(BaseRetrieve):
             if len(seen_idx) >= top_k:
                 break
 
-        self.last_rerank.update({
+        meta.update({
             'n_out': len(seen_idx),
             'scores': scores,
             'fallback': False,
             'latency_s': round(time.perf_counter() - t0, 3),
             'model': model_args.get('model'),
         })
+        if update_last:
+            self.last_rerank.update(meta)
         self.logger.info(
-            f"[retrieve] rerank model={model_args.get('model')!r} "
+            f"[retrieve] rerank({stage}) model={model_args.get('model')!r} "
             f"in={len(groups)} out={len(seen_idx)} top_k={top_k} "
-            f"dt={self.last_rerank['latency_s']:.3f}s "
+            f"dt={meta.get('latency_s', 0):.3f}s "
             f"top={[(s.get('source'), round(s.get('relevance_score', 0), 4)) for s in scores[:top_k]]}"
         )
         return out
@@ -976,33 +1591,80 @@ class Retrieve(BaseRetrieve):
     # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------
+    @staticmethod
+    def _resolve_topk(override, config_val, default: int) -> int:
+        """
+        解析 topk：显式参数优先，否则配置，否则 default。
+        允许 0（跳过该路）；负数钳到 0；非法回 default。
+        注意：不能用 ``x or default``，否则 0 会被误判为缺省。
+        """
+        raw = override if override is not None else config_val
+        if raw is None:
+            return max(0, int(default))
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return max(0, int(default))
+
     def retrive_items(
         self,
         query,
         chunk_candidate_k=None,
         node_candidate_k=None,
         enable_query_rewrite=None,
+        enable_keyword_exact=None,
+        keyword_candidate_k=None,
+        keyword_top_k=None,
     ) -> list:
         """
-        查询改写 → 双路各自 topk 截取 → 合并扩展去重 → 文档级重排(top_k) → 上下文。
+        查询改写 → 双路向量 topk + 关键词精确匹配 → 文档交集 → 扩展 → 终轮 rerank。
 
-        enable_query_rewrite: None 用配置；True/False 仅本次覆盖（不改共享 config）。
+        各路 topk：
+          - >0：正常截断
+          - 0：跳过该路（chunk / node / keyword 候选与 top / rerank_top_k）
+
+        enable_query_rewrite / enable_keyword_exact:
+          None 用配置；True/False 仅本次覆盖（不改共享 config）。
         """
         t_all = time.perf_counter()
         self._ensure_precompute()
 
-        chunk_cand = int(
-            chunk_candidate_k
-            if chunk_candidate_k is not None
-            else (getattr(self.config.retrieve, 'chunk_candidate_k', None) or 10)
+        chunk_cand = self._resolve_topk(
+            chunk_candidate_k,
+            getattr(self.config.retrieve, 'chunk_candidate_k', None),
+            10,
         )
-        node_cand = int(
-            node_candidate_k
-            if node_candidate_k is not None
-            else (getattr(self.config.retrieve, 'node_candidate_k', None) or 10)
+        node_cand = self._resolve_topk(
+            node_candidate_k,
+            getattr(self.config.retrieve, 'node_candidate_k', None),
+            10,
         )
-        chunk_cand = max(1, chunk_cand)
-        node_cand = max(1, node_cand)
+        kw_cand = self._resolve_topk(
+            keyword_candidate_k,
+            getattr(self.config.retrieve, 'keyword_candidate_k', None),
+            50,
+        )
+        kw_top = self._resolve_topk(
+            keyword_top_k,
+            getattr(self.config.retrieve, 'keyword_top_k', None),
+            10,
+        )
+        rerank_top = self._resolve_topk(
+            None,
+            getattr(self.config.retrieve, 'rerank_top_k', None),
+            4,
+        )
+
+        if enable_keyword_exact is None:
+            enable_kw = bool(
+                getattr(self.config.retrieve, 'enable_keyword_exact', True)
+            )
+        else:
+            enable_kw = bool(enable_keyword_exact)
+        # keyword 任一 k=0 → 跳过关键词路
+        if kw_cand <= 0 or kw_top <= 0:
+            enable_kw = False
+
         use_cache = getattr(self.config.retrieve, 'use_cache', True)
         full_body = bool(
             getattr(self.config.retrieve, 'enable_full_body_context', False)
@@ -1010,50 +1672,138 @@ class Retrieve(BaseRetrieve):
         enable_rerank = bool(
             getattr(self.config.retrieve, 'enable_rerank', False)
         )
+        # rerank_top_k=0 → 跳过终轮重排截断
+        if rerank_top <= 0:
+            enable_rerank = False
+
+        need_vector = chunk_cand > 0 or node_cand > 0
 
         # 0) 查询改写（参数覆盖不写 config，多线程安全）
         t0 = time.perf_counter()
         rewritten = self.rewrite_query(query, enabled=enable_query_rewrite)
         t_rewrite = time.perf_counter() - t0
+        search_query = rewritten or query
 
-        # 1) 对改写查询做一次 embedding，两路共用
+        # 1) embedding：仅向量路需要时调用
         t0 = time.perf_counter()
-        emb_resp = self.embedding.generate(
-            rewritten,
-            model_args=self.config.retrieve.embedding_model_args,
-            use_cache=use_cache,
-        )
-        query_embedding = emb_resp['answer']
-        t_emb = time.perf_counter() - t0
-        if not isinstance(query_embedding, list):
-            self.logger.error(
-                f"[retrieve] embedding failed: {query_embedding!r}"
+        query_embedding = None
+        if need_vector:
+            emb_resp = self.embedding.generate(
+                search_query,
+                model_args=self.config.retrieve.embedding_model_args,
+                use_cache=use_cache,
             )
-            return []
+            query_embedding = emb_resp['answer']
+            if not isinstance(query_embedding, list):
+                self.logger.error(
+                    f"[retrieve] embedding failed: {query_embedding!r}"
+                )
+                query_embedding = None
+        t_emb = time.perf_counter() - t0
 
-        # 2) query ↔ chunk（本路 topk 截断）
+        # 2) query ↔ chunk（topk=0 跳过）
         t0 = time.perf_counter()
-        chunk_hits = self._search_chunks_by_query(query_embedding, topk=chunk_cand)
+        if chunk_cand > 0 and query_embedding is not None:
+            chunk_hits = self._search_chunks_by_query(
+                query_embedding, topk=chunk_cand
+            )
+        else:
+            chunk_hits = []
+            if chunk_cand <= 0:
+                self.logger.info('[retrieve] chunk path skipped (chunk_candidate_k=0)')
         t_chunk = time.perf_counter() - t0
 
-        # 3) query ↔ node（本路 topk 截断）
+        # 3) query ↔ node（topk=0 跳过）
         t0 = time.perf_counter()
-        node_hits = self._search_nodes_by_query(query_embedding, topk=node_cand)
+        if node_cand > 0 and query_embedding is not None:
+            node_hits = self._search_nodes_by_query(
+                query_embedding, topk=node_cand
+            )
+        else:
+            node_hits = []
+            if node_cand <= 0:
+                self.logger.info('[retrieve] node path skipped (node_candidate_k=0)')
         t_node = time.perf_counter() - t0
 
-        # 4) 合并去重 → 按文档成组扩展
-        merged = self._merge_chunk_hits(chunk_hits, node_hits)
+        # 4) 双路合并
+        dual_merged = self._merge_chunk_hits(chunk_hits, node_hits)
+
+        # 5) 关键词精确匹配路
+        t0 = time.perf_counter()
+        self.last_keyword = {
+            'enabled': enable_kw,
+            'minority': [],
+            'majority': [],
+            'pool_chunks': 0,
+            'top_docs': 0,
+            'doc_ids': [],
+        }
+        kw_result = {
+            'hits_by_chunk': {},
+            'doc_ids': set(),
+            'minority': [],
+            'majority': [],
+            'has_minority': False,
+            'pool_n': 0,
+            'top_n': 0,
+        }
+        if enable_kw:
+            # 关键词抽取用原始用户查询，避免改写丢掉编号/字段名
+            kw_result = self._keyword_path_retrieve(
+                query,
+                candidate_k=kw_cand,
+                top_k=kw_top,
+            )
+            self.last_keyword = {
+                'enabled': True,
+                'minority': list(kw_result.get('minority') or []),
+                'majority': list(kw_result.get('majority') or []),
+                'pool_chunks': int(kw_result.get('pool_n') or 0),
+                'top_docs': int(kw_result.get('top_n') or 0),
+                'doc_ids': sorted(
+                    d for d in (kw_result.get('doc_ids') or set())
+                    if d is not None
+                ),
+                'has_minority': bool(kw_result.get('has_minority')),
+            }
+        elif kw_cand <= 0 or kw_top <= 0:
+            self.logger.info(
+                f"[retrieve] keyword path skipped "
+                f"(keyword_candidate_k={kw_cand}, keyword_top_k={kw_top})"
+            )
+        t_keyword = time.perf_counter() - t0
+
+        # 6) 关键词路 ∩ 双路（文档级）→ 合并 hits
+        if enable_kw and (
+            kw_result.get('hits_by_chunk') or kw_result.get('doc_ids')
+        ):
+            merged = self._intersect_hits_by_docs(
+                dual_merged,
+                kw_result.get('hits_by_chunk') or {},
+                kw_result.get('doc_ids') or set(),
+                has_minority=bool(kw_result.get('has_minority')),
+            )
+        else:
+            merged = dual_merged
+
+        # 7) 按文档成组扩展（enable_full_body_context）
         passages = self._build_materials(merged)
         passages = self._enrich_passage_ids(passages)
 
-        # 5) 可选：一层推荐扩展（仅 content；与主检索去重）
+        # 8) 可选：一层推荐扩展（仅 content；与主检索去重）
         #    若开启文档重排，推荐扩展不进最终上下文，故跳过以省开销
         if not enable_rerank:
             passages = self._expand_recommendations(passages)
 
-        # 6) 文档级重排：完整文档纯文本拼接 → top_k
+        # 9) 终轮文档级重排：完整文档纯文本拼接 → top_k（0=跳过）
         t0 = time.perf_counter()
-        passages = self._rerank_materials(rewritten or query, passages)
+        passages = self._rerank_materials(
+            search_query or query,
+            passages,
+            top_k=rerank_top,
+            enable=enable_rerank,
+            stage='final',
+        )
         t_rerank = time.perf_counter() - t0
 
         n_mat = len({p.get('material_id') for p in passages if p.get('material_id') is not None})
@@ -1062,17 +1812,22 @@ class Retrieve(BaseRetrieve):
         n_index = sum(1 for p in passages if p.get('role') == 'index')
         n_merged_chunks = len(merged)
         self.logger.info(
-            f"[retrieve] dual-path "
+            f"[retrieve] multi-path "
             f"rewrite={rewritten!r} "
             f"chunk_k={chunk_cand} node_k={node_cand} "
-            f"full_body={full_body} rerank={enable_rerank} "
+            f"keyword={enable_kw} kw_cand={kw_cand} kw_top={kw_top} "
+            f"kw_minority={self.last_keyword.get('minority')!r} "
+            f"kw_majority={self.last_keyword.get('majority')!r} "
+            f"kw_pool={self.last_keyword.get('pool_chunks')} "
+            f"kw_docs={self.last_keyword.get('top_docs')} "
+            f"full_body={full_body} rerank={enable_rerank} rerank_k={rerank_top} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "
             f"rec_expand={n_rec} passages={len(passages)} "
             f"timing rewrite={t_rewrite:.3f}s embed={t_emb:.3f}s "
             f"chunk={t_chunk:.3f}s node={t_node:.3f}s "
-            f"rerank={t_rerank:.3f}s "
+            f"keyword={t_keyword:.3f}s rerank={t_rerank:.3f}s "
             f"total={time.perf_counter()-t_all:.3f}s"
         )
         return passages
