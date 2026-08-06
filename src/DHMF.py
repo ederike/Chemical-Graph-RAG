@@ -517,28 +517,28 @@ class DHMF:
         parsed = cls.parse_query_answer(str(raw_answer))
         lines = []
         lines.append('=' * 60)
-        lines.append('【查询结果】')
+        lines.append('Query Result')
         lines.append('=' * 60)
         if query:
-            lines.append(f'问题: {query}')
+            lines.append(f'question: {query}')
             lines.append('-' * 60)
         if status is not None:
-            lines.append(f'状态: {"成功" if status == 1 else f"失败({status})"}')
+            lines.append(f'status:   {"ok" if status == 1 else f"fail({status})"}')
 
         if parsed['thought']:
             lines.append('')
-            lines.append('【推理 Thought】')
+            lines.append('## Thought')
             lines.append('-' * 60)
             lines.append(parsed['thought'])
 
         if parsed['answer']:
             lines.append('')
-            lines.append('【回答 Answer】')
+            lines.append('## Answer')
             lines.append('-' * 60)
             lines.append(parsed['answer'])
         elif not parsed['thought']:
             lines.append('')
-            lines.append('【回答】')
+            lines.append('## Answer')
             lines.append('-' * 60)
             lines.append(parsed['raw'])
 
@@ -555,20 +555,24 @@ class DHMF:
         retrieve_latency_s = respond.get('retrieve_latency_s')
         bits = []
         if any(v is not None for v in (pt, ct, tt)):
-            bits.append(f'输入={pt if pt is not None else 0} 输出={ct if ct is not None else 0} 总计={tt if tt is not None else 0}')
+            bits.append(
+                f'in={pt if pt is not None else 0} '
+                f'out={ct if ct is not None else 0} '
+                f'total={tt if tt is not None else 0}'
+            )
         if retrieve_latency_s is not None:
             try:
-                bits.append(f'检索延迟={float(retrieve_latency_s):.3f}s')
+                bits.append(f'retrieve={float(retrieve_latency_s):.3f}s')
             except Exception:
-                bits.append(f'检索延迟={retrieve_latency_s}')
+                bits.append(f'retrieve={retrieve_latency_s}')
         if latency_s is not None:
             try:
-                bits.append(f'总延迟={float(latency_s):.3f}s')
+                bits.append(f'latency={float(latency_s):.3f}s')
             except Exception:
-                bits.append(f'总延迟={latency_s}')
+                bits.append(f'latency={latency_s}')
         if bits:
             lines.append('')
-            lines.append('【tokens】 ' + ' | '.join(bits))
+            lines.append('tokens  ' + ' | '.join(bits))
         lines.append('=' * 60)
         return '\n'.join(lines)
 

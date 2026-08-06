@@ -551,15 +551,15 @@ class Retrieve(BaseRetrieve):
 
     def _format_retrieved_chunks(self, chunks_with_meta) -> str:
         """
-        按资料组输出：
-          ----- 资料 1 【来源：xxx】 -----
-          【头块】
+        按资料组输出（Markdown 标题，不用全角括号）：
+          ----- Material 1 | source: xxx -----
+          ### Head
           ...
-          【索引块 1】
+          ### Index block 1
           ...
         """
         if not chunks_with_meta:
-            return '（未检索到相关产品资料）\n'
+            return '(no relevant product materials retrieved)\n'
 
         by_mat = defaultdict(list)
         has_mat = False
@@ -577,11 +577,11 @@ class Retrieve(BaseRetrieve):
                 content = (chunk.get('content') or '').strip()
                 meta_bits = []
                 if item.get('match_type'):
-                    meta_bits.append(f"检索={item['match_type']}")
+                    meta_bits.append(f"match={item['match_type']}")
                 # 块得分仅用于内部排序，不写入上下文
                 meta_str = (' | ' + ' | '.join(meta_bits)) if meta_bits else ''
                 parts.append(
-                    f'----- 资料段落 {i} 【来源：{source}】{meta_str} -----\n'
+                    f'----- Passage {i} | source: {source}{meta_str} -----\n'
                     f'{content}\n'
                 )
             return '\n'.join(parts)
@@ -610,7 +610,7 @@ class Retrieve(BaseRetrieve):
             # 块/资料得分仅用于内部排序，不写入上下文
             meta_str = (' | ' + ' | '.join(meta_bits)) if meta_bits else ''
             block_lines = [
-                f'----- 资料 {mid} 【来源：{source}】{meta_str} -----'
+                f'----- Material {mid} | source: {source}{meta_str} -----'
             ]
 
             index_i = 0
@@ -623,16 +623,16 @@ class Retrieve(BaseRetrieve):
                 mt = item.get('match_type') or ''
                 side = []
                 if mt:
-                    side.append(f'检索={mt}')
+                    side.append(f'match={mt}')
                 if item.get('node_name'):
-                    side.append(f"节点={item['node_name']}")
+                    side.append(f"node={item['node_name']}")
                 side_str = (' (' + '; '.join(side) + ')') if side else ''
 
                 if role == 'head':
-                    block_lines.append(f'【头块】{side_str}')
+                    block_lines.append(f'### Head{side_str}')
                 else:
                     index_i += 1
-                    block_lines.append(f'【索引块 {index_i}】{side_str}')
+                    block_lines.append(f'### Index block {index_i}{side_str}')
                 block_lines.append(content)
                 block_lines.append('')
 
@@ -644,12 +644,12 @@ class Retrieve(BaseRetrieve):
             content = (chunk.get('content') or item.get('content') or '').strip()
             source = item.get('source') or self._source_label(chunk)
             hid = item.get('hyperedge_id')
-            meta_bits = ['推荐扩展']
+            meta_bits = ['recommendation']
             if hid is not None:
                 meta_bits.append(f'hyperedge_id={hid}')
             meta_str = ' | '.join(meta_bits)
             parts.append(
-                f'----- 推荐扩展 {i} 【来源：{source}】 | {meta_str} -----\n'
+                f'----- Recommendation {i} | source: {source} | {meta_str} -----\n'
                 f'{content}\n'
             )
 

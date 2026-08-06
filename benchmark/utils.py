@@ -162,9 +162,10 @@ def format_docs_block(
     for i, d in enumerate(docs, start=1):
         content = truncate_text(d.get("content") or "", max_chars_per_doc)
         parts.append(
-            f"【文档 {i}】文件名: {d.get('name')}\n"
+            f"## Document {i}\n"
+            f"filename: {d.get('name')}\n"
             f"doc_id: {d.get('doc_id')}\n"
-            f"内容:\n{content}"
+            f"content:\n{content}"
         )
     return "\n\n".join(parts)
 

@@ -155,6 +155,69 @@ class QueryEvaluator:
         except Exception:
             return str(raw).strip()
 
+    @staticmethod
+    def _format_agent_process(respond: Dict[str, Any]) -> str:
+        """
+        将 agent 多跳规划与各子步骤回答格式化为可读文本。
+
+        用于 rag_raw_answer：与最终回答 rag_answer 分开，记录完整过程。
+        无 plan/steps 时回退为模型原始 answer。
+        """
+        plan = list(respond.get("plan") or [])
+        steps = list(respond.get("steps") or [])
+        if not plan and not steps:
+            return str(respond.get("answer") or "")
+
+        # steps 按 id 索引，便于按 plan 顺序展开
+        by_id: Dict[str, Any] = {}
+        for st in steps:
+            if isinstance(st, dict) and st.get("id") is not None:
+                by_id[str(st["id"])] = st
+
+        lines: List[str] = [
+            "## Multi-hop Plan & Execution",
+            "-" * 48,
+        ]
+        if not plan:
+            lines.append("(no plan steps)")
+        else:
+            for s in plan:
+                if not isinstance(s, dict):
+                    continue
+                sid = str(s.get("id") or "?")
+                deps = s.get("depends_on") or []
+                deps_s = ", ".join(str(d) for d in deps) if deps else "none"
+                planned = (s.get("question") or "").strip()
+                r = by_id.get(sid) or {}
+                resolved = (r.get("resolved_question") or "").strip()
+                ans = (r.get("answer") or "").strip()
+                src = r.get("sources") or []
+                status = r.get("status")
+
+                lines.append(f"### Step {sid}  ·  deps: {deps_s}")
+                lines.append(f"planned:  {planned}")
+                if resolved and resolved != planned:
+                    lines.append(f"resolved: {resolved}")
+                if status is not None:
+                    lines.append(f"status:   {status}")
+                if src:
+                    lines.append(f"sources:  {' / '.join(str(x) for x in src)}")
+                lines.append("answer:")
+                if ans:
+                    for al in ans.splitlines() or [ans]:
+                        lines.append(f"  {al}")
+                else:
+                    lines.append("  (empty)")
+                lines.append("")
+
+        final = str(respond.get("answer") or "").strip()
+        if final:
+            lines.append("## Final Answer")
+            lines.append("-" * 48)
+            lines.append(final)
+
+        return "\n".join(lines).rstrip()
+
     def _compute_recall(
         self,
         expected_names: Sequence[str],
@@ -275,6 +338,7 @@ class QueryEvaluator:
             "explanation": item.get("explanation") or "",
             "source_names": expected_names,
             "rag_answer": "",
+            # agent 模式：多跳规划 + 各子问题回答；dual_path：模型原始 answer
             "rag_raw_answer": "",
             "query_status": 0,
             "query_error": None,
@@ -312,8 +376,12 @@ class QueryEvaluator:
                 return result
 
             result["query_status"] = respond.get("status", 0)
-            result["rag_raw_answer"] = respond.get("answer") or ""
             result["rag_answer"] = self._extract_answer_text(respond)
+            # agent：完整多步过程；dual_path：原始 answer（与 rag_answer 可能相同）
+            if self.query_mode == "agent" or respond.get("plan") or respond.get("steps"):
+                result["rag_raw_answer"] = self._format_agent_process(respond)
+            else:
+                result["rag_raw_answer"] = respond.get("answer") or ""
             result["retrieval_sources"] = list(respond.get("retrieval_sources") or [])
             result["retrieval_doc_ids"] = list(respond.get("retrieval_doc_ids") or [])
 

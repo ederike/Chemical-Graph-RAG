@@ -23,22 +23,24 @@ ChemicalGraph = DHMF(config)
 
 
 # --- dual-path RAG ---
-# start = time.time()
 # print(ChemicalGraph.query(
-#     'Admex™ 6187的密度/比重参数是多少',
+#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么',
 #     mode='dual_path',
 #     pretty=True,
 # ))
-# end = time.time()
-# with open('query_time_候选.jsonl', 'a') as f:
-#     f.write(json.dumps({'query_time': end - start}) + '\n')
+
+print(ChemicalGraph.query(
+    'CAS号为25120-20-1的东西是什么',
+    mode='dual_path',
+    pretty=True,
+))
 
 
 # --- 多跳 Agent（配置见 config.agent）---
-print(ChemicalGraph.agent_query(
-    '我们草莓种植基地计划采用滴灌方式防治根结线虫，需要一款植物源萜烯类杀线虫剂，要求无残留、可施用到收获期，且不易产生抗药性。请问符合该需求的产品是什么？其滴灌推荐用量是多少？施用时有何关键注意事项？',
-    pretty=True,
-))
+# print(ChemicalGraph.agent_query(
+#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么',
+#     pretty=True,
+# ))
 
 # print(ChemicalGraph.agent_query(
 #     '比较 ABS 722 与 Admex™ 6187 的用途有什么不同',

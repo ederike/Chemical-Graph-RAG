@@ -36,28 +36,30 @@ def _format_pretty(
     from ..DHMF import DHMF
 
     base  = DHMF.format_query_response(respond, query=query)
-    lines = ['', '【多跳步骤】', '-' * 60]
+    lines = ['', '## Multi-hop Steps', '-' * 60]
 
     if not plan:
-        lines.append('（无）')
+        lines.append('(none)')
     else:
         for s in plan:
             sid      = s['id']
             r        = results.get(sid) or {}
-            deps_s   = ','.join(s.get('depends_on') or []) or '无'
+            deps_s   = ','.join(s.get('depends_on') or []) or 'none'
             planned  = (s.get('question') or '').strip()
             resolved = (r.get('resolved_question') or '').strip()
             ans      = (r.get('answer') or '').strip()
             src      = r.get('sources') or []
 
-            lines.append(f'{sid}. [deps={deps_s}] {planned}')
+            lines.append(f'### Step {sid}  ·  deps: {deps_s}')
+            lines.append(f'planned:  {planned}')
             if resolved and resolved != planned:
-                lines.append(f'   实际查询: {resolved}')
+                lines.append(f'resolved: {resolved}')
             if src:
-                lines.append(f'   来源: {" / ".join(src)}')
+                lines.append(f'sources:  {" / ".join(src)}')
             if ans:
                 preview = ans if len(ans) <= 400 else ans[:400] + '…'
-                lines += [f'   | {al}' for al in preview.splitlines()]
+                lines.append('answer:')
+                lines += [f'  {al}' for al in preview.splitlines()]
             lines.append('')
 
     body = '\n'.join(lines).rstrip()
