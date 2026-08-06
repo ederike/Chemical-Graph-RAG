@@ -4,28 +4,28 @@ run:
 
 dhmf:
   config_path: example/a/config_open.yaml
-  query_mode: dual_path  # dual_path | agent
+  query_mode: agent  # dual_path | agent
 
 paths:
   db_path: example/a/DB/main.db
   output_dir: benchmark_results_new-prompt
 
   # generate 写出
-  questions_filename: questions_all-easy_new-prompt_agent.json
+  questions_filename: questions_all-easy_new-prompt.json
   questions_path: null
 
   # evaluate 读入
-  eval_questions_filename: questions_all-easy_new-prompt_agent.json
+  eval_questions_filename: questions_all-easy_new-prompt.json
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: eval_report_all-easy_new-prompt_dual_path.json
+  eval_results_filename: eval_report_all-easy_new-prompt_agent.json
   eval_results_path: null
 
   # report 读入
   report_source_filename: null
   report_source_path: null
   # report 写出
-  report_filename: report_all-easy_new-prompt_dual_path.json
+  report_filename: report_all-easy_new-prompt_agent.json
   report_path: null
 
 generate:

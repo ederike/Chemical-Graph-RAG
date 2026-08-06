@@ -327,8 +327,8 @@ class TestQueryWorkflow:
         )
 
         out = self.cfg.eval_results_file() if save else None
-        if out is not None:
-            print(f"[eval] 实时结果 → {out}", file=sys.stderr)
+        # if out is not None:
+        #     print(f"[eval] 实时结果 → {out}", file=sys.stderr)
 
         def _on_progress(mid_report: dict, index: int, total: int) -> None:
             if out is None:

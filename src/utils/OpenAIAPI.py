@@ -3,7 +3,8 @@ OpenAI 兼容客户端 + 本地 modelscope 嵌入 + xinference 重排。
 
 LLM 调用对齐 ai_experiment_project/tools/llms_chat_server/ky_ollama.py 的 KyOpenAIServer：
   - OpenAI(api_key, base_url).chat.completions.create(model, messages, stream=False)
-  - 本地 Qwen3：关思考时在最后一条 user content 追加 /no_think（不用云端 extra_body）
+  - 本地 Qwen3：关思考用 extra_body.chat_template_kwargs.enable_thinking=false
+    （/no_think 与顶层 enable_thinking 在本机 vLLM 上无效）
   - 本地 placeholder key 可用 "none" / "EMPTY" / "token-abc123"（服务端不校验）
 
 Embedding 对齐 tools/model_server.py 的 NlpModelServer：
@@ -157,9 +158,11 @@ def _prepare_local_call(
     messages: Optional[list] = None,
 ):
     """
-    本地 GPU 调用准备（对齐 KyOpenAIServer.chat）：
-      - 关 thinking 时在最后一条消息追加 /no_think
-      - 剥离云端 extra_body 扩展，避免本地 400
+    本地 GPU 调用准备：
+      - 剥离云端 extra_body 扩展（顶层 enable_thinking 等），避免本地 400
+      - Qwen3 族：用 chat_template_kwargs.enable_thinking 控制思考
+        （缺省 / false → 关；true → 开）
+      - inject_no_think：历史参数名，现表示是否注入上述 chat_template_kwargs
     """
     create_kwargs, extra_body = split_model_args(model_args)
     create_kwargs["model"] = resolved_model
@@ -169,6 +172,10 @@ def _prepare_local_call(
         enable_thinking = bool(extra_body.get("enable_thinking"))
     elif "enable_thinking" in (model_args or {}):
         enable_thinking = bool(model_args.get("enable_thinking"))
+    # 已写在 chat_template_kwargs 里的显式值优先保留语义
+    ctk_in = extra_body.get("chat_template_kwargs")
+    if isinstance(ctk_in, dict) and "enable_thinking" in ctk_in:
+        enable_thinking = bool(ctk_in.get("enable_thinking"))
 
     if strip_thinking_extra:
         for k in list(extra_body.keys()):
@@ -178,37 +185,12 @@ def _prepare_local_call(
             create_kwargs.pop(k, None)
 
     msgs = messages
-    # enable_thinking 缺省时按关思考处理（与 KyOpenAIServer disable_qwen_think=True 一致）
-    want_no_think = enable_thinking is not True
-    if (
-        inject_no_think
-        and msgs
-        and _is_qwen3_family(resolved_model)
-        and want_no_think
-    ):
-        msgs = [dict(m) for m in messages]
-        last = msgs[-1]
-        content = last.get("content")
-        if isinstance(content, str) and "/no_think" not in content:
-            last["content"] = content + "/no_think"
-        elif isinstance(content, list):
-            new_parts = []
-            injected = False
-            for part in content:
-                if (
-                    not injected
-                    and isinstance(part, dict)
-                    and part.get("type") == "text"
-                ):
-                    text = part.get("text") or ""
-                    if "/no_think" not in text:
-                        part = dict(part)
-                        part["text"] = text + "/no_think"
-                    new_parts.append(part)
-                    injected = True
-                else:
-                    new_parts.append(part)
-            last["content"] = new_parts
+    # 缺省关思考（enable_thinking is not True）
+    want_think = enable_thinking is True
+    if inject_no_think and _is_qwen3_family(resolved_model):
+        ctk = dict(extra_body.get("chat_template_kwargs") or {})
+        ctk["enable_thinking"] = want_think
+        extra_body["chat_template_kwargs"] = ctk
 
     return create_kwargs, extra_body, msgs
 
