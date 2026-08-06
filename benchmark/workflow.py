@@ -323,6 +323,7 @@ class TestQueryWorkflow:
             max_source_chars=self.cfg.max_source_chars,
             sleep_between=self.cfg.eval_sleep_between,
             enable_doc_recall=self.cfg.enable_doc_recall,
+            num_thread=self.cfg.eval_num_thread,
         )
 
         out = self.cfg.eval_results_file() if save else None

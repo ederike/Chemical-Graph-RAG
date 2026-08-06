@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import time
-from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from ..utils.OpenAIAPI import LLM
@@ -19,18 +18,6 @@ from .state import answer_of, first_line
 
 if TYPE_CHECKING:
     from ..DHMF import DHMF
-
-
-@contextmanager
-def _suppress_retrieve_rewrite(retrieve_module):
-    """临时关闭 retrieve 侧 rewrite，避免混用其模型配置。"""
-    rcfg = retrieve_module.config.retrieve
-    prev = bool(getattr(rcfg, 'enable_query_rewrite', True))
-    rcfg.enable_query_rewrite = False
-    try:
-        yield
-    finally:
-        rcfg.enable_query_rewrite = prev
 
 
 def build_agent_llm(config) -> LLM:
@@ -108,14 +95,16 @@ class QuerySkill:
 
     def _retrieve(self, search_q: str):
         retrieve = self.dhmf.retrieve_module
-        kw = {}
+        kw = {
+            # 参数级关闭 retrieve 侧改写，避免改共享 config（多线程安全）
+            'enable_query_rewrite': False,
+        }
         if self.cfg.chunk_candidate_k is not None:
             kw['chunk_candidate_k'] = int(self.cfg.chunk_candidate_k)
         if self.cfg.node_candidate_k is not None:
             kw['node_candidate_k'] = int(self.cfg.node_candidate_k)
 
-        with _suppress_retrieve_rewrite(retrieve):
-            items = retrieve.retrive_items(search_q, **kw)
+        items = retrieve.retrive_items(search_q, **kw)
         return items, retrieve._format_retrieved_chunks(items)
 
     @staticmethod

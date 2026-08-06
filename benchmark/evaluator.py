@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -20,6 +22,11 @@ from .utils import (
     safe_div,
     truncate_text,
 )
+
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:  # pragma: no cover
+    _tqdm = None
 
 # llm-acc 仅二分类
 JUDGMENT_LABELS = ("正确", "错误")
@@ -74,6 +81,7 @@ class QueryEvaluator:
         max_source_chars: int = -1,
         sleep_between: float = 0.0,
         enable_doc_recall: bool = True,
+        num_thread: int = 1,
     ):
         self.dhmf = dhmf
         self.judge_llm = judge_llm or getattr(dhmf, "llmmodel", None)
@@ -101,6 +109,11 @@ class QueryEvaluator:
         self.max_source_chars = int(max_source_chars)
         self.sleep_between = float(sleep_between)
         self.enable_doc_recall = bool(enable_doc_recall)
+        try:
+            nt = int(num_thread)
+        except (TypeError, ValueError):
+            nt = 1
+        self.num_thread = max(1, nt)
 
     # ------------------------------------------------------------------
     # query dispatch
@@ -273,87 +286,90 @@ class QueryEvaluator:
             "metrics": {},
         }
 
-        if not question.strip():
-            result["query_error"] = "empty question"
-            return result
-
-        t0 = time.perf_counter()
-        quiet_names = ["DHMF"]
         try:
-            if getattr(self.dhmf, "logger", None) is not None:
-                quiet_names.append(self.dhmf.logger.name)
-        except Exception:
-            pass
-        try:
-            with quiet_loggers(*quiet_names, level=40):
-                respond = self._run_query(question)
-        except Exception as e:
-            result["query_error"] = str(e)
-            result["metrics"]["total_latency_s"] = time.perf_counter() - t0
-            return result
+            if not question.strip():
+                result["query_error"] = "empty question"
+                return result
 
-        if not isinstance(respond, dict):
-            result["query_error"] = f"unexpected respond type: {type(respond)}"
-            result["rag_answer"] = str(respond)
-            return result
-
-        result["query_status"] = respond.get("status", 0)
-        result["rag_raw_answer"] = respond.get("answer") or ""
-        result["rag_answer"] = self._extract_answer_text(respond)
-        result["retrieval_sources"] = list(respond.get("retrieval_sources") or [])
-        result["retrieval_doc_ids"] = list(respond.get("retrieval_doc_ids") or [])
-
-        if result["query_status"] != 1:
-            result["query_error"] = (
-                result["query_error"]
-                or f"query status={result['query_status']}: "
-                f"{str(result['rag_raw_answer'])[:200]}"
-            )
-
-        pt = respond.get("usage_prompt_tokens")
-        ct = respond.get("usage_completion_tokens")
-        tt = respond.get("usage_total_tokens")
-        if tt is None and pt is not None and ct is not None:
+            t0 = time.perf_counter()
+            quiet_names = ["DHMF"]
             try:
-                tt = int(pt) + int(ct)
+                if getattr(self.dhmf, "logger", None) is not None:
+                    quiet_names.append(self.dhmf.logger.name)
             except Exception:
-                tt = None
+                pass
+            try:
+                with quiet_loggers(*quiet_names, level=40):
+                    respond = self._run_query(question)
+            except Exception as e:
+                result["query_error"] = str(e)
+                result["metrics"]["total_latency_s"] = time.perf_counter() - t0
+                return result
 
-        result["metrics"] = {
-            "query_latency_s": respond.get("latency_s"),
-            "retrieve_latency_s": respond.get("retrieve_latency_s"),
-            "prompt_tokens": pt,
-            "completion_tokens": ct,
-            "total_tokens": tt,
-            "wall_latency_s": time.perf_counter() - t0,
-        }
+            if not isinstance(respond, dict):
+                result["query_error"] = f"unexpected respond type: {type(respond)}"
+                result["rag_answer"] = str(respond)
+                return result
 
-        # 文档召回：命中 gold 数 / gold 总数（可关闭）
-        if self.enable_doc_recall:
-            result["recall"] = self._compute_recall(
-                expected_names, result["retrieval_sources"]
+            result["query_status"] = respond.get("status", 0)
+            result["rag_raw_answer"] = respond.get("answer") or ""
+            result["rag_answer"] = self._extract_answer_text(respond)
+            result["retrieval_sources"] = list(respond.get("retrieval_sources") or [])
+            result["retrieval_doc_ids"] = list(respond.get("retrieval_doc_ids") or [])
+
+            if result["query_status"] != 1:
+                result["query_error"] = (
+                    result["query_error"]
+                    or f"query status={result['query_status']}: "
+                    f"{str(result['rag_raw_answer'])[:200]}"
+                )
+
+            pt = respond.get("usage_prompt_tokens")
+            ct = respond.get("usage_completion_tokens")
+            tt = respond.get("usage_total_tokens")
+            if tt is None and pt is not None and ct is not None:
+                try:
+                    tt = int(pt) + int(ct)
+                except Exception:
+                    tt = None
+
+            result["metrics"] = {
+                "query_latency_s": respond.get("latency_s"),
+                "retrieve_latency_s": respond.get("retrieve_latency_s"),
+                "prompt_tokens": pt,
+                "completion_tokens": ct,
+                "total_tokens": tt,
+                "wall_latency_s": time.perf_counter() - t0,
+            }
+
+            # 文档召回：命中 gold 数 / gold 总数（可关闭）
+            if self.enable_doc_recall:
+                result["recall"] = self._compute_recall(
+                    expected_names, result["retrieval_sources"]
+                )
+            else:
+                result["recall"] = None
+
+            # LLM 评判：问题 + 标准答案 + 全部完整文档 + RAG 回答
+            judge = self._judge_one(
+                question=question,
+                ground_truth_answer=result["ground_truth_answer"],
+                source_docs=item.get("source_docs") or [],
+                rag_answer=result["rag_answer"] or result["rag_raw_answer"],
             )
-        else:
-            result["recall"] = None
-
-        # LLM 评判：问题 + 标准答案 + 全部完整文档 + RAG 回答
-        judge = self._judge_one(
-            question=question,
-            ground_truth_answer=result["ground_truth_answer"],
-            source_docs=item.get("source_docs") or [],
-            rag_answer=result["rag_answer"] or result["rag_raw_answer"],
-        )
-        result["llm_acc"] = judge.get("llm_acc")
-        result["judge_reason"] = judge.get("judge_reason")
-        result["judge_status"] = judge.get("judge_status")
-        result["judge_error"] = judge.get("judge_error")
-        result["metrics"]["judge_latency_s"] = judge.get("judge_latency_s")
-        ju = judge.get("judge_usage") or {}
-        result["metrics"]["judge_prompt_tokens"] = ju.get("prompt_tokens")
-        result["metrics"]["judge_completion_tokens"] = ju.get("completion_tokens")
-        result["metrics"]["judge_total_tokens"] = ju.get("total_tokens")
-
-        return result
+            result["llm_acc"] = judge.get("llm_acc")
+            result["judge_reason"] = judge.get("judge_reason")
+            result["judge_status"] = judge.get("judge_status")
+            result["judge_error"] = judge.get("judge_error")
+            result["metrics"]["judge_latency_s"] = judge.get("judge_latency_s")
+            ju = judge.get("judge_usage") or {}
+            result["metrics"]["judge_prompt_tokens"] = ju.get("prompt_tokens")
+            result["metrics"]["judge_completion_tokens"] = ju.get("completion_tokens")
+            result["metrics"]["judge_total_tokens"] = ju.get("total_tokens")
+            return result
+        finally:
+            if self.sleep_between > 0:
+                time.sleep(self.sleep_between)
 
     @staticmethod
     def _is_eval_failure(r: Dict[str, Any]) -> bool:
@@ -423,6 +439,16 @@ class QueryEvaluator:
             "summary": summary,
         }
 
+    def _log_eval_failure(self, r: Dict[str, Any]) -> None:
+        parts = [f"评测 {r.get('id')}"]
+        if r.get("query_error"):
+            parts.append(f"query={r['query_error'][:160]}")
+        if r.get("judge_error"):
+            parts.append(f"judge={r['judge_error'][:160]}")
+        if r.get("query_status") == 0 and not r.get("query_error"):
+            parts.append("query_status=0")
+        fail_print(" | ".join(parts))
+
     def evaluate_all(
         self,
         dataset: Dict[str, Any],
@@ -430,11 +456,12 @@ class QueryEvaluator:
         on_progress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
-        逐题评测。
+        批量评测（num_thread>1 时并行 query+judge）。
 
         on_progress:
           可选回调 ``on_progress(report, index, total)``。
           每评完一题调用一次（含增量 summary），便于实时落盘。
+          多线程时按完成顺序触发；results 始终按原题序。
         """
         questions = list(dataset.get("questions") or [])
         items = [
@@ -444,58 +471,133 @@ class QueryEvaluator:
         if skipped:
             fail_print(f"评测跳过 {skipped} 条生成失败/空问题的样本")
 
-        results: List[Dict[str, Any]] = []
-        fail_n = 0
         total = len(items)
+        workers = min(self.num_thread, max(1, total))
         t0 = time.perf_counter()
         created_at = datetime.now().isoformat(timespec="seconds")
+        results: List[Optional[Dict[str, Any]]] = [None] * total
+        fail_n = 0
+        done_n = 0
 
-        pbar = progress_iter(items, total=total, desc="评测问答", unit="题")
-        for item in pbar:
-            r = self.evaluate_one(item)
-            results.append(r)
-
+        def _on_item(r: Dict[str, Any]) -> None:
+            nonlocal fail_n, done_n
+            done_n += 1
             if self._is_eval_failure(r):
                 fail_n += 1
-                parts = [f"评测 {r.get('id')}"]
-                if r.get("query_error"):
-                    parts.append(f"query={r['query_error'][:160]}")
-                if r.get("judge_error"):
-                    parts.append(f"judge={r['judge_error'][:160]}")
-                if r.get("query_status") == 0 and not r.get("query_error"):
-                    parts.append("query_status=0")
-                fail_print(" | ".join(parts))
-            if hasattr(pbar, "set_postfix"):
-                ok_n = sum(1 for x in results if x.get("llm_acc") == "正确")
-                pbar.set_postfix(fail=fail_n, ok=ok_n, refresh=False)
+                self._log_eval_failure(r)
 
-            if on_progress is not None:
-                mid = self._make_report(
-                    dataset=dataset,
-                    results=results,
-                    skipped=skipped,
-                    t0=t0,
-                    created_at=created_at,
-                    done=False,
+        def _emit_progress() -> None:
+            if on_progress is None:
+                return
+            done_results = [r for r in results if r is not None]
+            mid = self._make_report(
+                dataset=dataset,
+                results=done_results,
+                skipped=skipped,
+                t0=t0,
+                created_at=created_at,
+                done=False,
+            )
+            mid["meta"]["n_total_planned"] = total
+            mid["meta"]["num_thread"] = workers
+            try:
+                on_progress(mid, len(done_results), total)
+            except Exception as e:
+                fail_print(f"on_progress 保存失败: {e}")
+
+        if workers <= 1:
+            pbar = progress_iter(items, total=total, desc="评测问答", unit="题")
+            for idx, item in enumerate(pbar):
+                r = self.evaluate_one(item)
+                results[idx] = r
+                _on_item(r)
+                if hasattr(pbar, "set_postfix"):
+                    ok_n = sum(
+                        1 for x in results if x is not None and x.get("llm_acc") == "正确"
+                    )
+                    pbar.set_postfix(fail=fail_n, ok=ok_n, thr=1, refresh=False)
+                _emit_progress()
+        else:
+            if _tqdm is not None:
+                pbar = _tqdm(
+                    total=total,
+                    desc=f"评测问答×{workers}",
+                    unit="题",
+                    file=sys.stderr,
+                    dynamic_ncols=True,
+                    leave=True,
+                    mininterval=0.2,
                 )
-                mid["meta"]["n_total_planned"] = total
-                try:
-                    on_progress(mid, len(results), total)
-                except Exception as e:
-                    fail_print(f"on_progress 保存失败: {e}")
+            else:
+                pbar = None
 
-            if self.sleep_between > 0:
-                time.sleep(self.sleep_between)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                fut_to_idx = {
+                    pool.submit(self.evaluate_one, item): idx
+                    for idx, item in enumerate(items)
+                }
+                for fut in as_completed(fut_to_idx):
+                    idx = fut_to_idx[fut]
+                    try:
+                        r = fut.result()
+                    except Exception as e:
+                        item = items[idx]
+                        r = {
+                            "id": item.get("id") or f"idx_{idx}",
+                            "hop": item.get("hop"),
+                            "question": item.get("question") or "",
+                            "ground_truth_answer": item.get("ground_truth_answer") or "",
+                            "explanation": item.get("explanation") or "",
+                            "source_names": list(item.get("source_names") or []),
+                            "rag_answer": "",
+                            "rag_raw_answer": "",
+                            "query_status": 0,
+                            "query_error": f"worker exception: {e}",
+                            "retrieval_sources": [],
+                            "retrieval_doc_ids": [],
+                            "recall": None,
+                            "llm_acc": None,
+                            "judge_reason": "",
+                            "metrics": {},
+                        }
+                    results[idx] = r
+                    _on_item(r)
+                    if pbar is not None:
+                        ok_n = sum(
+                            1
+                            for x in results
+                            if x is not None and x.get("llm_acc") == "正确"
+                        )
+                        pbar.update(1)
+                        pbar.set_postfix(
+                            fail=fail_n, ok=ok_n, thr=workers, refresh=False
+                        )
+                    else:
+                        print(
+                            f"\r评测问答×{workers}: {done_n}/{total} "
+                            f"ok={done_n - fail_n} fail={fail_n}",
+                            end="",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    _emit_progress()
 
+            if pbar is not None:
+                pbar.close()
+            elif total:
+                print(file=sys.stderr)
+
+        out_results: List[Dict[str, Any]] = [r for r in results if r is not None]
         report = self._make_report(
             dataset=dataset,
-            results=results,
+            results=out_results,
             skipped=skipped,
             t0=t0,
             created_at=created_at,
             done=True,
         )
         report["meta"]["n_total_planned"] = total
+        report["meta"]["num_thread"] = workers
         return report
 
     @staticmethod

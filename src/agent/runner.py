@@ -7,11 +7,9 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 from .graph import build_agent_graph
-from .notebook import Notebook
 from .nodes import AgentContext
 from .skill import QuerySkill, build_agent_llm
 from .state import (
@@ -77,7 +75,8 @@ def run_agent_query(
     pretty: bool = False,
 ) -> Union[dict, str]:
     """
-    规划依赖步骤图 → 按就绪序 query_skill → 汇总 → 清空记事本。
+    规划依赖步骤图 → 按就绪序 query_skill → 汇总。
+    状态仅在 LangGraph 内存 state 中传递；线程安全（无共享记事本）。
     返回 dict 字段与 DHMF.query 对齐，并含 plan / steps。
     """
     config    = dhmf.config
@@ -89,9 +88,7 @@ def run_agent_query(
     logger   = dhmf.logger
     llm      = build_agent_llm(config)
     skill    = QuerySkill(dhmf, agent_cfg, llm, logger=logger)
-    nb_name  = (getattr(agent_cfg, 'notebook_path', None) or 'agent_scratchpad.md').strip() or 'agent_scratchpad.md'
-    notebook = Notebook(Path(config.settings.working_path) / nb_name)
-    ctx      = AgentContext(cfg=agent_cfg, llm=llm, skill=skill, notebook=notebook, logger=logger)
+    ctx      = AgentContext(cfg=agent_cfg, llm=llm, skill=skill, logger=logger)
     graph    = build_agent_graph(ctx)
 
     t0 = time.perf_counter()
@@ -113,11 +110,6 @@ def run_agent_query(
             'retrieval_sources': [], 'retrieval_doc_ids': [],
         }
         return _format_pretty(err, query=query or '', plan=[], results={}) if pretty else err
-    finally:
-        try:
-            notebook.clear()
-        except Exception as ce:
-            logger.warning(f'[agent_query] notebook clear failed: {ce}')
 
     plan: List[PlanStep]           = list(final.get('plan') or [])
     results: Dict[str, StepResult] = dict(final.get('results') or {})

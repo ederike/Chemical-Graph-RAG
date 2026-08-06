@@ -233,17 +233,24 @@ class Retrieve(BaseRetrieve):
             model_args['enable_thinking'] = False
         return model_args
 
-    def rewrite_query(self, query: str) -> str:
+    def rewrite_query(self, query: str, *, enabled: bool | None = None) -> str:
         """
         将用户查询改写得更具体，利于向量检索。
         失败时回退原文。
+
+        enabled:
+          None  → 读 config.retrieve.enable_query_rewrite
+          True/False → 本次调用覆盖配置（不改共享 config，多线程安全）
         """
         original = (query or '').strip()
         self.last_rewrite = {'original': original, 'rewritten': original}
         if not original:
             return original
 
-        enable = bool(getattr(self.config.retrieve, 'enable_query_rewrite', True))
+        if enabled is None:
+            enable = bool(getattr(self.config.retrieve, 'enable_query_rewrite', True))
+        else:
+            enable = bool(enabled)
         if not enable:
             return original
 
@@ -974,9 +981,12 @@ class Retrieve(BaseRetrieve):
         query,
         chunk_candidate_k=None,
         node_candidate_k=None,
+        enable_query_rewrite=None,
     ) -> list:
         """
         查询改写 → 双路各自 topk 截取 → 合并扩展去重 → 文档级重排(top_k) → 上下文。
+
+        enable_query_rewrite: None 用配置；True/False 仅本次覆盖（不改共享 config）。
         """
         t_all = time.perf_counter()
         self._ensure_precompute()
@@ -1001,9 +1011,9 @@ class Retrieve(BaseRetrieve):
             getattr(self.config.retrieve, 'enable_rerank', False)
         )
 
-        # 0) 查询改写
+        # 0) 查询改写（参数覆盖不写 config，多线程安全）
         t0 = time.perf_counter()
-        rewritten = self.rewrite_query(query)
+        rewritten = self.rewrite_query(query, enabled=enable_query_rewrite)
         t_rewrite = time.perf_counter() - t0
 
         # 1) 对改写查询做一次 embedding，两路共用

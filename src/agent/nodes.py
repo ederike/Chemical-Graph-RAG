@@ -1,7 +1,7 @@
 """
 LangGraph 节点：plan → execute ⟲ → synthesize。
 
-依赖经 AgentContext 注入；节点只做编排，解析/调度工具在 state。
+依赖经 AgentContext 注入；节点只做编排，状态在 LangGraph state 中传递。
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from typing import Any, Dict, List
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig
-from .notebook import Notebook
 from .prompts import Agent_PROMPT
 from .skill import QuerySkill
 from .state import (
@@ -42,7 +41,6 @@ class AgentContext:
     cfg: AgentConfig
     llm: LLM
     skill: QuerySkill
-    notebook: Notebook
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger(__name__))
 
     def chat(self, system: str, user: str) -> Any:
@@ -72,7 +70,6 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
         f'[agent.plan] steps={len(steps)} '
         + ' | '.join(f"{s['id']}:{s['question'][:40]}" for s in steps)
     )
-    ctx.notebook.sync(query=query, plan=steps, results={})
     return {'plan': steps, 'results': {}, 'error': ''}
 
 
@@ -134,7 +131,6 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
             resp=resp,
             latency_s=time.perf_counter() - t0,
         )
-        ctx.notebook.sync(query=query, plan=plan, results=results)
 
     return {'results': results}
 
@@ -163,7 +159,6 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
             'retrieve_latency_s':      r.get('retrieve_latency_s'),
             'retrieval_sources':       list(r.get('sources') or []),
         }
-        ctx.notebook.sync(query=query, plan=plan, results=results, final_answer=answer)
         return {'final_answer': answer, 'final_status': respond['status'], 'respond': respond}
 
     resp = ctx.chat(
@@ -179,7 +174,6 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
     resp['retrieval_sources']  = merge_sources(plan, results)
     resp['retrieve_latency_s'] = sum_retrieve_latency(plan, results)
 
-    ctx.notebook.sync(query=query, plan=plan, results=results, final_answer=answer)
     return {
         'final_answer': answer,
         'final_status': int(resp.get('status') or 0),

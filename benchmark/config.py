@@ -245,6 +245,7 @@ class BenchmarkConfig:
     max_source_chars: int = -1
     eval_max_retries: int = 3
     eval_sleep_between: float = 0.0
+    eval_num_thread: int = 1  # 评测并行线程；1 = 串行（agent/dual_path 均可）
     eval_use_cache: bool = False
     dhmf_retrieve_use_cache: Optional[bool] = None
     judge_api_key: Optional[str] = None
@@ -339,6 +340,7 @@ class BenchmarkConfig:
             ),
             eval_max_retries=int(ev.get("max_retries", 3)),
             eval_sleep_between=float(ev.get("sleep_between", 0.0)),
+            eval_num_thread=max(1, int(ev.get("num_thread", 1) or 1)),
             eval_use_cache=bool(ev.get("use_cache", False)),
             dhmf_retrieve_use_cache=_opt_bool(ev.get("dhmf_retrieve_use_cache")),
             judge_api_key=_opt_str(ev.get("api_key")),
@@ -432,6 +434,7 @@ class BenchmarkConfig:
             "seed": self.seed,
             "question_gen_prompt": self.question_gen_prompt,
             "enable_doc_recall": self.enable_doc_recall,
+            "eval_num_thread": self.eval_num_thread,
             "gen_model": (self.gen_model_args or {}).get("model"),
             "judge_model": (self.judge_model_args or {}).get("model"),
         }

@@ -330,15 +330,13 @@ class AgentConfig(BaseModel):
     use_cache: bool = True
     # 规划步骤数上限
     max_steps: int = 12
-    # 相对 settings.working_path 的临时步骤记事本文件名
-    notebook_path: str = 'agent_scratchpad.md'
     # 单跳 skill 检索前是否用 agent LLM 改写（不走 retrieve 改写配置）
     enable_query_rewrite: bool = False
     # 检索宽度；None 时沿用 retrieve.chunk_candidate_k / node_candidate_k
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
 
-    @field_validator("api_key", "base_url", "notebook_path", mode="before")
+    @field_validator("api_key", "base_url", mode="before")
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
