@@ -2,22 +2,24 @@ from src.DHMF import DHMF
 from src.utils.config import Config
 import time 
 import json
+from benchmark.config import DEFAULT_CONFIG_PATH
+from benchmark.workflow import TestQueryWorkflow
 config = Config.from_yaml('example/a/config_open.yaml')
 
 ChemicalGraph = DHMF(config)
 
 # --- build pipeline ---
-# ChemicalGraph.insert_clear()
-# ChemicalGraph.chunk_clear()
-# ChemicalGraph.extract_clear()
-# ChemicalGraph.build_clear()
+ChemicalGraph.insert_clear()
+ChemicalGraph.chunk_clear()
+ChemicalGraph.extract_clear()
+ChemicalGraph.build_clear()
 
-# ChemicalGraph.download_from_oss()
-# ChemicalGraph.insert_default()
-# ChemicalGraph.chunk()
-# ChemicalGraph.extract()
-# ChemicalGraph.build()
-# ChemicalGraph.vectorization()
+ChemicalGraph.download_from_oss()
+ChemicalGraph.insert_default()
+ChemicalGraph.chunk()
+ChemicalGraph.extract()
+ChemicalGraph.build()
+ChemicalGraph.vectorization()
 
 # ChemicalGraph.recommend()
 
@@ -37,12 +39,15 @@ ChemicalGraph = DHMF(config)
 
 
 # --- 多跳 Agent（配置见 config.agent）---
-print(ChemicalGraph.agent_query(
-    'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么？',
-    pretty=True,
-))
+# print(ChemicalGraph.agent_query(
+#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么？',
+#     pretty=True,
+# ))
 
 # print(ChemicalGraph.agent_query(
 #     '比较 ABS 722 与 Admex™ 6187 的用途有什么不同',
 #     pretty=True,
 # ))
+
+wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
+wf.run()

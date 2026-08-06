@@ -238,19 +238,69 @@ class DHMF:
         Pre-insert: PDF under working_path/doc → images → vision recognition → doc table.
         Each PDF becomes one independent document (texts are not mixed).
 
+        按 doc.flush_every 分批：识别一批 → 入库一批，避免 2000 份全文同时驻留内存。
+
         skip_existing: skip files already present in doc table (default True),
                        so re-run will not re-recognize or re-insert them.
         """
         self.begin_build()
         self.logger.info("Start PDF recognition before insert (source: working_path/doc).")
-        doc_list = self.doc_module.prepare_from_pdfs(
-            pdf_paths=pdf_paths,
-            skip_existing=skip_existing,
-        )
-        if not doc_list:
+
+        if pdf_paths is None:
+            all_pdfs = self.doc_module.list_pdf_files()
+        else:
+            from pathlib import Path as _Path
+            all_pdfs = [_Path(p) for p in pdf_paths]
+
+        if skip_existing:
+            existing = self.doc_module.get_existing_doc_names()
+            to_process = [p for p in all_pdfs if p.name not in existing]
+            skipped = len(all_pdfs) - len(to_process)
+            if skipped:
+                self.logger.info(
+                    f"Skip {skipped} PDF(s) already in doc table before batched recognize."
+                )
+        else:
+            to_process = list(all_pdfs)
+
+        if not to_process:
             self.logger.info("No new documents to insert (all skipped or empty).")
             return
-        self.insert(doc_list)
+
+        try:
+            flush_every = int(getattr(self.config.doc, 'flush_every', 1000) or 1000)
+        except (TypeError, ValueError):
+            flush_every = 1000
+        flush_every = max(1, flush_every)
+
+        total_inserted = 0
+        n_batches = (len(to_process) + flush_every - 1) // flush_every
+        self.logger.info(
+            f"PDF recognize+insert batched: files={len(to_process)} "
+            f"flush_every={flush_every} batches={n_batches}"
+        )
+        for bi in range(0, len(to_process), flush_every):
+            batch = to_process[bi: bi + flush_every]
+            batch_i = bi // flush_every + 1
+            self.logger.info(
+                f"PDF batch {batch_i}/{n_batches}: recognize {len(batch)} file(s)"
+            )
+            # 批次内不再二次 skip（外层已过滤）；metrics 仍由 prepare_from_pdfs 汇总
+            doc_list = self.doc_module.prepare_from_pdfs(
+                pdf_paths=batch,
+                skip_existing=False,
+            )
+            if not doc_list:
+                self.logger.warning(
+                    f"PDF batch {batch_i}/{n_batches}: no recognized docs"
+                )
+                continue
+            self.insert(doc_list)
+            total_inserted += len(doc_list)
+        self.logger.info(
+            f"Finish PDF recognize+insert: batches={n_batches} "
+            f"inserted≈{total_inserted}"
+        )
 
     def insert(self, doc_list):
         """

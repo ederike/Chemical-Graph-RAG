@@ -11,11 +11,11 @@ class BaseVectorization:
     def __init__(self,logger:logging.Logger,config:Config):
         self.config = config
         self.logger = logger
-        # 边嵌边写批量：config.vectorization.flush_every（默认 500）
+        # 边嵌边写批量：config.vectorization.flush_every（默认 1000）
         try:
-            fe = int(getattr(config.vectorization, 'flush_every', 500) or 500)
+            fe = int(getattr(config.vectorization, 'flush_every', 1000) or 1000)
         except (TypeError, ValueError):
-            fe = 500
+            fe = 1000
         self.flush_every = max(1, fe)
         self._buffer_lock = threading.Lock()
         self._flushed_count = 0

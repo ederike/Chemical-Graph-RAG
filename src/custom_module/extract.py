@@ -197,7 +197,8 @@ class Extract(BaseExtract):
                 'status': 'extract',
                 'extra': json.dumps(extra, ensure_ascii=False),
             }
-            self.chunk_db.buffer.append(updata_chunk)
+            # 线程安全分批落库
+            self._push_chunk_update(updata_chunk)
         except Exception as e:
             # Retry 耗尽后静默返回 None；这里打出原因，避免只见 attempt 日志
             level = self.logger.warning if attempt >= max_attempt else self.logger.debug

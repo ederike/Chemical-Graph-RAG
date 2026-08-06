@@ -574,6 +574,7 @@ class Doc(BaseDoc):
             add_doc['tokens'] = len(self.tokener.encode(text))
 
         self.doc_db.buffer.append(add_doc)
+        self._maybe_flush()
 
     def prepare(self, doc_list):
         """Filter out already-inserted docs before buffering."""
@@ -587,6 +588,7 @@ class Doc(BaseDoc):
             filtered.append(item)
         self.tasks = filtered
         self.doc_db.buffer_clear()
+        self._flushed_count = 0
         self.logger.debug(
             f"Number of documents to insert: {len(self.tasks)} "
             f"(filtered from {len(doc_list)})"

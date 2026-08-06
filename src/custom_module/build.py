@@ -171,11 +171,18 @@ class Build(BaseBuild):
                 extra=f'chunks={len(chunks)} entities≈{entity_count}',
                 log=False,
             )
+        # 整文档处理完后再判断分批落库，避免同一 doc 的 node/超边被拆批
+        self._maybe_flush()
 
     def processing(self):
-        """按文档聚合：一头块一超边，全块抽节点。"""
+        """按文档聚合：一头块一超边，全块抽节点；按 flush_every 分批写库。"""
         self.hyperedge_id_temp = 0
         self._doc_he_temp = {}
+        self._flushed_count = 0
+        self.hyperedge_db.buffer_clear()
+        self.node_db.buffer_clear()
+        self.edge_db.buffer_clear()
+        self.chunk_db.buffer_clear()
 
         by_doc = defaultdict(list)
         for task in self.tasks:

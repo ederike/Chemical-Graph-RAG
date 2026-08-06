@@ -246,3 +246,5 @@ class Chunk(BaseChunk):
                 extra=f'n_chunks={len(pieces)} head=1 body={max(0, len(pieces)-1)}',
                 log=False,
             )
+        # 按 chunk 行数分批落库（满 flush_every 写一次）
+        self._maybe_flush()

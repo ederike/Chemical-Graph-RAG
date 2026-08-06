@@ -96,11 +96,29 @@ class DocRecognitionConfig(BaseModel):
         return _none_to_empty(v)
 
 
+def _coerce_flush_every(v, default: int = 1000) -> int:
+    """每处理多少条落盘一次；<=0 时回落到 default。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return max(1, int(default))
+    if n <= 0:
+        return max(1, int(default))
+    return n
+
+
 class DocConfig(BaseModel):
     count_token: bool = True
     source_type: str = 'pdf'
     doc_dir: str = 'doc'
     recognition: DocRecognitionConfig = Field(default_factory=DocRecognitionConfig)
+    # 入库 / 识别分批：每 N 条 doc 写库（防一次性攒爆内存）
+    flush_every: int = 1000
+
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 1000)
 
 
 class ChunkConfig(BaseModel):
@@ -109,6 +127,8 @@ class ChunkConfig(BaseModel):
     chunk_size_max: int = 512
     force_single_chunk: bool = True
     chunk_overlap: float = 0.1
+    # 切块分批：chunk 行累计达 N 条则写库
+    flush_every: int = 1000
 
     @field_validator("chunk_overlap", mode="before")
     @classmethod
@@ -123,6 +143,11 @@ class ChunkConfig(BaseModel):
             x = x / 100.0
         return max(0.0, min(x, 0.9))
 
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 1000)
+
 
 class ExtractConfig(BaseModel):
     # Empty → fall back to settings
@@ -136,6 +161,8 @@ class ExtractConfig(BaseModel):
     extract_prompt: str = 'extract'
     use_cache: bool = True
     num_thread: int = 1
+    # 抽取分批：chunk 更新累计达 N 条则写库
+    flush_every: int = 1000
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
     )
@@ -145,11 +172,23 @@ class ExtractConfig(BaseModel):
     def _coerce_str(cls, v):
         return _none_to_empty(v)
 
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 1000)
+
 
 class BuildConfig(BaseModel):
     target: List[str] = Field(default_factory=list)
     # hyperedge.content uses full chunk text instead of extract.knowledge
     hyperedge_use_full_chunk: bool = True
+    # 构图分批：node+hyperedge+edge 累计达 N 条则写库
+    flush_every: int = 1000
+
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 1000)
 
 
 class VectorizationConfig(BaseModel):
@@ -162,10 +201,15 @@ class VectorizationConfig(BaseModel):
     use_cache: bool = True
     num_thread: int = 1
     # 边嵌边写：每处理 N 条就刷 FAISS + SQLite（防 OOM）；与 embedding 缓存无关
-    flush_every: int = 500
+    flush_every: int = 1000
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
     )
+
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 1000)
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
