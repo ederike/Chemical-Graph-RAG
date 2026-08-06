@@ -273,6 +273,7 @@ class TestQueryWorkflow:
             max_retries=self.cfg.gen_max_retries,
             sleep_between=self.cfg.gen_sleep_between,
             num_thread=self.cfg.gen_num_thread,
+            question_gen_prompt=self.cfg.question_gen_prompt,
         )
         dataset = gen.generate_all()
         dataset.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()

@@ -20,6 +20,54 @@ from .utils import parse_hop_spec, project_root, resolve_path
 
 DEFAULT_CONFIG_PATH = "benchmark/config.yaml"
 
+# generate.question_gen_prompt 别名（小写）→ Benchmark_PROMPT 键
+_QUESTION_GEN_PROMPT_ALIASES = {
+    "default": "QUESTION_GEN_USER",
+    "standard": "QUESTION_GEN_USER",
+    "user": "QUESTION_GEN_USER",
+    "fuzzy": "QUESTION_GEN_Fuzzy_Matching",
+    "fuzzy_matching": "QUESTION_GEN_Fuzzy_Matching",
+}
+
+
+def _normalize_question_gen_prompt(name: Any) -> str:
+    """解析 generate.question_gen_prompt 为 Benchmark_PROMPT 中的键名。"""
+    from .prompts import Benchmark_PROMPT
+
+    raw = str(name or "QUESTION_GEN_USER").strip()
+    if not raw:
+        raw = "QUESTION_GEN_USER"
+
+    def _user_prompt_keys():
+        return sorted(
+            k
+            for k in Benchmark_PROMPT
+            if k.startswith("QUESTION_GEN") and k != "QUESTION_GEN_SYSTEM"
+        )
+
+    # 精确匹配已有 user 出题键
+    if raw in Benchmark_PROMPT and raw != "QUESTION_GEN_SYSTEM" and raw.startswith(
+        "QUESTION_GEN"
+    ):
+        return raw
+
+    key = _QUESTION_GEN_PROMPT_ALIASES.get(raw.lower().replace("-", "_"))
+    if key is not None:
+        return key
+
+    # 大小写不敏感匹配 QUESTION_GEN_* 出题键
+    lower_map = {k.lower(): k for k in _user_prompt_keys()}
+    hit = lower_map.get(raw.lower())
+    if hit is not None:
+        return hit
+
+    raise ValueError(
+        f"Unknown generate.question_gen_prompt={name!r}. "
+        f"Supported keys: {_user_prompt_keys()}; "
+        f"aliases: default/standard/user, fuzzy/fuzzy_matching"
+    )
+
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
     out = deepcopy(base) if base else {}
@@ -185,6 +233,8 @@ class BenchmarkConfig:
     gen_sleep_between: float = 0.0
     gen_num_thread: int = 4  # 出题并行线程数；1 = 串行
     gen_use_cache: bool = False
+    # 出题 user prompt 键名（见 benchmark/prompts.Benchmark_PROMPT）
+    question_gen_prompt: str = "QUESTION_GEN_USER"
     gen_api_key: Optional[str] = None
     gen_base_url: Optional[str] = None
     gen_timeout: float = 180.0
@@ -276,6 +326,9 @@ class BenchmarkConfig:
             gen_sleep_between=float(gen.get("sleep_between", 0.0)),
             gen_num_thread=max(1, int(gen.get("num_thread", 4) or 4)),
             gen_use_cache=bool(gen.get("use_cache", False)),
+            question_gen_prompt=_normalize_question_gen_prompt(
+                gen.get("question_gen_prompt") or "QUESTION_GEN_USER"
+            ),
             gen_api_key=_opt_str(gen.get("api_key")),
             gen_base_url=_opt_str(gen.get("base_url")),
             gen_timeout=float(gen.get("timeout", 180)),
@@ -377,6 +430,7 @@ class BenchmarkConfig:
             "db_path": self.db_path,
             "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
             "seed": self.seed,
+            "question_gen_prompt": self.question_gen_prompt,
             "enable_doc_recall": self.enable_doc_recall,
             "gen_model": (self.gen_model_args or {}).get("model"),
             "judge_model": (self.judge_model_args or {}).get("model"),

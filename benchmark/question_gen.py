@@ -53,6 +53,7 @@ class QuestionGenerator:
         max_retries: int = 3,
         sleep_between: float = 0.0,
         num_thread: int = 1,
+        question_gen_prompt: str = "QUESTION_GEN_USER",
     ):
         self.llm = llm
         self.model_args = dict(model_args or {})
@@ -76,9 +77,30 @@ class QuestionGenerator:
         except (TypeError, ValueError):
             nt = 1
         self.num_thread = max(1, nt)
+        self.question_gen_prompt = self._resolve_prompt_key(question_gen_prompt)
 
         self._rng = random.Random(self.seed)
         self.docs: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _resolve_prompt_key(name: str) -> str:
+        """校验并返回 Benchmark_PROMPT 中的出题 user prompt 键。"""
+        key = str(name or "QUESTION_GEN_USER").strip() or "QUESTION_GEN_USER"
+        if key not in Benchmark_PROMPT:
+            allowed = sorted(
+                k
+                for k in Benchmark_PROMPT
+                if k.startswith("QUESTION_GEN") and k != "QUESTION_GEN_SYSTEM"
+            )
+            raise ValueError(
+                f"Unknown question_gen_prompt={name!r}. "
+                f"Available: {allowed}"
+            )
+        if key == "QUESTION_GEN_SYSTEM":
+            raise ValueError(
+                "question_gen_prompt 不能使用 QUESTION_GEN_SYSTEM（那是 system 提示）"
+            )
+        return key
 
     def load_docs(self, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
         path = db_path or self.db_path
@@ -102,7 +124,8 @@ class QuestionGenerator:
         return chosen[:n]
 
     def _build_user_prompt(self, hop: int, docs: Sequence[Dict[str, Any]]) -> str:
-        return Benchmark_PROMPT['QUESTION_GEN_USER'].format(
+        template = Benchmark_PROMPT[self.question_gen_prompt]
+        return template.format(
             hop=hop,
             n_docs=len(docs),
             docs_block=format_docs_block(docs, self.max_chars_per_doc),
@@ -307,6 +330,7 @@ class QuestionGenerator:
                 "db_path": self.db_path,
                 "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
                 "seed": self.seed,
+                "question_gen_prompt": self.question_gen_prompt,
                 "num_thread": workers,
                 "model": (self.model_args or {}).get("model"),
                 "total": len(out_questions),
