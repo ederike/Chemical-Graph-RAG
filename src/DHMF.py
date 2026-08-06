@@ -88,7 +88,7 @@ class DHMF:
         else:
             self.logger.setLevel(logging.INFO)
 
-        self.logger.debug(f"config: {self.config}")
+        # self.logger.debug(f"config: {self.config}")
         # Default LLM for dual-path answer: retrieve stage → settings
         from .utils.config import resolve_credentials
         api_key, base_url = resolve_credentials(self.config, self.config.retrieve)

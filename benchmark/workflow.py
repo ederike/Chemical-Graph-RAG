@@ -238,7 +238,7 @@ class TestQueryWorkflow:
         if "questions" not in data:
             raise ValueError(f"非法数据集（缺少 questions）: {path}")
         self._dataset = data
-        print(f"[loaded] questions <- {path}", file=sys.stderr)
+        # print(f"[loaded] questions <- {path}", file=sys.stderr)
         return data
 
     def load_eval_results(self, path: Union[str, Path]) -> Dict[str, Any]:
@@ -437,7 +437,7 @@ class TestQueryWorkflow:
         """
         mode = (self.cfg.run_mode or "all").strip().lower()
         print(
-            f"[benchmark] mode={mode} config={self.cfg.config_file}",
+            # f"[benchmark] mode={mode} config={self.cfg.config_file}",
             file=sys.stderr,
         )
         if mode == "generate":

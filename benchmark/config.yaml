@@ -15,17 +15,17 @@ paths:
   questions_path: null
 
   # evaluate 读入
-  eval_questions_filename: questions_all-easy_new-prompt.json
+  eval_questions_filename: questions_hop1_new-prompt.json
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: eval_report_all-easy_new-prompt_agent.json
+  eval_results_filename: questions_hop1_new-prompt_agent.json
   eval_results_path: null
 
   # report 读入
   report_source_filename: null
   report_source_path: null
   # report 写出
-  report_filename: report_all-easy_new-prompt_agent.json
+  report_filename: report_hop1_new-prompt_agent.json
   report_path: null
 
 generate:
@@ -38,7 +38,7 @@ generate:
   max_retries: 3
   sleep_between: 0.0
   num_thread: 20          #
-  use_cache: false
+  use_cache: True
   question_gen_prompt: QUESTION_GEN_Fuzzy_Matching
   api_key: null
   base_url: null
@@ -55,12 +55,12 @@ evaluate:
   max_source_chars: -1
   max_retries: 3
   sleep_between: 0.0
-  num_thread: 4
-  use_cache: false
+  num_thread: 3
+  use_cache: True
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
-  timeout: 180
+  timeout: 600
   model_args:
     model: null
     temperature: 0.0
