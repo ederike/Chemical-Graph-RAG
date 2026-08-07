@@ -7,7 +7,7 @@ PROMPT['pdf_recognize_system'] = (
 
 PROMPT['pdf_recognize'] = r'''
 你的任务是阅读当前这一页 PDF 页面图片，提取并描述本页全部可见信息。
-直接输出纯文本识别内容（不要 JSON、不要 Markdown 代码块、不要解释、不要前后缀）。
+直接输出纯文本识别内容。
 
 若对话历史中给出了「上一页识别结果」，仅用于衔接上下文（表格跨页、段落续写等），
 不要重复抄写上一页全文，只写本页新内容；本页看不清处可结合上下文合理衔接，禁止臆造。
@@ -26,8 +26,8 @@ PROMPT['pdf_recognize'] = r'''
 2. 禁止输出 JSON、禁止 ``` 代码围栏、禁止「如下所示」等空话
 3. 禁止编造本页（及给定上下文）中不存在的信息
 
-示例（假设本页写有 Product: Lithium Acetate Solution；CAS 546-89-4；Assay 22%–26%）：
-本页描述醋酸锂溶液 Lithium Acetate Solution。CAS 546-89-4。规格：Assay 22%–26%。
+示例（假设本页写有 Product: Lithium Acetate Solution；CAS: 546-89-4；Assay 22%–26%）：
+本页描述醋酸锂溶液 Lithium Acetate Solution。CAS号为546-89-4。规格是Assay 22%–26%。
 
 现在开始识别当前页图片，直接输出正文：
 '''
@@ -37,9 +37,9 @@ PROMPT['doc_summary_system'] = (
     '你是化工 / 材料产品技术资料的专业摘要助手，擅长从长篇识别正文中提炼可检索的产品名片。'
 )
 
-PROMPT['doc_summary'] = r'''
+PROMPT['doc_summary'] = '''
 你的任务是阅读下面这份文档的完整识别正文，输出一段「产品名片 / 关键信息总结」。
-直接输出纯文本总结（不要 JSON、不要 Markdown 代码块、不要解释、不要前后缀）。
+直接输出纯文本总结。
 
 总结须尽量覆盖（文档中有则写，无则跳过）：
 1. 产品名称 / 商品名 / 型号 / 货号 / 文件编号 / 批号

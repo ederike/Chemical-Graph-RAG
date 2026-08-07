@@ -105,17 +105,28 @@ class Doc(BaseDoc):
         dpi = self.config.doc.recognition.dpi
         zoom = dpi / 72.0
         matrix = fitz.Matrix(zoom, zoom)
-        images = []
+        # jpeg / jpg → jpeg；其它回落 png
+        fmt = str(
+            getattr(self.config.doc.recognition, 'image_format', 'jpeg') or 'jpeg'
+        ).lower()
+        if fmt in ('jpg', 'jpeg'):
+            fitz_fmt = 'jpeg'
+            mime = 'jpeg'
+        else:
+            fitz_fmt = 'png'
+            mime = 'png'
 
+        images = []
         doc = fitz.open(str(pdf_path))
         try:
             if doc.page_count <= 0:
                 raise ValueError(f"PDF has 0 pages: {pdf_path.name}")
             for page in doc:
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
-                img_bytes = pix.tobytes('png')
+                img_bytes = pix.tobytes(fitz_fmt)
                 b64 = base64.b64encode(img_bytes).decode('ascii')
-                images.append(b64)
+                # data-url 带正确 mime，避免下游一律按 png 解
+                images.append(f'data:image/{mime};base64,{b64}')
         finally:
             doc.close()
 
@@ -145,6 +156,8 @@ class Doc(BaseDoc):
             'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
             'prompt_hash': self._prompt_hash(),
             'pipeline': 'page_plain_text_v1',
+            'image_format': getattr(recog, 'image_format', 'jpeg'),
+            'prev_once': True,
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
@@ -171,6 +184,8 @@ class Doc(BaseDoc):
             'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
             'prompt_hash': self._prompt_hash(),
             'pipeline': 'page_plain_text_v1',
+            'image_format': getattr(recog, 'image_format', 'jpeg'),
+            'prev_once': True,
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
@@ -247,7 +262,7 @@ class Doc(BaseDoc):
     ):
         """
         Recognize one page image with VLM.
-        For page_idx > 0, multi-turn history carries only the previous page text.
+        中间页：上一页完整识别正文只拼进当前 user 文本一次（不截断、不 multi-turn 重复）。
         """
         attempt = int(kwargs.get('attempt', 1) or 1)
         max_attempt = int(kwargs.get('max_attempt', 1) or 1)
@@ -288,19 +303,12 @@ class Doc(BaseDoc):
         )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
 
-        history = None
+        # 中间页：上一页正文只拼一遍（写进当前 user 文本），不 multi-turn 重复
         if page_idx > 0 and prev_text:
-            # 仅携带上一页识别文本，不跨文件、不回传上一页图片
-            history = [
-                {
-                    'role': 'user',
-                    'content': '上一页图片的识别结果如下，供当前页衔接参考：\n' + prev_text,
-                },
-                {
-                    'role': 'assistant',
-                    'content': prev_text,
-                },
-            ]
+            user_prompt = (
+                f"{user_prompt}\n\n"
+                f"上一页图片的识别结果如下，供当前页衔接参考：\n{prev_text}"
+            )
 
         model_args = dict(recog.model_args or {})
         model_args.setdefault('enable_thinking', False)
@@ -315,7 +323,7 @@ class Doc(BaseDoc):
             prompt={'system': system_prompt, 'user': user_prompt},
             images=[image_b64],
             model_args=model_args,
-            history=history,
+            history=None,
         )
 
         if response.get('status') != 1:
@@ -334,7 +342,6 @@ class Doc(BaseDoc):
                 f"page {page_idx + 1}/{page_count} "
                 f"(attempt {attempt}/{max_attempt})"
             )
-
         cost = {
             'usage_prompt_tokens': response.get('usage_prompt_tokens'),
             'usage_completion_tokens': response.get('usage_completion_tokens'),

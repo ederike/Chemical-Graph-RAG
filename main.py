@@ -15,12 +15,12 @@ ChemicalGraph = DHMF(config)
 # ChemicalGraph.extract_clear()
 # ChemicalGraph.build_clear()
 
-ChemicalGraph.download_from_oss()
-ChemicalGraph.insert_default()   # 逐页 VLM 识别 → doc 全文
-ChemicalGraph.summary()          # 全文 LLM 总结 → hyperedge.content（可独立运行）
-ChemicalGraph.chunk()            # head=超边总结 + body_n=识别正文分块
+# ChemicalGraph.download_from_oss()
+ChemicalGraph.insert_default()   
+ChemicalGraph.summary()          
+ChemicalGraph.chunk()            
 ChemicalGraph.extract()
-ChemicalGraph.build()            # 绑定已有超边，建 node
+ChemicalGraph.build()            
 ChemicalGraph.vectorization()
 
 # ChemicalGraph.recommend()

@@ -87,7 +87,8 @@ class DocRecognitionConfig(BaseModel):
     num_thread: int = 4
     prompt: str = 'pdf_recognize'
     dpi: int = 150
-    image_format: str = 'png'
+    # 页渲染格式：jpeg（推荐，体积小）/ png
+    image_format: str = 'jpeg'
     # 单页 VL 调用超时
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=300.0)
