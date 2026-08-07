@@ -74,7 +74,7 @@ class Doc(BaseDoc):
     # PDF → images
     # ------------------------------------------------------------------
     def pdf_to_images_b64(self, pdf_path: Path):
-        """Render each page of a PDF to base64-encoded PNG at configured DPI."""
+        """Render each page of a PDF to base64 data-URL at configured DPI."""
         try:
             import fitz  # PyMuPDF
         except ImportError as e:
@@ -105,7 +105,6 @@ class Doc(BaseDoc):
         dpi = self.config.doc.recognition.dpi
         zoom = dpi / 72.0
         matrix = fitz.Matrix(zoom, zoom)
-        # jpeg / jpg → jpeg；其它回落 png
         fmt = str(
             getattr(self.config.doc.recognition, 'image_format', 'jpeg') or 'jpeg'
         ).lower()
@@ -125,7 +124,6 @@ class Doc(BaseDoc):
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
                 img_bytes = pix.tobytes(fitz_fmt)
                 b64 = base64.b64encode(img_bytes).decode('ascii')
-                # data-url 带正确 mime，避免下游一律按 png 解
                 images.append(f'data:image/{mime};base64,{b64}')
         finally:
             doc.close()
@@ -144,7 +142,7 @@ class Doc(BaseDoc):
             f'{system_body}\n---\n{prompt_body}'.encode('utf-8')
         ).hexdigest()[:16]
 
-    def _file_recognition_cache_key(self, pdf_path: Path, file_hash: str) -> str:
+    def _recognition_cache_key(self, pdf_path: Path, file_hash: str) -> str:
         """Whole-document recognition result cache key."""
         recog = self.config.doc.recognition
         payload = {
@@ -155,63 +153,8 @@ class Doc(BaseDoc):
             'dpi': recog.dpi,
             'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
             'prompt_hash': self._prompt_hash(),
-            'pipeline': 'page_plain_text_v1',
+            'pipeline': 'whole_file_plain_text_v1',
             'image_format': getattr(recog, 'image_format', 'jpeg'),
-            'prev_once': True,
-            'prev_text_max_chars': int(
-                getattr(recog, 'prev_text_max_chars', 2000) or 2000
-            ),
-        }
-        return hashlib.md5(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
-        ).hexdigest()
-
-    def _clip_prev_text(self, prev_text: str) -> str:
-        """上一页参考正文：只保留末尾 N 字符（默认 2000），控制 prompt 体积。"""
-        text = (prev_text or '').strip()
-        if not text:
-            return ''
-        try:
-            max_chars = int(
-                getattr(
-                    self.config.doc.recognition, 'prev_text_max_chars', 2000
-                )
-                or 2000
-            )
-        except (TypeError, ValueError):
-            max_chars = 2000
-        max_chars = max(0, max_chars)
-        if max_chars <= 0 or len(text) <= max_chars:
-            return text
-        return text[-max_chars:]
-
-    def _page_recognition_cache_key(
-        self,
-        pdf_path: Path,
-        file_hash: str,
-        page_idx: int,
-        prev_text: str,
-    ) -> str:
-        """Per-page cache key (includes previous-page text hash for context)."""
-        recog = self.config.doc.recognition
-        prev_clip = self._clip_prev_text(prev_text)
-        prev_hash = hashlib.md5(prev_clip.encode('utf-8')).hexdigest()[:16]
-        payload = {
-            'scope': 'page',
-            'file_hash': file_hash,
-            'name': pdf_path.name,
-            'page_idx': int(page_idx),
-            'prev_hash': prev_hash,
-            'model_args': recog.model_args,
-            'dpi': recog.dpi,
-            'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
-            'prompt_hash': self._prompt_hash(),
-            'pipeline': 'page_plain_text_v1',
-            'image_format': getattr(recog, 'image_format', 'jpeg'),
-            'prev_once': True,
-            'prev_text_max_chars': int(
-                getattr(recog, 'prev_text_max_chars', 2000) or 2000
-            ),
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
@@ -239,16 +182,9 @@ class Doc(BaseDoc):
         return cleaned
 
     @classmethod
-    def normalize_page_text(cls, text: str) -> str:
-        """Normalize VLM plain-text page recognition output."""
+    def normalize_recognition_text(cls, text: str) -> str:
+        """Normalize VLM plain-text whole-document recognition output."""
         return cls._strip_code_fence(text)
-
-    @staticmethod
-    def join_page_texts(page_texts: list) -> str:
-        """Concatenate page recognitions in order with blank-line separators."""
-        parts = [(t or '').strip() for t in (page_texts or [])]
-        parts = [p for p in parts if p]
-        return '\n\n'.join(parts)
 
     @staticmethod
     def doc_extra_payload(
@@ -257,22 +193,18 @@ class Doc(BaseDoc):
         source_pdf: str = '',
         file_hash: str = '',
         recognition_cost=None,
-        page_texts=None,
     ) -> dict:
         """doc.extra metadata (full recognition text lives in doc.content)."""
-        extra = {
+        return {
             'page_count': page_count,
             'source_pdf': source_pdf,
             'file_hash': file_hash,
             'recognition_cost': recognition_cost or {},
-            'pipeline': 'page_plain_text_v1',
+            'pipeline': 'whole_file_plain_text_v1',
         }
-        if page_texts is not None:
-            extra['page_count'] = len(page_texts)
-        return extra
 
     # ------------------------------------------------------------------
-    # Single-page vision recognition
+    # Whole-PDF recognition (all pages in one VLM call)
     # ------------------------------------------------------------------
     @Retry(
         max_attempt=4,
@@ -280,31 +212,26 @@ class Doc(BaseDoc):
         timeout=300,
         config_attr='doc.recognition.retry',
     )
-    def recognize_page(
-        self,
-        image_b64: str,
-        *,
-        pdf_path: Path,
-        file_hash: str,
-        page_idx: int,
-        page_count: int,
-        prev_text: str = '',
-        **kwargs,
-    ):
+    def recognize_pdf(self, pdf_path: Path, **kwargs):
         """
-        Recognize one page image with VLM.
-        中间页：上一页识别正文末尾截断后只拼进当前 user 文本一次（不 multi-turn 重复）。
+        PDF → 全部页面图像 → 一次 VLM 多图识别 → 全文纯文本。
+
+        无多轮对话、无页间历史；文件级并行由 prepare_from_pdfs 控制。
+
+        返回 dict 供 insert：
+          content : 全文纯文本
+          extra   : 元数据 JSON
+          hash    : content 哈希
         """
         attempt = int(kwargs.get('attempt', 1) or 1)
         max_attempt = int(kwargs.get('max_attempt', 1) or 1)
-        pdf_path = Path(pdf_path)
-        recog = self.config.doc.recognition
-        # 只取上一页末尾 N 字符，控制多模态 prompt 体积
-        prev_text = self._clip_prev_text(prev_text)
 
-        cache_key = self._page_recognition_cache_key(
-            pdf_path, file_hash, page_idx, prev_text
-        )
+        pdf_path = Path(pdf_path)
+        raw_bytes = pdf_path.read_bytes()
+        file_hash = hashlib.md5(raw_bytes).hexdigest()
+        recog = self.config.doc.recognition
+        cache_key = self._recognition_cache_key(pdf_path, file_hash)
+
         if recog.use_cache:
             cached = self._recog_cache.search_cache(cache_key)
             if cached is not None:
@@ -314,7 +241,7 @@ class Doc(BaseDoc):
                         'recognize',
                         0.0,
                         cache_hit=True,
-                        name=f'{pdf_path.name}#p{page_idx + 1}',
+                        name=pdf_path.name,
                         log=False,
                         accumulate_time=False,
                     )
@@ -322,26 +249,22 @@ class Doc(BaseDoc):
 
         if attempt > 1:
             self.logger.debug(
-                f"PDF {pdf_path.name} page {page_idx + 1}/{page_count} "
-                f"recognition attempt {attempt}/{max_attempt}"
+                f"PDF {pdf_path.name} recognition attempt {attempt}/{max_attempt}"
             )
 
+        images_b64 = self.pdf_to_images_b64(pdf_path)
+        if not images_b64:
+            raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
+
+        page_count = len(images_b64)
         prompt_key = getattr(recog, 'prompt', 'pdf_recognize')
         user_prompt = PROMPT.get(prompt_key, PROMPT['pdf_recognize'])
         user_prompt = (
             f"{user_prompt}\n\n"
-            f"当前为第 {page_idx + 1}/{page_count} 页，"
-            f"请直接输出本页的识别正文（纯文本，不要 JSON）。"
+            f"本文件共 {page_count} 页，以下按页序给出全部页面图片，"
+            f"请直接输出整份文档的识别正文（纯文本，不要 JSON）。"
         )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
-
-        # 中间页：上一页正文（已截断）只拼一遍，不 multi-turn 重复
-        if page_idx > 0 and prev_text:
-            user_prompt = (
-                f"{user_prompt}\n\n"
-                f"上一页图片的识别结果如下（末尾片段，供当前页衔接参考）：\n"
-                f"{prev_text}"
-            )
 
         model_args = dict(recog.model_args or {})
         model_args.setdefault('enable_thinking', False)
@@ -354,46 +277,52 @@ class Doc(BaseDoc):
 
         response = self.llmmodel.generate_vision(
             prompt={'system': system_prompt, 'user': user_prompt},
-            images=[image_b64],
+            images=images_b64,
             model_args=model_args,
-            history=None,
         )
 
         if response.get('status') != 1:
             err = str(response.get('answer') or '')[:500]
             raise RuntimeError(
-                f"PDF page recognition API failed for {pdf_path.name} "
-                f"page {page_idx + 1}/{page_count} "
-                f"(attempt {attempt}/{max_attempt}): {err}"
+                f"PDF recognition API failed for {pdf_path.name} "
+                f"(attempt {attempt}/{max_attempt}, pages={page_count}, "
+                f"model={model_args.get('model')!r}): {err}"
             )
 
         raw_answer = (response.get('answer') or '').strip()
-        page_text = self.normalize_page_text(raw_answer)
-        if not page_text:
+        content = self.normalize_recognition_text(raw_answer)
+        if not content:
             raise RuntimeError(
-                f"PDF page recognition empty for {pdf_path.name} "
-                f"page {page_idx + 1}/{page_count} "
-                f"(attempt {attempt}/{max_attempt})"
+                f"PDF recognition empty answer for {pdf_path.name} "
+                f"(attempt {attempt}/{max_attempt}, pages={page_count})"
             )
+
         cost = {
             'usage_prompt_tokens': response.get('usage_prompt_tokens'),
             'usage_completion_tokens': response.get('usage_completion_tokens'),
             'usage_total_tokens': response.get('usage_total_tokens'),
         }
+        extra_obj = self.doc_extra_payload(
+            page_count=page_count,
+            source_pdf=str(pdf_path),
+            file_hash=file_hash,
+            recognition_cost=cost,
+        )
         result = {
-            'page_idx': page_idx,
-            'text': page_text,
+            'name': pdf_path.name,
+            'content': content,
+            'extra': json.dumps(extra_obj, ensure_ascii=False),
+            'hash': hash_str(content),
+            'file_hash': file_hash,
+            'source_pdf': str(pdf_path),
+            'page_count': page_count,
             'recognition_cost': cost,
         }
 
         if recog.use_cache:
             self._recog_cache.update_cache(
                 json.dumps(
-                    {
-                        'name': pdf_path.name,
-                        'file_hash': file_hash,
-                        'page_idx': page_idx,
-                    },
+                    {'name': pdf_path.name, 'file_hash': file_hash},
                     ensure_ascii=False,
                 ),
                 json.dumps(result, ensure_ascii=False),
@@ -408,125 +337,11 @@ class Doc(BaseDoc):
                 prompt_tokens=response.get('usage_prompt_tokens') or 0,
                 completion_tokens=response.get('usage_completion_tokens') or 0,
                 total_tokens=response.get('usage_total_tokens'),
-                name=f'{pdf_path.name}#p{page_idx + 1}',
-                extra=f'attempt={attempt}',
+                name=pdf_path.name,
+                extra=f'pages={page_count} attempt={attempt}',
                 log=False,
                 accumulate_time=False,
             )
-        return result
-
-    # ------------------------------------------------------------------
-    # Whole-PDF recognition (sequential pages, one VLM call per page)
-    # ------------------------------------------------------------------
-    def recognize_pdf(self, pdf_path: Path, **kwargs):
-        """
-        PDF → 逐页图像 → 每页单独 VLM 识别 → 按序拼接为文档正文。
-
-        页间：中间页 user 文本携带上一页识别正文末尾片段（默认 2000 字）。
-        多线程在文件级（prepare_from_pdfs），单文件内页序串行。
-        任一步失败（坏 PDF / API 重试耗尽）向上抛出，由 prepare_from_pdfs 跳过该文件。
-
-        返回 dict 供 insert：
-          content : 全文纯文本（各页识别结果按序拼接）
-          extra   : 元数据 JSON
-          hash    : content 哈希
-        """
-        pdf_path = Path(pdf_path)
-        raw_bytes = pdf_path.read_bytes()
-        file_hash = hashlib.md5(raw_bytes).hexdigest()
-        recog = self.config.doc.recognition
-        file_cache_key = self._file_recognition_cache_key(pdf_path, file_hash)
-
-        if recog.use_cache:
-            cached = self._recog_cache.search_cache(file_cache_key)
-            if cached is not None:
-                out = json.loads(cached)
-                if self.metrics is not None:
-                    self.metrics.record(
-                        'recognize',
-                        0.0,
-                        cache_hit=True,
-                        name=pdf_path.name,
-                        log=False,
-                        accumulate_time=False,
-                    )
-                return out
-
-        images_b64 = self.pdf_to_images_b64(pdf_path)
-        if not images_b64:
-            raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
-
-        page_count = len(images_b64)
-        page_texts = []
-        total_cost = {
-            'usage_prompt_tokens': 0,
-            'usage_completion_tokens': 0,
-            'usage_total_tokens': 0,
-        }
-        prev_text = ''
-
-        for page_idx, img_b64 in enumerate(images_b64):
-            page_out = self.recognize_page(
-                img_b64,
-                pdf_path=pdf_path,
-                file_hash=file_hash,
-                page_idx=page_idx,
-                page_count=page_count,
-                prev_text=prev_text,
-            )
-            if page_out is None:
-                # 重试耗尽：跳过整个文件（不中断批处理）
-                raise RuntimeError(
-                    f"Failed to recognize {pdf_path.name} page "
-                    f"{page_idx + 1}/{page_count} after all retries"
-                )
-            text = (page_out.get('text') or '').strip()
-            if not text:
-                raise RuntimeError(
-                    f"Empty page text for {pdf_path.name} "
-                    f"page {page_idx + 1}/{page_count}"
-                )
-            page_texts.append(text)
-            prev_text = text
-            cost = page_out.get('recognition_cost') or {}
-            for k in total_cost:
-                try:
-                    total_cost[k] += int(cost.get(k) or 0)
-                except (TypeError, ValueError):
-                    pass
-
-        content = self.join_page_texts(page_texts)
-        if not content.strip():
-            raise RuntimeError(f"PDF recognition empty document for {pdf_path.name}")
-
-        extra_obj = self.doc_extra_payload(
-            page_count=page_count,
-            source_pdf=str(pdf_path),
-            file_hash=file_hash,
-            recognition_cost=total_cost,
-            page_texts=page_texts,
-        )
-        result = {
-            'name': pdf_path.name,
-            'content': content,
-            'extra': json.dumps(extra_obj, ensure_ascii=False),
-            'hash': hash_str(content),
-            'file_hash': file_hash,
-            'source_pdf': str(pdf_path),
-            'page_count': page_count,
-            'recognition_cost': total_cost,
-        }
-
-        if recog.use_cache:
-            self._recog_cache.update_cache(
-                json.dumps(
-                    {'name': pdf_path.name, 'file_hash': file_hash},
-                    ensure_ascii=False,
-                ),
-                json.dumps(result, ensure_ascii=False),
-                file_cache_key,
-            )
-
         return result
 
     def prepare_from_pdfs(
@@ -625,7 +440,8 @@ class Doc(BaseDoc):
                 return None
             if out is None:
                 self.logger.warning(
-                    f"Skip PDF (recognition returned empty): {path.name}"
+                    f"Skip PDF (recognition returned empty / retries exhausted): "
+                    f"{path.name}"
                 )
                 if self.metrics is not None:
                     self.metrics.record(
@@ -647,7 +463,7 @@ class Doc(BaseDoc):
 
         self.logger.info(
             f"PDF recognition start: {len(to_process)} file(s), "
-            f"num_thread={num_thread} (file-level; pages sequential per file)"
+            f"num_thread={num_thread} (whole-file multi-image per PDF)"
         )
         t0 = time.perf_counter()
 

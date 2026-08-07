@@ -1,22 +1,3 @@
-"""
-OpenAI 兼容客户端 + 本地 modelscope 嵌入 + xinference 重排。
-
-LLM 调用对齐 ai_experiment_project/tools/llms_chat_server/ky_ollama.py 的 KyOpenAIServer：
-  - OpenAI(api_key, base_url).chat.completions.create(model, messages, stream=False)
-  - 本地 Qwen3：关思考用 extra_body.chat_template_kwargs.enable_thinking=false
-    （/no_think 与顶层 enable_thinking 在本机 vLLM 上无效）
-  - 本地 placeholder key 可用 "none" / "EMPTY" / "token-abc123"（服务端不校验）
-
-Embedding 对齐 tools/model_server.py 的 NlpModelServer：
-  - POST {host}/nlp/sentence_embedding（兼容无 nlp/ 前缀）
-  - access_token + timestamp 写入 JSON body（make_sign）
-  - 解析 {code:200, result:{text_embedding:...}} 或扁平 text_embedding
-
-Reranker 对齐 xinference / OpenAI 兼容重排：
-  - POST {base}/v1/rerank（base 已含 /v1 时为 {base}/rerank）
-  - body: model + query + documents (+ 可选 top_n)
-  - 解析 results[{index, relevance_score}]
-"""
 from __future__ import annotations
 
 import time
@@ -28,7 +9,6 @@ from openai import OpenAI
 from .utils import Cache
 
 
-# 云端 Qwen / DashScope 扩展字段；本地 xinference/vLLM 通常不识别，local 时会剥离
 _EXTRA_BODY_KEYS = (
     "enable_thinking",
     "thinking_budget",
@@ -298,17 +278,14 @@ class LLM:
         response.update(_usage_from_completion(completion))
         return response
 
-    def generate_vision(self, prompt, images, model_args, history=None, **kwargs):
+    def generate_vision(self, prompt, images, model_args, **kwargs):
         """
-        Multimodal generation: text prompt + list of image payloads.
+        Multimodal generation: text prompt + list of image payloads (single turn).
 
         images: list of dicts, each either:
           - {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
           - or raw base64 string (will be wrapped as png data url)
         prompt: {"system": str, "user": str}
-        history: optional prior turns (no images), e.g.
-          [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
-          Used so middle pages can see the previous page's recognition text only.
         """
         user_content = [{"type": "text", "text": prompt.get("user", "")}]
         for img in images or []:
@@ -336,13 +313,6 @@ class LLM:
         system = prompt.get("system") or ""
         if system:
             messages.append({"role": "system", "content": system})
-        for turn in history or []:
-            if not isinstance(turn, dict):
-                continue
-            role = turn.get("role")
-            content = turn.get("content")
-            if role in ("user", "assistant", "system") and content is not None:
-                messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": user_content})
 
         response = {}

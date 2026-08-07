@@ -117,8 +117,8 @@ class RetryConfig(BaseModel):
 
 class DocRecognitionConfig(BaseModel):
     """
-    PDF vision recognition（逐页 VLM，文件级多线程）。
-    每页单独调用，中间页历史仅带上一页识别文本；输出纯文本（非 JSON）。
+    PDF vision recognition（整文件一次多图 VLM，文件级多线程）。
+    单次请求携带该 PDF 全部页面图片；输出纯文本（非 JSON）。
     """
     api_key: str = ""
     base_url: str = ""
@@ -128,18 +128,16 @@ class DocRecognitionConfig(BaseModel):
         'enable_thinking': False,
     })
     use_cache: bool = True
-    # 按文件并行（单文件内页序串行）
+    # 按文件并行（每文件一次多图请求）
     num_thread: int = 4
     prompt: str = 'pdf_recognize'
     dpi: int = 150
     # 页渲染格式：jpeg（推荐，体积小）/ png
     image_format: str = 'jpeg'
-    # 中间页参考：上一页识别正文只取末尾 N 字符
-    prev_text_max_chars: int = 2000
-    # 单页 VL：最多 4 次尝试，失败后指数退避 10s → 30s → 60s
+    # 整文件 VL：最多 4 次尝试，失败后指数退避
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(
-            max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=300.0
+            max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=600.0
         )
     )
 
