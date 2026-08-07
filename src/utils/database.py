@@ -4,13 +4,39 @@ from pathlib import Path
 import threading
 import numpy as np
 import json
-lock = threading.Lock()
+
+# Per-resource locks: same SQLite file / same FAISS file share one lock;
+# SQL and FAISS never block each other.
+_sqlite_locks = {}
+_sqlite_locks_guard = threading.Lock()
+_faiss_locks = {}
+_faiss_locks_guard = threading.Lock()
+
+
+def _lock_for(registry: dict, guard: threading.Lock, path) -> threading.Lock:
+    key = str(Path(path).resolve())
+    with guard:
+        lk = registry.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            registry[key] = lk
+        return lk
+
+
+def sqlite_lock_for(db_path) -> threading.Lock:
+    return _lock_for(_sqlite_locks, _sqlite_locks_guard, db_path)
+
+
+def faiss_lock_for(vdb_path) -> threading.Lock:
+    return _lock_for(_faiss_locks, _faiss_locks_guard, vdb_path)
+
 
 class BaseDB:
     def __init__(self,db_path: str,db_name: str,create_table_sql: str):
         self.db_path = Path(db_path)
         self.table = db_name
         self.create_table_sql = create_table_sql
+        self.buffer = []
         self.load()
 
         table_columns = self.db.execute(f"PRAGMA table_info({self.table})")
@@ -28,9 +54,13 @@ class BaseDB:
     def buffer_clear(self):
         self.buffer=[]
 
-    def add(self,data_list: list):
+    def add(self, data_list: list, *, return_ids: bool = False):
+        """
+        Insert rows. When return_ids=True, return lastrowid list (one per input
+        row; 0 means INSERT OR IGNORE skipped that row).
+        """
         if data_list == []:
-            return
+            return [] if return_ids else None
 
         keys = list(data_list[0].keys())
         keys = [k for k in keys if k in self.table_columns]
@@ -38,7 +68,10 @@ class BaseDB:
         placeholders = ','.join('?' * len(keys))
         sql = f'INSERT OR IGNORE INTO {self.table} ({columns}) VALUES ({placeholders})'
         values_list = [tuple(data[k] for k in keys) for data in data_list]
+        if return_ids:
+            return self.db.execute_insert_returning_ids(sql, values_list)
         self.db.execute_batch(sql, values_list)
+        return None
 
     def update(self,data_list: list):
         """
@@ -158,6 +191,7 @@ class SQLiteDB:
         self.db_path = Path(db_path)
         self.table = table
         self.create_table_sql = create_table_sql
+        self._lock = sqlite_lock_for(self.db_path)
         self.load()
     
     def load(self):
@@ -166,24 +200,35 @@ class SQLiteDB:
         if not self.db_path.exists():
             self.db_path.touch()
 
-        with lock:
-            self.conn = sqlite3.connect(self.db_path,check_same_thread=False)
+        with self._lock:
+            self.conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                timeout=60.0,
+            )
             self.conn.row_factory = sqlite3.Row
             self.cursor = self.conn.cursor()
+            # WAL: readers don't block writers across connections on same file
+            try:
+                self.cursor.execute('PRAGMA journal_mode=WAL')
+                self.cursor.execute('PRAGMA synchronous=NORMAL')
+            except sqlite3.Error:
+                pass
             self.cursor.execute(self.create_table_sql)
             self.conn.commit()
 
     def save(self):
-        ...
+        with self._lock:
+            self.conn.commit()
     
     def clear(self):
-        with lock:
+        with self._lock:
             self.cursor.execute(f"DROP TABLE IF EXISTS {self.table}")
             self.conn.commit()
         self.load()
 
     def execute(self,SQL,values=()):
-        with lock:
+        with self._lock:
             self.cursor.execute(SQL,values)
             self.conn.commit()
             res=self.cursor.fetchall()
@@ -191,19 +236,39 @@ class SQLiteDB:
         return res
 
     def execute_batch(self,SQL,values_list):
-        with lock:
+        with self._lock:
             self.cursor.executemany(SQL,values_list)
             self.conn.commit()
+
+    def execute_insert_returning_ids(self, SQL, values_list):
+        """
+        Sequential INSERT; collect lastrowid per row.
+        0 means the row was ignored (INSERT OR IGNORE) or insert failed.
+        """
+        ids = []
+        if not values_list:
+            return ids
+        with self._lock:
+            for values in values_list:
+                self.cursor.execute(SQL, values)
+                # INSERT OR IGNORE: lastrowid unchanged when row is skipped
+                rowid = int(self.cursor.lastrowid or 0)
+                ids.append(rowid)
+            self.conn.commit()
+        return ids
+
 
 class FassiVDB:
     def __init__(self,vdb_path,vdb_dim):
         self.vdb_path = Path(vdb_path)
         self.vdb_dim = vdb_dim
+        self._lock = faiss_lock_for(self.vdb_path)
         self.load()
 
     def load(self):
         if self.vdb_path.exists():
-            self.vdb = faiss.read_index(str(self.vdb_path))
+            with self._lock:
+                self.vdb = faiss.read_index(str(self.vdb_path))
         elif self.vdb_dim is not None:
             self.vdb = faiss.IndexIDMap(faiss.IndexFlatL2(self.vdb_dim))
             self.save()
@@ -213,7 +278,7 @@ class FassiVDB:
     def save(self):
         if self.vdb is None:
             return
-        with lock:
+        with self._lock:
             if not self.vdb_path.parent.exists():
                 self.vdb_path.parent.mkdir(parents=True)
             faiss.write_index(self.vdb, str(self.vdb_path))
@@ -221,15 +286,16 @@ class FassiVDB:
     def clear(self):
         if self.vdb is None:
             return
-        file_path = Path(self.vdb_path)
-        if file_path.exists():
-            file_path.unlink()
+        with self._lock:
+            file_path = Path(self.vdb_path)
+            if file_path.exists():
+                file_path.unlink()
         self.load()
 
     def add(self,ids,items):
         if self.vdb is None:
             return
-        with lock:
+        with self._lock:
             self.vdb.add_with_ids(items,np.array(ids,dtype=np.int64))
 
     def remove(self, ids):
@@ -237,8 +303,7 @@ class FassiVDB:
         if self.vdb is None or not ids:
             return 0
         id_array = np.array(list(ids), dtype=np.int64)
-        with lock:
-            # IndexIDMap supports remove_ids
+        with self._lock:
             selector = faiss.IDSelectorBatch(id_array)
             removed = self.vdb.remove_ids(selector)
         return int(removed)
@@ -246,7 +311,7 @@ class FassiVDB:
     def search(self,item,topk):
         if self.vdb is None:
             return None,None
-        with lock:
+        with self._lock:
             distances, ids = self.vdb.search(item, topk)
 
         return distances,ids

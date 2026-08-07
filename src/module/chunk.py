@@ -385,30 +385,32 @@ class Chunk:
         if n_chunk <= 0 and n_doc <= 0:
             return
 
-        rows = self.chunk_db.db.execute("SELECT MAX(id) FROM chunk")
-        max_id_before = (
-            rows[0]['MAX(id)']
-            if rows and rows[0]['MAX(id)'] is not None
-            else 0
-        )
-
         pending = list(self._pending_he_bind or [])
         he_by_doc = {p['doc_id']: p['hyperedge_id'] for p in pending}
         head_bind = []
-        next_id = max_id_before
-        for ch in self.chunk_db.buffer:
-            next_id += 1
-            if (ch.get('name') or '').strip().lower() == 'head':
-                did = ch.get('doc_id')
-                hid = he_by_doc.get(did)
-                if hid is not None:
-                    head_bind.append({'id': hid, 'chunk_id': next_id})
 
         if self.doc_db.buffer:
             self.doc_db.update(self.doc_db.buffer)
             self.doc_db.buffer_clear()
+
         if self.chunk_db.buffer:
-            self.chunk_db.add(self.chunk_db.buffer)
+            # INSERT then lastrowid — never predict ids with MAX(id)+offset
+            chunk_rows = list(self.chunk_db.buffer)
+            inserted_ids = self.chunk_db.add(chunk_rows, return_ids=True) or []
+            if len(inserted_ids) != len(chunk_rows):
+                self.logger.warning(
+                    f"[chunk] return_ids length mismatch: "
+                    f"rows={len(chunk_rows)} ids={len(inserted_ids)}"
+                )
+            for ch, cid in zip(chunk_rows, inserted_ids):
+                if not cid:
+                    continue
+                if (ch.get('name') or '').strip().lower() != 'head':
+                    continue
+                did = ch.get('doc_id')
+                hid = he_by_doc.get(did)
+                if hid is not None:
+                    head_bind.append({'id': hid, 'chunk_id': int(cid)})
             self._flushed_count += n_chunk
             self.chunk_db.buffer_clear()
 

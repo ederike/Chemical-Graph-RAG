@@ -1,5 +1,4 @@
 from functools import wraps
-import concurrent.futures
 import time
 from .database import BaseDB
 from pathlib import Path
@@ -281,7 +280,7 @@ class Retry:
         @wraps(func)
         def wrapper(*args, **kwargs):
             max_attempt, wait_schedule, timeout = self._resolve_params(args)
-            # 尽量从 self.logger 打日志（Doc/Extract 等实例方法）
+            # timeout 由底层 HTTP/LLM 客户端执行，这里不再为每次 attempt 开线程池
             logger = None
             if args:
                 logger = getattr(args[0], 'logger', None)
@@ -293,12 +292,8 @@ class Retry:
                     'attempt': attempt,
                     'max_attempt': max_attempt,
                 }
-                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                future = None
                 try:
-                    future = executor.submit(func, *args, **kwargs_with_attempt)
-                    result = future.result(timeout=timeout)
-                    return result
+                    return func(*args, **kwargs_with_attempt)
                 except NonRetryableError as e:
                     last_err = e
                     if logger is not None:
@@ -311,12 +306,15 @@ class Retry:
                     last_err = e
                     err_msg = f"{type(e).__name__}: {e}"
                     if logger is not None:
-                        # 每次失败都打出原因（此前静默吞掉，日志只剩 Failed after retries）
-                        level = logger.warning if attempt >= max_attempt else logger.info
+                        level = (
+                            logger.warning
+                            if attempt >= max_attempt
+                            else logger.info
+                        )
                         level(
                             f"[Retry] {func.__qualname__} "
                             f"attempt {attempt}/{max_attempt} failed "
-                            f"(timeout={timeout}s): {err_msg}"
+                            f"(http_timeout≈{timeout}s): {err_msg}"
                         )
                     if attempt < max_attempt:
                         delay = self._backoff_seconds(wait_schedule, attempt)
@@ -328,18 +326,12 @@ class Retry:
                                     f"{attempt + 1}/{max_attempt}"
                                 )
                             time.sleep(delay)
-                finally:
-                    # 超时后不要 wait=True 堵死下一次重试（后台请求仍可能跑完）
-                    try:
-                        executor.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        # Python <3.9 无 cancel_futures
-                        executor.shutdown(wait=False)
 
             if logger is not None and last_err is not None:
                 logger.error(
                     f"[Retry] {func.__qualname__} exhausted "
-                    f"{max_attempt} attempts; last_error={type(last_err).__name__}: {last_err}"
+                    f"{max_attempt} attempts; last_error="
+                    f"{type(last_err).__name__}: {last_err}"
                 )
             return None
 

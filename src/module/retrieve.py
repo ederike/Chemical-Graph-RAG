@@ -22,8 +22,8 @@ class Retrieve:
       3) 关键词精确匹配（可选 enable_keyword_exact；candidate/top 任一为 0 则跳过）：
          LLM 抽取 minority/majority 关键词 → chunk.content 精确包含匹配
          → 少数值优先、多数值命中数排序取 keyword_candidate_k
-         → 文档级首轮 rerank → keyword_top_k
-      4) 关键词路与双路（chunk∪node）按文档取交集（空集时回退）
+         → 文档级首轮 rerank → keyword_top_k（只截关键词路，不伤向量路）
+      4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          默认每文档：头块 + 命中索引块（原文序、块去重）
          enable_full_body_context=True 时：每命中文档写入该文全部 body 索引块，不含头块
@@ -761,25 +761,25 @@ class Retrieve:
             'top_n': len(keep_docs),
         }
 
-    def _intersect_hits_by_docs(
+    def _union_hits_by_docs(
         self,
         dual_hits: dict,
         keyword_hits: dict,
-        keyword_doc_ids: set,
+        keyword_doc_ids: set = None,
         *,
         has_minority: bool = False,
     ) -> dict:
         """
-        关键词路与双路按文档取交集：
-          keep = keyword_docs ∩ dual_docs
-        空交集回退：
-          - 有少数值命中 → 保留关键词路（高精确）
-          - 否则 → 保留双路
-        仅关键词 / 仅双路时直接用非空一侧。
-        合并时 score 取 max，match_type 合并。
+        关键词路与双路按 chunk 并集合并（关键词只增不减）：
+          merged = dual ∪ keyword
+        - 同 chunk：score 取 max，match_type 合并（chunk+node+keyword）
+        - 关键词路内部仍可 candidate → 文档 rerank → keyword_top_k
+        - 终轮文档 rerank 在并集结果上做（见 retrieve_items）
+        不会用关键词文档集过滤掉纯向量命中。
         """
         dual_hits = dual_hits or {}
         keyword_hits = keyword_hits or {}
+        merged = {}
 
         def _doc_ids_from_hits(hits: dict) -> set:
             ids = set()
@@ -792,37 +792,7 @@ class Retrieve:
                     ids.add(did)
             return ids
 
-        dual_docs = _doc_ids_from_hits(dual_hits)
-        kw_docs = set(keyword_doc_ids or ()) or _doc_ids_from_hits(keyword_hits)
-
-        if kw_docs and dual_docs:
-            keep = kw_docs & dual_docs
-            if not keep:
-                if has_minority:
-                    keep = kw_docs
-                    self.logger.info(
-                        '[retrieve] keyword∩dual empty; fallback to keyword (minority)'
-                    )
-                else:
-                    keep = dual_docs
-                    self.logger.info(
-                        '[retrieve] keyword∩dual empty; fallback to dual-path'
-                    )
-            else:
-                self.logger.info(
-                    f"[retrieve] keyword∩dual docs={len(keep)} "
-                    f"(kw={len(kw_docs)} dual={len(dual_docs)})"
-                )
-        elif kw_docs:
-            keep = kw_docs
-            self.logger.info(f"[retrieve] keyword-only docs={len(keep)}")
-        else:
-            keep = dual_docs
-
-        # 过滤 + 合并
-        merged = {}
-
-        def _absorb(hit, extra_mt=None):
+        def _absorb(hit):
             cid = hit.get('chunk_id')
             if cid is None:
                 chunk = hit.get('chunk') or {}
@@ -832,21 +802,15 @@ class Retrieve:
             did = hit.get('doc_id')
             if did is None:
                 did = (hit.get('chunk') or {}).get('doc_id')
-            if did is not None and did not in keep:
-                return
-            if did is None and keep:
-                # 无 doc_id 时若在做文档过滤则丢弃
-                return
             cur = merged.get(cid)
             if cur is None:
                 item = dict(hit)
                 item['chunk_id'] = cid
                 if did is not None:
                     item['doc_id'] = did
-                item.setdefault('chunk', hit.get('chunk') or self.chunk_dict.get(cid))
-                if extra_mt and item.get('match_type') != extra_mt:
-                    # 首写
-                    pass
+                item.setdefault(
+                    'chunk', hit.get('chunk') or self.chunk_dict.get(cid)
+                )
                 merged[cid] = item
                 return
             score = float(hit.get('score') or 0.0)
@@ -863,7 +827,6 @@ class Retrieve:
                     if p:
                         parts.add(p)
             if parts:
-                # 稳定顺序：chunk, node, keyword
                 order = {'chunk': 0, 'node': 1, 'keyword': 2}
                 cur['match_type'] = '+'.join(
                     sorted(parts, key=lambda x: (order.get(x, 9), x))
@@ -880,7 +843,22 @@ class Retrieve:
             _absorb(h)
         for h in keyword_hits.values():
             _absorb(h)
+
+        dual_docs = _doc_ids_from_hits(dual_hits)
+        kw_docs = set(keyword_doc_ids or ()) or _doc_ids_from_hits(keyword_hits)
+        merged_docs = _doc_ids_from_hits(merged)
+        self.logger.info(
+            f"[retrieve] keyword∪dual chunks={len(merged)} "
+            f"docs={len(merged_docs)} "
+            f"(dual_docs={len(dual_docs)} kw_docs={len(kw_docs)} "
+            f"dual_chunks={len(dual_hits)} kw_chunks={len(keyword_hits)}"
+            f"{' minority' if has_minority else ''})"
+        )
         return merged
+
+    # 兼容旧调用名
+    def _intersect_hits_by_docs(self, *args, **kwargs):
+        return self._union_hits_by_docs(*args, **kwargs)
 
     def _search_chunks_by_query(self, query_embedding, topk: int) -> list:
         """改写 query ↔ chunk 向量。topk<=0 时跳过本路。"""
@@ -1608,7 +1586,10 @@ class Retrieve:
         keyword_top_k=None,
     ) -> list:
         """
-        查询改写 → 双路向量 topk + 关键词精确匹配 → 文档交集 → 扩展 → 终轮 rerank。
+        查询改写 → 双路向量 topk ∪ 关键词精确匹配（关键词路内部可先文档 rerank）
+        → 并集混合 → 扩展 → 终轮 rerank。
+
+        关键词路只增加候选，不删减向量命中；同 chunk 合并 score/match_type。
 
         各路 topk：
           - >0：正常截断
@@ -1758,7 +1739,8 @@ class Retrieve:
         if enable_kw and (
             kw_result.get('hits_by_chunk') or kw_result.get('doc_ids')
         ):
-            merged = self._intersect_hits_by_docs(
+            # 并集：向量命中全部保留，关键词命中只追加/增强
+            merged = self._union_hits_by_docs(
                 dual_merged,
                 kw_result.get('hits_by_chunk') or {},
                 kw_result.get('doc_ids') or set(),
