@@ -5,7 +5,7 @@ from ..utils.config import Config
 import tiktoken
 
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from tqdm import tqdm
 import base64
 import hashlib
@@ -98,6 +98,36 @@ class Doc:
         if not doc_dir.exists():
             return []
         return sorted(doc_dir.glob('*.pdf'))
+
+    @staticmethod
+    def classify_pdf_magic(path: Path) -> str:
+        """
+        快速校验文件头是否像 PDF。
+        返回 '' 表示通过；否则返回可读原因（假 PDF / 空文件等）。
+        """
+        path = Path(path)
+        try:
+            if not path.is_file() or path.stat().st_size <= 0:
+                return 'missing or empty'
+            magic = path.read_bytes()[:8]
+        except OSError as e:
+            return f'unreadable: {e}'
+        if magic.startswith(b'%PDF'):
+            return ''
+        kind = 'unknown'
+        if magic.startswith(b'\x89PNG'):
+            kind = 'PNG'
+        elif magic[:2] == b'\xff\xd8':
+            kind = 'JPEG'
+        elif magic.startswith(b'PK'):
+            kind = 'ZIP/OOXML'
+        elif magic.startswith(b'\xd0\xcf\x11\xe0'):
+            kind = 'OLE/CFB (doc/xls)'
+        elif magic.lstrip().startswith(b'<!') or magic.lstrip().startswith(b'<'):
+            kind = 'HTML'
+        elif magic.startswith(b'Can not') or magic.startswith(b'Cannot '):
+            kind = 'error-text'
+        return f'Not a real PDF (magic={magic!r}, kind={kind})'
 
     def get_existing_doc_names(self) -> set:
         """Set of file names already present in the doc table."""
@@ -251,7 +281,7 @@ class Doc:
         """
         PDF → 全部页面图像 → 一次 VLM 多图识别 → 全文纯文本。
 
-        无多轮对话、无页间历史；文件级并行由 prepare_from_pdfs 控制。
+        文件级并行由 prepare_from_pdfs 控制。
 
         返回 dict 供 insert：
           content : 全文纯文本
@@ -292,8 +322,17 @@ class Doc:
             raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
 
         page_count = len(images_b64)
-        user_prompt = PROMPT['pdf_recognize']
+        user_prompt = PROMPT.get(
+            getattr(recog, 'prompt', 'pdf_recognize'),
+            PROMPT['pdf_recognize'],
+        )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
+        user_prompt = (
+            f"{user_prompt}\n\n"
+            f"本文件共 {page_count} 页，以下按页序给出全部页面图片。"
+            f"请用中文直接输出整份文档的识别正文（纯文本，不要 JSON）；"
+            f"数值范围、限值与临界条件须完整保留上下端点与测定条件。"
+        )
 
         model_args = dict(recog.model_args or {})
         model_args.setdefault('enable_thinking', False)
@@ -395,9 +434,14 @@ class Doc:
         existing_names = self.get_existing_doc_names() if skip_existing else set()
         to_process = []
         skipped = []
+        invalid = []  # (name, reason) 假 PDF / 空文件，进池前剔除
         for p in pdf_paths:
             if skip_existing and p.name in existing_names:
                 skipped.append(p.name)
+                continue
+            bad = self.classify_pdf_magic(p)
+            if bad:
+                invalid.append((p.name, bad))
                 continue
             to_process.append(p)
 
@@ -408,6 +452,23 @@ class Doc:
             )
             if self.metrics is not None:
                 for name in skipped:
+                    self.metrics.record(
+                        'recognize',
+                        0.0,
+                        skipped=True,
+                        name=name,
+                        log=False,
+                        accumulate_time=False,
+                    )
+
+        if invalid:
+            self.logger.warning(
+                f"Skip {len(invalid)} non-PDF file(s) "
+                f"(wrong magic / empty; not sent to VLM): "
+                f"{invalid[:5]}{'...' if len(invalid) > 5 else ''}"
+            )
+            if self.metrics is not None:
+                for name, _reason in invalid:
                     self.metrics.record(
                         'recognize',
                         0.0,
@@ -431,59 +492,56 @@ class Doc:
 
         recog = self.config.doc.recognition
         num_thread = max(1, int(getattr(recog, 'num_thread', 1) or 1))
+        # 与 LLM 客户端一致，用于心跳日志说明「最长可能等多久」
+        try:
+            http_timeout = float(
+                getattr(getattr(recog, 'retry', None), 'timeout', 300) or 300
+            )
+        except (TypeError, ValueError):
+            http_timeout = 300.0
         results = []
         results_lock = threading.Lock()
+
+        def _record_skip(name: str):
+            if self.metrics is not None:
+                self.metrics.record(
+                    'recognize',
+                    0.0,
+                    skipped=True,
+                    name=name,
+                    log=False,
+                    accumulate_time=False,
+                )
 
         def _one(path):
             """单文件识别；任何错误只跳过当前文件，不中断整批。"""
             try:
                 out = self.recognize_pdf(path)
             except NonRetryableError as e:
+                # 假 PDF / 空页等：不可重试，勿写成「重试耗尽」
                 self.logger.warning(
-                    f"Skip PDF (invalid/unreadable): {path.name}: {e}"
+                    f"Skip PDF (invalid/unreadable, no retry): {path.name}: {e}"
                 )
-                if self.metrics is not None:
-                    self.metrics.record(
-                        'recognize',
-                        0.0,
-                        skipped=True,
-                        name=path.name,
-                        log=False,
-                        accumulate_time=False,
-                    )
+                _record_skip(path.name)
                 return None
             except Exception as e:
                 self.logger.warning(
                     f"Skip PDF after error: {path.name}: {e}"
                 )
-                if self.metrics is not None:
-                    self.metrics.record(
-                        'recognize',
-                        0.0,
-                        skipped=True,
-                        name=path.name,
-                        log=False,
-                        accumulate_time=False,
-                    )
+                _record_skip(path.name)
                 return None
             if out is None:
                 self.logger.warning(
-                    f"Skip PDF (recognition returned empty / retries exhausted): "
+                    f"Skip PDF (API retries exhausted or empty result): "
                     f"{path.name}"
                 )
-                if self.metrics is not None:
-                    self.metrics.record(
-                        'recognize',
-                        0.0,
-                        skipped=True,
-                        name=path.name,
-                        log=False,
-                        accumulate_time=False,
-                    )
+                _record_skip(path.name)
             return out
 
-        def _postfix():
+        def _postfix(inflight: int = 0):
             pf = {'total': progress_total}
+            if inflight:
+                pf['run'] = inflight
             if self.metrics is not None:
                 s = self.metrics.stage_snapshot('recognize')
                 pf['real'] = s['real']
@@ -491,7 +549,8 @@ class Doc:
 
         self.logger.info(
             f"PDF recognition start: {len(to_process)} file(s), "
-            f"num_thread={num_thread} (whole-file multi-image per PDF)"
+            f"num_thread={num_thread}, http_timeout={http_timeout:.0f}s "
+            f"(whole-file multi-image per PDF)"
         )
         t0 = time.perf_counter()
 
@@ -508,25 +567,62 @@ class Doc:
                     results.append(result)
                 bar.set_postfix(**_postfix())
         else:
+            # wait + 心跳：避免 as_completed 在末尾长请求上「假死」无日志
             with ThreadPoolExecutor(max_workers=num_thread) as executor:
-                futures = {executor.submit(_one, p): p for p in to_process}
+                pending = {
+                    executor.submit(_one, p): (p, time.perf_counter())
+                    for p in to_process
+                }
                 bar = tqdm(
-                    as_completed(futures),
-                    total=len(futures),
+                    total=len(pending),
                     desc='recognize',
                     unit='pdf',
                     bar_format=TQDM_BAR_FORMAT,
                 )
-                for future in bar:
-                    p = futures[future]
-                    try:
-                        result = future.result()
-                        if result is not None:
-                            with results_lock:
-                                results.append(result)
-                    except Exception as e:
-                        self.logger.error(f"Failed to recognize {p}: {e}")
-                    bar.set_postfix(**_postfix())
+                heartbeat_s = 30.0
+                while pending:
+                    done, _ = wait(
+                        set(pending.keys()),
+                        timeout=heartbeat_s,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not done:
+                        now = time.perf_counter()
+                        aged = sorted(
+                            (
+                                (now - started, path.name)
+                                for path, started in pending.values()
+                            ),
+                            reverse=True,
+                        )
+                        top = ', '.join(
+                            f'{name}({elapsed:.0f}s)'
+                            for elapsed, name in aged[:8]
+                        )
+                        more = f' +{len(aged) - 8} more' if len(aged) > 8 else ''
+                        self.logger.info(
+                            f"[recognize] still in-flight={len(pending)} "
+                            f"(each call may take up to ~{http_timeout:.0f}s "
+                            f"HTTP timeout + retries): {top}{more}"
+                        )
+                        bar.set_postfix(**_postfix(len(pending)))
+                        continue
+
+                    for future in done:
+                        path, started = pending.pop(future)
+                        try:
+                            result = future.result()
+                            if result is not None:
+                                with results_lock:
+                                    results.append(result)
+                        except Exception as e:
+                            self.logger.error(
+                                f"Failed to recognize {path.name}: {e}"
+                            )
+                            _record_skip(path.name)
+                        bar.update(1)
+                        bar.set_postfix(**_postfix(len(pending)))
+                bar.close()
 
         wall = time.perf_counter() - t0
         results.sort(key=lambda x: x.get('name', ''))
@@ -536,9 +632,9 @@ class Doc:
             self.metrics.log_stage('recognize')
 
         self.logger.info(
-            f"Recognized {len(results)}/{len(to_process)} new PDF documents "
-            f"(skipped existing: {len(skipped)}, threads={num_thread}, "
-            f"wall_time={wall:.3f}s)."
+            f"Recognized {len(results)}/{len(to_process)} valid PDF documents "
+            f"(skipped existing={len(skipped)}, invalid_non_pdf={len(invalid)}, "
+            f"threads={num_thread}, wall_time={wall:.3f}s)."
         )
         return results
 

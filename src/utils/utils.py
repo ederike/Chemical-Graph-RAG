@@ -1,10 +1,14 @@
 from functools import wraps
-import time
-from .database import BaseDB
-from pathlib import Path
 import hashlib
-import json
 import inspect
+import json
+import random
+import re
+import threading
+import time
+from pathlib import Path
+
+from .database import BaseDB
 
 def hash_str(s):
     return hashlib.md5(s.encode()).hexdigest()
@@ -156,6 +160,45 @@ class Cache:
 class NonRetryableError(Exception):
     """明确不可恢复的错误：@Retry 遇到后不再重试，直接失败。"""
 
+
+# 进程级：服务端过载时的共享冷却，避免 N 个并行任务同时重打模型
+_retry_cooldown_lock = threading.Lock()
+_retry_cooldown_until = 0.0  # time.monotonic()
+_retry_cooldown_announced_until = 0.0
+# 日志去重：(func_name, err_fingerprint, attempt) -> (last_log_mono, suppressed_count)
+_retry_log_lock = threading.Lock()
+_retry_log_state = {}
+
+
+def _is_server_overload_error(err: BaseException) -> bool:
+    """HTTP 5xx / EngineCore 等服务端故障，适合共享冷却。"""
+    s = f'{type(err).__name__}: {err}'
+    keys = (
+        'Error code: 500',
+        'Error code: 502',
+        'Error code: 503',
+        'Error code: 504',
+        'InternalServerError',
+        'EngineCore',
+        'Service Unavailable',
+        'Bad Gateway',
+        'Gateway Timeout',
+    )
+    return any(k in s for k in keys)
+
+
+def _err_fingerprint(err: BaseException) -> str:
+    """用于日志去重：去掉文件名 / attempt / pages 等易变字段。"""
+    s = str(err)
+    s = re.sub(r'for\s+\S+\.pdf', 'for <file>.pdf', s, flags=re.I)
+    s = re.sub(r'attempt\s+\d+\s*/\s*\d+', 'attempt ?/?', s, flags=re.I)
+    s = re.sub(r'pages=\d+', 'pages=?', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    if len(s) > 160:
+        s = s[:160]
+    return f'{type(err).__name__}|{s}'
+
+
 def _normalize_wait_schedule(wait) -> list:
     """
     将 wait 规范为非负秒数列表（指数退避 schedule）。
@@ -270,23 +313,108 @@ class Retry:
 
     @staticmethod
     def _backoff_seconds(schedule: list, attempt: int) -> float:
-        """第 attempt 次失败后的休眠秒数（attempt 从 1 起）。"""
+        """第 attempt 次失败后的基础休眠秒数（attempt 从 1 起）。"""
         if not schedule:
             return 0.0
         idx = min(max(0, attempt - 1), len(schedule) - 1)
         return float(schedule[idx])
 
+    @staticmethod
+    def _with_jitter(delay: float) -> float:
+        """±25% 抖动，打散并行任务的同时重试（防雷群）。"""
+        if delay <= 0:
+            return 0.0
+        return max(0.0, delay * (0.75 + random.random() * 0.5))
+
+    @staticmethod
+    def _wait_shared_cooldown(logger, func_name: str):
+        """若处于服务端过载冷却期，阻塞到冷却结束。"""
+        global _retry_cooldown_until, _retry_cooldown_announced_until
+        while True:
+            with _retry_cooldown_lock:
+                until = _retry_cooldown_until
+                announced_until = _retry_cooldown_announced_until
+            now = time.monotonic()
+            remain = until - now
+            if remain <= 0:
+                return
+            # 整段冷却只公告一次，避免 N 个 worker 各打一行
+            if logger is not None and announced_until < until:
+                with _retry_cooldown_lock:
+                    if _retry_cooldown_announced_until < until:
+                        _retry_cooldown_announced_until = until
+                        logger.info(
+                            f"[Retry] {func_name} shared server cooldown "
+                            f"~{remain:.1f}s (all parallel workers pause)"
+                        )
+            time.sleep(min(max(remain, 0.05), 5.0))
+
+    @staticmethod
+    def _extend_shared_cooldown(seconds: float):
+        """延长全局冷却（取较大值，不缩短已有冷却）。"""
+        global _retry_cooldown_until
+        if seconds <= 0:
+            return
+        with _retry_cooldown_lock:
+            _retry_cooldown_until = max(
+                _retry_cooldown_until,
+                time.monotonic() + seconds,
+            )
+
+    @staticmethod
+    def _log_failure(logger, func_name: str, attempt: int, max_attempt: int, err: BaseException):
+        """
+        并行时同一类错误只详打一条，其余压缩为计数，避免日志雪崩。
+        """
+        if logger is None:
+            return
+        level = logger.warning if attempt >= max_attempt else logger.info
+        fp = _err_fingerprint(err)
+        key = (func_name, fp, attempt)
+        now = time.monotonic()
+        with _retry_log_lock:
+            last_t, suppressed = _retry_log_state.get(key, (0.0, 0))
+            # 2s 内同类失败：累计，不刷屏
+            if now - last_t < 2.0 and last_t > 0:
+                _retry_log_state[key] = (last_t, suppressed + 1)
+                if suppressed + 1 in (1, 2, 5, 10, 20, 50) or (suppressed + 1) % 50 == 0:
+                    level(
+                        f"[Retry] {func_name} attempt {attempt}/{max_attempt} "
+                        f"same error x{suppressed + 1} (concurrent workers; "
+                        f"detail suppressed): {type(err).__name__}: "
+                        f"{str(err)[:160]}"
+                    )
+                return
+            # 若有上一波被抑制的，先补一行
+            if suppressed > 0:
+                level(
+                    f"[Retry] {func_name} attempt {attempt}/{max_attempt}: "
+                    f"+{suppressed} similar concurrent failures suppressed"
+                )
+            _retry_log_state[key] = (now, 0)
+
+        # 首条完整日志（不再误标 http_timeout）
+        overload = ' [server 5xx]' if _is_server_overload_error(err) else ''
+        level(
+            f"[Retry] {func_name} attempt {attempt}/{max_attempt} failed"
+            f"{overload}: {type(err).__name__}: {err}"
+        )
+
     def __call__(self, func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             max_attempt, wait_schedule, timeout = self._resolve_params(args)
-            # timeout 由底层 HTTP/LLM 客户端执行，这里不再为每次 attempt 开线程池
+            # 单次调用超时由底层 HTTP/LLM timeout 执行；此处 timeout 仅作配置透传/日志参考
             logger = None
             if args:
                 logger = getattr(args[0], 'logger', None)
+            func_name = getattr(func, '__qualname__', repr(func))
 
             last_err = None
             for attempt in range(1, max_attempt + 1):
+                # 并行识别等场景：先等共享冷却，再打模型
+                self._wait_shared_cooldown(logger, func_name)
+
                 kwargs_with_attempt = {
                     **kwargs,
                     'attempt': attempt,
@@ -294,42 +422,36 @@ class Retry:
                 }
                 try:
                     return func(*args, **kwargs_with_attempt)
-                except NonRetryableError as e:
-                    last_err = e
-                    if logger is not None:
-                        logger.error(
-                            f"[Retry] {func.__qualname__} non-retryable: "
-                            f"{type(e).__name__}: {e}"
-                        )
-                    return None
+                except NonRetryableError:
+                    # 不可重试：原样抛出，由调用方处理（勿吞成 None，避免误报「重试耗尽」）
+                    raise
                 except Exception as e:
                     last_err = e
-                    err_msg = f"{type(e).__name__}: {e}"
+                    self._log_failure(logger, func_name, attempt, max_attempt, e)
+
+                    if attempt >= max_attempt:
+                        break
+
+                    base = self._backoff_seconds(wait_schedule, attempt)
+                    delay = self._with_jitter(base)
+                    if delay <= 0:
+                        continue
+
+                    # 服务端 5xx：只靠共享冷却（全员一起停），不再每人 sleep + 刷 backoff 日志
+                    if _is_server_overload_error(e):
+                        self._extend_shared_cooldown(max(delay, base))
+                        continue
+
                     if logger is not None:
-                        level = (
-                            logger.warning
-                            if attempt >= max_attempt
-                            else logger.info
+                        logger.info(
+                            f"[Retry] {func_name} backoff {delay:.1f}s "
+                            f"before attempt {attempt + 1}/{max_attempt}"
                         )
-                        level(
-                            f"[Retry] {func.__qualname__} "
-                            f"attempt {attempt}/{max_attempt} failed "
-                            f"(http_timeout≈{timeout}s): {err_msg}"
-                        )
-                    if attempt < max_attempt:
-                        delay = self._backoff_seconds(wait_schedule, attempt)
-                        if delay > 0:
-                            if logger is not None:
-                                logger.info(
-                                    f"[Retry] {func.__qualname__} backoff "
-                                    f"{delay:.1f}s before attempt "
-                                    f"{attempt + 1}/{max_attempt}"
-                                )
-                            time.sleep(delay)
+                    time.sleep(delay)
 
             if logger is not None and last_err is not None:
                 logger.error(
-                    f"[Retry] {func.__qualname__} exhausted "
+                    f"[Retry] {func_name} exhausted "
                     f"{max_attempt} attempts; last_error="
                     f"{type(last_err).__name__}: {last_err}"
                 )

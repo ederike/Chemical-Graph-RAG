@@ -11,32 +11,32 @@ paths:
   output_dir: benchmark_results_new-prompt
 
   # generate 写出
-  questions_filename: questions_test.json
+  questions_filename: questions_256.json
   questions_path: null
 
   # evaluate 读入
   eval_questions_filename: null
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: evals_test.json
+  eval_results_filename: evals_256.json
   eval_results_path: null
 
   # report 读入
   report_source_filename: null
   report_source_path: null
   # report 写出
-  report_filename: report_test.json
+  report_filename: report_256.json
   report_path: null
 
 generate:
   hop_counts:
-    "1": 10
+    "1": 256
     "2": 0
     "3": 0
   seed: 42
   max_chars_per_doc: -1
   max_retries: 3
-  sleep_between: 0.0
+  sleep_between: 20
   num_thread: 10          #
   use_cache: True
   question_gen_prompt: QUESTION_GEN_Fuzzy_Matching
@@ -53,9 +53,9 @@ generate:
 evaluate:
   enable_doc_recall: False
   max_source_chars: -1
-  max_retries: 3
+  max_retries: 10
   sleep_between: 0.0
-  num_thread: 3
+  num_thread: 2
   use_cache: True
   dhmf_retrieve_use_cache: null
   api_key: null
