@@ -8,6 +8,7 @@ if __name__ == '__main__':
     config = Config.from_yaml('example/a/config_open.yaml')
     graph = DHMF(config)
 
+    graph.download_from_oss()
     graph.insert_default()
     graph.summary()
     graph.chunk()

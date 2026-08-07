@@ -11,26 +11,26 @@ paths:
   output_dir: benchmark_results_new-prompt
 
   # generate 写出
-  questions_filename: questions_512.json
+  questions_filename: questions_test.json
   questions_path: null
 
   # evaluate 读入
   eval_questions_filename: null
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: evals_512.json
+  eval_results_filename: evals_test.json
   eval_results_path: null
 
   # report 读入
   report_source_filename: null
   report_source_path: null
   # report 写出
-  report_filename: report_512.json
+  report_filename: report_test.json
   report_path: null
 
 generate:
   hop_counts:
-    "1": 512
+    "1": 10
     "2": 0
     "3": 0
   seed: 42

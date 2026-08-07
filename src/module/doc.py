@@ -292,13 +292,7 @@ class Doc:
             raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
 
         page_count = len(images_b64)
-        prompt_key = getattr(recog, 'prompt', 'pdf_recognize')
-        user_prompt = PROMPT.get(prompt_key, PROMPT['pdf_recognize'])
-        user_prompt = (
-            f"{user_prompt}\n\n"
-            f"本文件共 {page_count} 页，以下按页序给出全部页面图片，"
-            f"请直接输出整份文档的识别正文（纯文本，不要 JSON）。"
-        )
+        user_prompt = PROMPT['pdf_recognize']
         system_prompt = PROMPT.get('pdf_recognize_system', '')
 
         model_args = dict(recog.model_args or {})
