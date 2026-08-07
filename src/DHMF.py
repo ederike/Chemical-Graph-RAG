@@ -225,12 +225,15 @@ class DHMF:
     def insert_pdfs(self, pdf_paths=None, skip_existing: bool = True):
         """
         Pre-insert: PDF under working_path/doc → images → vision recognition → doc table.
-        Each PDF becomes one independent document (texts are not mixed).
 
-        按 doc.flush_every 分批：识别一批 → 入库一批，避免 2000 份全文同时驻留内存。
+        页数超过 recognition.max_pages_per_doc 时切成多段独立文档：
+        首段名=原文件名，后续=原文件名_{n}。
 
-        skip_existing: skip files already present in doc table (default True),
-                       so re-run will not re-recognize or re-insert them.
+        按 doc.flush_every 分批（按源 PDF 文件计）：识别一批 → 入库一批，
+        避免大量全文同时驻留内存。
+
+        skip_existing: 按切片文档名跳过已在 doc 表中的段（默认 True），
+                       重跑时只补缺切片，不会因首段已存在而整文件跳过。
         """
         self.begin_build()
         self.logger.info("Start PDF recognition before insert (source: working_path/doc).")
@@ -240,16 +243,9 @@ class DHMF:
         else:
             all_pdfs = [Path(p) for p in pdf_paths]
 
-        if skip_existing:
-            existing = self.doc_module.get_existing_doc_names()
-            to_process = [p for p in all_pdfs if p.name not in existing]
-            skipped = len(all_pdfs) - len(to_process)
-            if skipped:
-                self.logger.info(
-                    f"Skip {skipped} PDF(s) already in doc table before batched recognize."
-                )
-        else:
-            to_process = list(all_pdfs)
+        # 源文件一律进入批次；是否跳过由 prepare_from_pdfs 按切片名判断。
+        # （长 PDF 可能只入库了首段，后续 _1/_2 仍需识别。）
+        to_process = list(all_pdfs)
 
         if not to_process:
             self.logger.info("No new documents to insert (all skipped or empty).")
@@ -263,9 +259,15 @@ class DHMF:
 
         total_inserted = 0
         n_batches = (len(to_process) + flush_every - 1) // flush_every
+        max_pages = getattr(
+            getattr(self.config.doc, 'recognition', None),
+            'max_pages_per_doc',
+            12,
+        )
         self.logger.info(
             f"PDF recognize+insert batched: files={len(to_process)} "
-            f"flush_every={flush_every} batches={n_batches}"
+            f"flush_every={flush_every} batches={n_batches} "
+            f"max_pages_per_doc={max_pages} skip_existing={skip_existing}"
         )
         for bi in range(0, len(to_process), flush_every):
             batch = to_process[bi: bi + flush_every]
@@ -275,8 +277,8 @@ class DHMF:
             )
             doc_list = self.doc_module.prepare_from_pdfs(
                 pdf_paths=batch,
-                skip_existing=False,
-                progress_total=len(to_process),
+                skip_existing=skip_existing,
+                progress_total=None,
             )
             if not doc_list:
                 self.logger.warning(

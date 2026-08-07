@@ -5,11 +5,15 @@
 
 每条 doc 对应一条 hyperedge；分块时用 hyperedge 总结作为 head，
 doc 识别全文按 token 切成 body_n。
+
+长 PDF 页切片后的后半段文档：总结时注入同一源文件前文切片的识别正文，
+提示词要求结合前文、但重点突出本段。
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 import copy
 import json
+import re
 import threading
 import time
 
@@ -18,7 +22,7 @@ from ..utils.prompt import PROMPT
 from ..utils.utils import Retry, TQDM_BAR_FORMAT
 from ..utils.config import resolve_credentials, Config
 from ..utils.database import BaseDB
-from typing import Dict
+from typing import Dict, List, Tuple
 import logging
 import tiktoken
 
@@ -91,6 +95,204 @@ class Summary:
         rows = self.hyperedge_db.search('doc_id', doc_id) or []
         return rows[0] if rows else None
 
+    @staticmethod
+    def _parse_doc_extra(doc: dict) -> dict:
+        raw = doc.get('extra')
+        if not raw:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            obj = json.loads(raw)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def slice_doc_name(base_name: str, slice_index: int) -> str:
+        """与 Doc.slice_doc_name 一致：index=0 原名，其后 原名_{n}。"""
+        if slice_index <= 0:
+            return base_name
+        return f"{base_name}_{int(slice_index)}"
+
+    @classmethod
+    def _infer_slice_from_name(cls, name: str) -> Tuple[str, int]:
+        """
+        从文档名推断 (source_name, slice_index)。
+        仅当名称形如「xxx.pdf_N」时视为切片后缀；否则 index=0。
+        """
+        name = (name or '').strip()
+        if not name:
+            return name, 0
+        m = re.match(r'^(?P<base>.+\.pdf)_(?P<idx>\d+)$', name, flags=re.I)
+        if not m:
+            return name, 0
+        return m.group('base'), int(m.group('idx'))
+
+    def _slice_meta(self, doc: dict) -> dict:
+        """
+        解析切片元数据。优先 doc.extra，缺省时从 name 推断。
+        返回: source_name, slice_index, n_slices
+        """
+        name = (doc.get('name') or '').strip()
+        extra = self._parse_doc_extra(doc)
+        try:
+            slice_index = int(extra.get('slice_index') or 0)
+        except (TypeError, ValueError):
+            slice_index = 0
+        try:
+            n_slices = int(extra.get('n_slices') or 1)
+        except (TypeError, ValueError):
+            n_slices = 1
+        source_name = (extra.get('source_name') or '').strip()
+
+        if not source_name or (slice_index <= 0 and n_slices <= 1):
+            inferred_base, inferred_idx = self._infer_slice_from_name(name)
+            if not source_name:
+                source_name = inferred_base or name
+            # extra 未写切片信息时，允许用文件名上的 _N 回填
+            if slice_index <= 0 and inferred_idx > 0 and not extra.get('slice_index'):
+                slice_index = inferred_idx
+            if n_slices <= 1 and slice_index > 0 and not extra.get('n_slices'):
+                n_slices = slice_index + 1
+
+        if not source_name:
+            source_name = name
+        n_slices = max(1, n_slices, slice_index + 1)
+        return {
+            'source_name': source_name,
+            'slice_index': max(0, slice_index),
+            'n_slices': n_slices,
+        }
+
+    def _prior_slice_names(self, source_name: str, slice_index: int) -> List[str]:
+        """slice_index 之前所有前文切片的文档名（0 .. index-1）。"""
+        if slice_index <= 0 or not source_name:
+            return []
+        return [
+            self.slice_doc_name(source_name, i)
+            for i in range(slice_index)
+        ]
+
+    def _load_prior_recognition(
+        self,
+        source_name: str,
+        slice_index: int,
+        *,
+        current_name: str = '',
+    ) -> Tuple[str, List[str]]:
+        """
+        加载前文切片的识别正文，按段拼接。
+        返回 (prior_text, found_names)。缺段只告警，不中断。
+        """
+        names = self._prior_slice_names(source_name, slice_index)
+        if not names:
+            return '', []
+
+        parts: List[str] = []
+        found: List[str] = []
+        missing: List[str] = []
+        for i, nm in enumerate(names):
+            rows = self.doc_db.search('name', nm) or []
+            if not rows:
+                missing.append(nm)
+                continue
+            text = (rows[0].get('content') or '').strip()
+            if not text:
+                missing.append(nm)
+                continue
+            found.append(nm)
+            page_note = ''
+            p_extra = self._parse_doc_extra(rows[0])
+            ps, pe = p_extra.get('page_start'), p_extra.get('page_end')
+            if ps is not None and pe is not None:
+                try:
+                    # page_start 0-based；展示 1-based 闭区间
+                    page_note = f"，源页约 {int(ps) + 1}-{int(pe)}"
+                except (TypeError, ValueError):
+                    page_note = ''
+            parts.append(
+                f"【前文第 {i + 1} 段 / {nm}{page_note}】\n{text}"
+            )
+
+        if missing:
+            self.logger.warning(
+                f"Summary prior context incomplete for {current_name!r}: "
+                f"missing {missing} (source={source_name!r}, "
+                f"slice={slice_index})"
+            )
+        return '\n\n'.join(parts), found
+
+    def _build_summary_user_prompt(
+        self,
+        doc: dict,
+        content: str,
+    ) -> Tuple[str, dict]:
+        """
+        组装 user prompt。后半切片使用 continuation 模板并注入前文。
+        返回 (user_prompt, meta_for_extra)。
+        """
+        meta = self._slice_meta(doc)
+        source_name = meta['source_name']
+        slice_index = meta['slice_index']
+        n_slices = meta['n_slices']
+        name = doc.get('name') or ''
+
+        prior_text = ''
+        prior_names: List[str] = []
+        if slice_index > 0:
+            prior_text, prior_names = self._load_prior_recognition(
+                source_name,
+                slice_index,
+                current_name=name,
+            )
+
+        prompt_name = self._prompt_name()
+        use_continuation = bool(prior_text) and slice_index > 0
+
+        if use_continuation:
+            template = PROMPT.get(
+                'doc_summary_continuation',
+                PROMPT.get(prompt_name, PROMPT['doc_summary']),
+            )
+            user_prompt = (
+                template
+                .replace('{slice_pos}', f'{slice_index + 1}/{n_slices}')
+                .replace('{n_slices}', str(n_slices))
+                .replace('{prior_content}', prior_text)
+                .replace('{content}', content)
+            )
+        else:
+            template = PROMPT.get(prompt_name, PROMPT['doc_summary'])
+            # 用 replace，避免正文中的 {} 触发 str.format 报错
+            if '{content}' in template:
+                user_prompt = template.replace('{content}', content)
+            else:
+                user_prompt = f"{template}\n\n{content}"
+            if slice_index > 0 and not prior_text:
+                self.logger.warning(
+                    f"Summary slice {name!r} has slice_index={slice_index} "
+                    f"but no prior recognition loaded; fall back to "
+                    f"standalone summary."
+                )
+
+        return user_prompt, {
+            'source_name': source_name,
+            'slice_index': slice_index,
+            'n_slices': n_slices,
+            'prior_names': prior_names,
+            'used_continuation': use_continuation,
+        }
+
+    def _summary_sort_key(self, doc: dict):
+        """同源切片按 slice_index 排序，便于日志与串行时的阅读顺序。"""
+        meta = self._slice_meta(doc)
+        return (
+            meta['source_name'] or '',
+            meta['slice_index'],
+            doc.get('id') or 0,
+        )
+
     @Retry(max_attempt=3, wait=0.1, timeout=120, config_attr='summary.retry')
     def processing_single_task(self, doc, **kwargs):
         attempt = int(kwargs.get('attempt', 1) or 1)
@@ -108,13 +310,7 @@ class Summary:
                 f"Doc {name} summary attempt {attempt}/{max_attempt}"
             )
 
-        prompt_name = self._prompt_name()
-        template = PROMPT.get(prompt_name, PROMPT['doc_summary'])
-        # 用 replace，避免正文中的 {} 触发 str.format 报错
-        if '{content}' in template:
-            user_prompt = template.replace('{content}', content)
-        else:
-            user_prompt = f"{template}\n\n{content}"
+        user_prompt, slice_ctx = self._build_summary_user_prompt(doc, content)
         model_args = copy.deepcopy(self._model_args())
         model_args.setdefault('enable_thinking', False)
         model_args.pop('response_format', None)
@@ -174,6 +370,11 @@ class Summary:
             'role': 'head',
             'is_head': True,
             'doc_name': name,
+            'source_name': slice_ctx.get('source_name') or '',
+            'slice_index': slice_ctx.get('slice_index', 0),
+            'n_slices': slice_ctx.get('n_slices', 1),
+            'prior_names': slice_ctx.get('prior_names') or [],
+            'used_continuation': bool(slice_ctx.get('used_continuation')),
             'cost': {
                 'usage_prompt_tokens': prompt_tok,
                 'usage_completion_tokens': completion_tok,
@@ -209,6 +410,11 @@ class Summary:
             })
 
             if self.metrics is not None:
+                cont = (
+                    f" cont=1 prior={len(slice_ctx.get('prior_names') or [])}"
+                    if slice_ctx.get('used_continuation')
+                    else ''
+                )
                 self.metrics.record(
                     'summary',
                     time.perf_counter() - t0,
@@ -217,7 +423,7 @@ class Summary:
                     completion_tokens=completion_tok if not cache_hit else 0,
                     total_tokens=total_tok if not cache_hit else 0,
                     name=name,
-                    extra=f'attempt={attempt}',
+                    extra=f'attempt={attempt}{cont}',
                     log=False,
                     accumulate_time=False,
                 )
@@ -238,13 +444,19 @@ class Summary:
             self.tasks = self.doc_db.search_all() or []
         else:
             self.tasks = self.doc_db.search('status', 'new') or []
+        # 同源切片按序号排序（并行时不强制依赖顺序；串行时日志更清晰）
+        self.tasks = sorted(self.tasks, key=self._summary_sort_key)
         self.doc_db.buffer_clear()
         self.hyperedge_db.buffer_clear()
         self._flushed_count = 0
         self.usage_prompt_tokens = 0
         self.usage_completion_tokens = 0
+        n_cont = sum(
+            1 for d in self.tasks if self._slice_meta(d)['slice_index'] > 0
+        )
         self.logger.debug(
-            f"Number of documents to summarize: {len(self.tasks)}"
+            f"Number of documents to summarize: {len(self.tasks)} "
+            f"(continuation_slices≈{n_cont})"
         )
 
     def processing(self):

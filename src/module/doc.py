@@ -147,8 +147,8 @@ class Doc:
                 return True
         return False
 
-    def pdf_to_images_b64(self, pdf_path: Path):
-        """Render each page of a PDF to base64 data-URL at configured DPI."""
+    def _open_pdf_validated(self, pdf_path: Path):
+        """Open PDF after basic existence / magic checks. Caller must close."""
         try:
             import fitz  # PyMuPDF
         except ImportError as e:
@@ -176,6 +176,84 @@ class Doc:
                 f"Not a real PDF (magic={magic!r}, kind={kind}): {pdf_path.name}"
             )
 
+        return fitz.open(str(pdf_path))
+
+    def pdf_page_count(self, pdf_path: Path) -> int:
+        """Return page count without rendering (for slice planning)."""
+        doc = self._open_pdf_validated(pdf_path)
+        try:
+            n = int(doc.page_count or 0)
+            if n <= 0:
+                raise NonRetryableError(f"PDF has 0 pages: {Path(pdf_path).name}")
+            return n
+        finally:
+            doc.close()
+
+    @staticmethod
+    def slice_doc_name(base_name: str, slice_index: int) -> str:
+        """
+        切片输出文档名：首段 (index=0) 保持原名；
+        多出来的段为「原名_{n}」，n 从 1 起（index=1 → _1）。
+        """
+        if slice_index <= 0:
+            return base_name
+        return f"{base_name}_{int(slice_index)}"
+
+    def max_pages_per_doc(self) -> int:
+        try:
+            n = int(
+                getattr(self.config.doc.recognition, 'max_pages_per_doc', 12) or 12
+            )
+        except (TypeError, ValueError):
+            n = 12
+        return max(1, n)
+
+    def plan_pdf_slices(self, pdf_path: Path) -> list:
+        """
+        按 max_pages_per_doc 规划识别单元。
+        每项: path, doc_name, page_start(0-based), page_end(exclusive),
+              slice_index, total_pages, n_slices。
+        页数 ≤ 上限时仅一段，doc_name = 原文件名。
+        """
+        pdf_path = Path(pdf_path)
+        total_pages = self.pdf_page_count(pdf_path)
+        max_pages = self.max_pages_per_doc()
+        units = []
+        slice_index = 0
+        for page_start in range(0, total_pages, max_pages):
+            page_end = min(page_start + max_pages, total_pages)
+            units.append({
+                'path': pdf_path,
+                'doc_name': self.slice_doc_name(pdf_path.name, slice_index),
+                'page_start': page_start,
+                'page_end': page_end,
+                'slice_index': slice_index,
+                'total_pages': total_pages,
+            })
+            slice_index += 1
+        for u in units:
+            u['n_slices'] = len(units)
+        return units
+
+    def pdf_to_images_b64(
+        self,
+        pdf_path: Path,
+        page_start: int = 0,
+        page_end: int = None,
+    ):
+        """
+        Render PDF pages to base64 data-URLs at configured DPI.
+        page_start / page_end: 0-based half-open range; None end = all remaining.
+        """
+        try:
+            import fitz  # PyMuPDF
+        except ImportError as e:
+            raise ImportError(
+                "PyMuPDF (pymupdf) is required for PDF recognition. "
+                "Install with: pip install pymupdf"
+            ) from e
+
+        pdf_path = Path(pdf_path)
         dpi = self.config.doc.recognition.dpi
         zoom = dpi / 72.0
         matrix = fitz.Matrix(zoom, zoom)
@@ -190,11 +268,20 @@ class Doc:
             mime = 'png'
 
         images = []
-        doc = fitz.open(str(pdf_path))
+        doc = self._open_pdf_validated(pdf_path)
         try:
-            if doc.page_count <= 0:
-                raise ValueError(f"PDF has 0 pages: {pdf_path.name}")
-            for page in doc:
+            n = int(doc.page_count or 0)
+            if n <= 0:
+                raise NonRetryableError(f"PDF has 0 pages: {pdf_path.name}")
+            start = max(0, int(page_start or 0))
+            end = n if page_end is None else min(int(page_end), n)
+            if start >= end:
+                raise NonRetryableError(
+                    f"Empty page range [{start}, {end}) for {pdf_path.name} "
+                    f"(total_pages={n})"
+                )
+            for i in range(start, end):
+                page = doc.load_page(i)
                 pix = page.get_pixmap(matrix=matrix, alpha=False)
                 img_bytes = pix.tobytes(fitz_fmt)
                 b64 = base64.b64encode(img_bytes).decode('ascii')
@@ -213,18 +300,32 @@ class Doc:
             f'{system_body}\n---\n{prompt_body}'.encode('utf-8')
         ).hexdigest()[:16]
 
-    def _recognition_cache_key(self, pdf_path: Path, file_hash: str) -> str:
-        """Whole-document recognition result cache key."""
+    def _recognition_cache_key(
+        self,
+        pdf_path: Path,
+        file_hash: str,
+        *,
+        doc_name: str = None,
+        page_start: int = 0,
+        page_end: int = None,
+        slice_index: int = 0,
+    ) -> str:
+        """Per-slice recognition result cache key."""
         recog = self.config.doc.recognition
         payload = {
-            'scope': 'file',
+            'scope': 'page_slice',
             'file_hash': file_hash,
             'name': pdf_path.name,
+            'doc_name': doc_name or pdf_path.name,
+            'page_start': int(page_start or 0),
+            'page_end': page_end,
+            'slice_index': int(slice_index or 0),
+            'max_pages_per_doc': self.max_pages_per_doc(),
             'model_args': recog.model_args,
             'dpi': recog.dpi,
             'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
             'prompt_hash': self._prompt_hash(),
-            'pipeline': 'whole_file_plain_text_v1',
+            'pipeline': 'page_slice_plain_text_v1',
             'image_format': getattr(recog, 'image_format', 'jpeg'),
         }
         return hashlib.md5(
@@ -259,16 +360,28 @@ class Doc:
         *,
         page_count: int = 0,
         source_pdf: str = '',
+        source_name: str = '',
         file_hash: str = '',
         recognition_cost=None,
+        slice_index: int = 0,
+        n_slices: int = 1,
+        page_start: int = 0,
+        page_end: int = None,
+        total_pages: int = 0,
     ) -> dict:
         """doc.extra metadata (full recognition text lives in doc.content)."""
         return {
             'page_count': page_count,
             'source_pdf': source_pdf,
+            'source_name': source_name or '',
             'file_hash': file_hash,
             'recognition_cost': recognition_cost or {},
-            'pipeline': 'whole_file_plain_text_v1',
+            'pipeline': 'page_slice_plain_text_v1',
+            'slice_index': int(slice_index or 0),
+            'n_slices': int(n_slices or 1),
+            'page_start': int(page_start or 0),
+            'page_end': page_end,
+            'total_pages': int(total_pages or page_count or 0),
         }
 
     @Retry(
@@ -279,12 +392,17 @@ class Doc:
     )
     def recognize_pdf(self, pdf_path: Path, **kwargs):
         """
-        PDF → 全部页面图像 → 一次 VLM 多图识别 → 全文纯文本。
+        PDF 页切片 → 页面图像 → 一次 VLM 多图识别 → 纯文本。
 
-        文件级并行由 prepare_from_pdfs 控制。
+        可通过 kwargs 指定单段切片（prepare_from_pdfs 已规划好）：
+          doc_name, page_start, page_end, slice_index, n_slices, total_pages
+
+        未传切片参数时按 max_pages_per_doc 自动规划并识别首段
+        （兼容旧调用；多段请用 prepare_from_pdfs）。
 
         返回 dict 供 insert：
-          content : 全文纯文本
+          content : 本段纯文本
+          name    : 文档名（首段原名，后续 原名_{n}）
           extra   : 元数据 JSON
           hash    : content 哈希
         """
@@ -292,10 +410,43 @@ class Doc:
         max_attempt = int(kwargs.get('max_attempt', 1) or 1)
 
         pdf_path = Path(pdf_path)
+        page_start = int(kwargs.get('page_start', 0) or 0)
+        page_end = kwargs.get('page_end', None)
+        if page_end is not None:
+            page_end = int(page_end)
+        slice_index = int(kwargs.get('slice_index', 0) or 0)
+        n_slices = int(kwargs.get('n_slices', 1) or 1)
+        total_pages = kwargs.get('total_pages', None)
+        doc_name = kwargs.get('doc_name') or self.slice_doc_name(
+            pdf_path.name, slice_index
+        )
+
+        # 无切片参数的旧调用：按规划取第 0 段（≤上限即全文）
+        if (
+            'page_end' not in kwargs
+            and 'page_start' not in kwargs
+            and 'slice_index' not in kwargs
+        ):
+            units = self.plan_pdf_slices(pdf_path)
+            unit = units[0]
+            page_start = unit['page_start']
+            page_end = unit['page_end']
+            slice_index = unit['slice_index']
+            n_slices = unit['n_slices']
+            total_pages = unit['total_pages']
+            doc_name = unit['doc_name']
+
         raw_bytes = pdf_path.read_bytes()
         file_hash = hashlib.md5(raw_bytes).hexdigest()
         recog = self.config.doc.recognition
-        cache_key = self._recognition_cache_key(pdf_path, file_hash)
+        cache_key = self._recognition_cache_key(
+            pdf_path,
+            file_hash,
+            doc_name=doc_name,
+            page_start=page_start,
+            page_end=page_end,
+            slice_index=slice_index,
+        )
 
         if recog.use_cache:
             cached = self._recog_cache.search_cache(cache_key)
@@ -306,7 +457,7 @@ class Doc:
                         'recognize',
                         0.0,
                         cache_hit=True,
-                        name=pdf_path.name,
+                        name=doc_name,
                         log=False,
                         accumulate_time=False,
                     )
@@ -314,23 +465,46 @@ class Doc:
 
         if attempt > 1:
             self.logger.debug(
-                f"PDF {pdf_path.name} recognition attempt {attempt}/{max_attempt}"
+                f"PDF {doc_name} recognition attempt {attempt}/{max_attempt} "
+                f"(source={pdf_path.name}, pages={page_start}:{page_end})"
             )
 
-        images_b64 = self.pdf_to_images_b64(pdf_path)
+        images_b64 = self.pdf_to_images_b64(
+            pdf_path, page_start=page_start, page_end=page_end
+        )
         if not images_b64:
-            raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
+            raise NonRetryableError(
+                f"No pages rendered from PDF: {pdf_path.name} "
+                f"[{page_start}:{page_end}]"
+            )
 
         page_count = len(images_b64)
+        if total_pages is None:
+            total_pages = page_count if n_slices <= 1 else page_end
+        total_pages = int(total_pages or page_count)
+
         user_prompt = PROMPT.get(
             getattr(recog, 'prompt', 'pdf_recognize'),
             PROMPT['pdf_recognize'],
         )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
+        # 对模型按「本段文档」描述；页码用源文件 1-based 区间便于对齐
+        human_from = page_start + 1
+        human_to = page_start + page_count
+        if n_slices > 1:
+            span_note = (
+                f"本段为源文件第 {human_from}-{human_to} 页"
+                f"（共 {total_pages} 页，第 {slice_index + 1}/{n_slices} 段），"
+                f"以下按页序给出本段全部页面图片。"
+            )
+        else:
+            span_note = (
+                f"本文件共 {page_count} 页，以下按页序给出全部页面图片。"
+            )
         user_prompt = (
             f"{user_prompt}\n\n"
-            f"本文件共 {page_count} 页，以下按页序给出全部页面图片。"
-            f"请用中文直接输出整份文档的识别正文（纯文本，不要 JSON）；"
+            f"{span_note}"
+            f"请用中文直接输出本段文档的识别正文（纯文本，不要 JSON）；"
             f"数值范围、限值与临界条件须完整保留上下端点与测定条件。"
         )
 
@@ -351,8 +525,9 @@ class Doc:
         if response.get('status') != 1:
             err = str(response.get('answer') or '')[:500]
             raise RuntimeError(
-                f"PDF recognition API failed for {pdf_path.name} "
-                f"(attempt {attempt}/{max_attempt}, pages={page_count}, "
+                f"PDF recognition API failed for {doc_name} "
+                f"(source={pdf_path.name}, attempt {attempt}/{max_attempt}, "
+                f"pages={page_count} [{human_from}-{human_to}/{total_pages}], "
                 f"model={model_args.get('model')!r}): {err}"
             )
 
@@ -360,8 +535,9 @@ class Doc:
         content = self.normalize_recognition_text(raw_answer)
         if not content:
             raise RuntimeError(
-                f"PDF recognition empty answer for {pdf_path.name} "
-                f"(attempt {attempt}/{max_attempt}, pages={page_count})"
+                f"PDF recognition empty answer for {doc_name} "
+                f"(source={pdf_path.name}, attempt {attempt}/{max_attempt}, "
+                f"pages={page_count} [{human_from}-{human_to}/{total_pages}])"
             )
 
         cost = {
@@ -372,24 +548,40 @@ class Doc:
         extra_obj = self.doc_extra_payload(
             page_count=page_count,
             source_pdf=str(pdf_path),
+            source_name=pdf_path.name,
             file_hash=file_hash,
             recognition_cost=cost,
+            slice_index=slice_index,
+            n_slices=n_slices,
+            page_start=page_start,
+            page_end=page_start + page_count,
+            total_pages=total_pages,
         )
         result = {
-            'name': pdf_path.name,
+            'name': doc_name,
             'content': content,
             'extra': json.dumps(extra_obj, ensure_ascii=False),
             'hash': hash_str(content),
             'file_hash': file_hash,
             'source_pdf': str(pdf_path),
+            'source_name': pdf_path.name,
             'page_count': page_count,
+            'slice_index': slice_index,
+            'n_slices': n_slices,
             'recognition_cost': cost,
         }
 
         if recog.use_cache:
             self._recog_cache.update_cache(
                 json.dumps(
-                    {'name': pdf_path.name, 'file_hash': file_hash},
+                    {
+                        'name': doc_name,
+                        'source_name': pdf_path.name,
+                        'file_hash': file_hash,
+                        'page_start': page_start,
+                        'page_end': page_start + page_count,
+                        'slice_index': slice_index,
+                    },
                     ensure_ascii=False,
                 ),
                 json.dumps(result, ensure_ascii=False),
@@ -404,8 +596,11 @@ class Doc:
                 prompt_tokens=response.get('usage_prompt_tokens') or 0,
                 completion_tokens=response.get('usage_completion_tokens') or 0,
                 total_tokens=response.get('usage_total_tokens'),
-                name=pdf_path.name,
-                extra=f'pages={page_count} attempt={attempt}',
+                name=doc_name,
+                extra=(
+                    f'pages={page_count} slice={slice_index + 1}/{n_slices} '
+                    f'attempt={attempt}'
+                ),
                 log=False,
                 accumulate_time=False,
             )
@@ -419,7 +614,9 @@ class Doc:
     ):
         """
         Recognize PDFs into doc_list tasks (before insert).
-        Each PDF becomes one independent document; multi-thread by file.
+
+        渲染页数超过 max_pages_per_doc 时切成多段，每段作为独立文档：
+        首段名=原文件名，后续=原文件名_{n}。切片级多线程并行。
         """
         if pdf_paths is None:
             pdf_paths = self.list_pdf_files()
@@ -432,22 +629,36 @@ class Doc:
             )
 
         existing_names = self.get_existing_doc_names() if skip_existing else set()
-        to_process = []
-        skipped = []
-        invalid = []  # (name, reason) 假 PDF / 空文件，进池前剔除
+        to_process = []  # list of slice units
+        skipped = []  # doc_name already in DB
+        invalid = []  # (name, reason) 假 PDF / 空文件 / 规划失败
+        max_pages = self.max_pages_per_doc()
+        n_source_files = 0
+        n_sliced_files = 0
+
         for p in pdf_paths:
-            if skip_existing and p.name in existing_names:
-                skipped.append(p.name)
-                continue
             bad = self.classify_pdf_magic(p)
             if bad:
                 invalid.append((p.name, bad))
                 continue
-            to_process.append(p)
+            try:
+                units = self.plan_pdf_slices(p)
+            except Exception as e:
+                invalid.append((p.name, str(e)))
+                continue
+            n_source_files += 1
+            if len(units) > 1:
+                n_sliced_files += 1
+            for unit in units:
+                name = unit['doc_name']
+                if skip_existing and name in existing_names:
+                    skipped.append(name)
+                    continue
+                to_process.append(unit)
 
         if skipped:
             self.logger.info(
-                f"Skip {len(skipped)} PDF(s) already in doc table: "
+                f"Skip {len(skipped)} slice doc(s) already in doc table: "
                 f"{skipped[:10]}{'...' if len(skipped) > 10 else ''}"
             )
             if self.metrics is not None:
@@ -463,9 +674,9 @@ class Doc:
 
         if invalid:
             self.logger.warning(
-                f"Skip {len(invalid)} non-PDF file(s) "
-                f"(wrong magic / empty; not sent to VLM): "
-                f"{invalid[:5]}{'...' if len(invalid) > 5 else ''}"
+                f"Skip {len(invalid)} non-PDF/unreadable file(s) "
+                f"(wrong magic / empty / plan failed; not sent to VLM): "
+                # f"{invalid[:5]}{'...' if len(invalid) > 5 else ''}"
             )
             if self.metrics is not None:
                 for name, _reason in invalid:
@@ -479,7 +690,7 @@ class Doc:
                     )
 
         if not to_process:
-            self.logger.info("No new PDFs to recognize.")
+            self.logger.info("No new PDF slices to recognize.")
             return []
 
         if progress_total is None:
@@ -513,29 +724,40 @@ class Doc:
                     accumulate_time=False,
                 )
 
-        def _one(path):
-            """单文件识别；任何错误只跳过当前文件，不中断整批。"""
+        def _unit_label(unit) -> str:
+            return unit.get('doc_name') or Path(unit['path']).name
+
+        def _one(unit):
+            """单切片识别；任何错误只跳过当前切片，不中断整批。"""
+            label = _unit_label(unit)
             try:
-                out = self.recognize_pdf(path)
-            except NonRetryableError as e:
-                # 假 PDF / 空页等：不可重试，勿写成「重试耗尽」
-                self.logger.warning(
-                    f"Skip PDF (invalid/unreadable, no retry): {path.name}: {e}"
+                out = self.recognize_pdf(
+                    unit['path'],
+                    doc_name=unit['doc_name'],
+                    page_start=unit['page_start'],
+                    page_end=unit['page_end'],
+                    slice_index=unit['slice_index'],
+                    n_slices=unit['n_slices'],
+                    total_pages=unit['total_pages'],
                 )
-                _record_skip(path.name)
+            except NonRetryableError as e:
+                self.logger.warning(
+                    f"Skip PDF slice (invalid/unreadable, no retry): {label}: {e}"
+                )
+                _record_skip(label)
                 return None
             except Exception as e:
                 self.logger.warning(
-                    f"Skip PDF after error: {path.name}: {e}"
+                    f"Skip PDF slice after error: {label}: {e}"
                 )
-                _record_skip(path.name)
+                _record_skip(label)
                 return None
             if out is None:
                 self.logger.warning(
-                    f"Skip PDF (API retries exhausted or empty result): "
-                    f"{path.name}"
+                    f"Skip PDF slice (API retries exhausted or empty result): "
+                    f"{label}"
                 )
-                _record_skip(path.name)
+                _record_skip(label)
             return out
 
         def _postfix(inflight: int = 0):
@@ -548,9 +770,11 @@ class Doc:
             return pf
 
         self.logger.info(
-            f"PDF recognition start: {len(to_process)} file(s), "
-            f"num_thread={num_thread}, http_timeout={http_timeout:.0f}s "
-            f"(whole-file multi-image per PDF)"
+            f"PDF recognition start: sources={n_source_files}, "
+            f"slices={len(to_process)}, sliced_files={n_sliced_files}, "
+            f"max_pages_per_doc={max_pages}, num_thread={num_thread}, "
+            f"http_timeout={http_timeout:.0f}s "
+            f"(page-slice multi-image per unit)"
         )
         t0 = time.perf_counter()
 
@@ -558,11 +782,11 @@ class Doc:
             bar = tqdm(
                 to_process,
                 desc='recognize',
-                unit='pdf',
+                unit='slice',
                 bar_format=TQDM_BAR_FORMAT,
             )
-            for p in bar:
-                result = _one(p)
+            for unit in bar:
+                result = _one(unit)
                 if result is not None:
                     results.append(result)
                 bar.set_postfix(**_postfix())
@@ -570,13 +794,13 @@ class Doc:
             # wait + 心跳：避免 as_completed 在末尾长请求上「假死」无日志
             with ThreadPoolExecutor(max_workers=num_thread) as executor:
                 pending = {
-                    executor.submit(_one, p): (p, time.perf_counter())
-                    for p in to_process
+                    executor.submit(_one, unit): (unit, time.perf_counter())
+                    for unit in to_process
                 }
                 bar = tqdm(
                     total=len(pending),
                     desc='recognize',
-                    unit='pdf',
+                    unit='slice',
                     bar_format=TQDM_BAR_FORMAT,
                 )
                 heartbeat_s = 30.0
@@ -590,8 +814,8 @@ class Doc:
                         now = time.perf_counter()
                         aged = sorted(
                             (
-                                (now - started, path.name)
-                                for path, started in pending.values()
+                                (now - started, _unit_label(unit))
+                                for unit, started in pending.values()
                             ),
                             reverse=True,
                         )
@@ -600,16 +824,17 @@ class Doc:
                             for elapsed, name in aged[:8]
                         )
                         more = f' +{len(aged) - 8} more' if len(aged) > 8 else ''
-                        self.logger.info(
-                            f"[recognize] still in-flight={len(pending)} "
-                            f"(each call may take up to ~{http_timeout:.0f}s "
-                            f"HTTP timeout + retries): {top}{more}"
-                        )
+                        # self.logger.info(
+                        #     f"[recognize] still in-flight={len(pending)} "
+                        #     f"(each call may take up to ~{http_timeout:.0f}s "
+                        #     f"HTTP timeout + retries): {top}{more}"
+                        # )
                         bar.set_postfix(**_postfix(len(pending)))
                         continue
 
                     for future in done:
-                        path, started = pending.pop(future)
+                        unit, started = pending.pop(future)
+                        label = _unit_label(unit)
                         try:
                             result = future.result()
                             if result is not None:
@@ -617,9 +842,9 @@ class Doc:
                                     results.append(result)
                         except Exception as e:
                             self.logger.error(
-                                f"Failed to recognize {path.name}: {e}"
+                                f"Failed to recognize {label}: {e}"
                             )
-                            _record_skip(path.name)
+                            _record_skip(label)
                         bar.update(1)
                         bar.set_postfix(**_postfix(len(pending)))
                 bar.close()
@@ -632,9 +857,11 @@ class Doc:
             self.metrics.log_stage('recognize')
 
         self.logger.info(
-            f"Recognized {len(results)}/{len(to_process)} valid PDF documents "
-            f"(skipped existing={len(skipped)}, invalid_non_pdf={len(invalid)}, "
-            f"threads={num_thread}, wall_time={wall:.3f}s)."
+            f"Recognized {len(results)}/{len(to_process)} valid PDF slice docs "
+            f"(sources={n_source_files}, sliced_files={n_sliced_files}, "
+            f"skipped existing={len(skipped)}, invalid={len(invalid)}, "
+            f"max_pages_per_doc={max_pages}, threads={num_thread}, "
+            f"wall_time={wall:.3f}s)."
         )
         return results
 

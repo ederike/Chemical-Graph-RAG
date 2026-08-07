@@ -112,8 +112,10 @@ class RetryConfig(BaseModel):
 
 class DocRecognitionConfig(BaseModel):
     """
-    PDF vision recognition（整文件一次多图 VLM，文件级多线程）。
-    单次请求携带该 PDF 全部页面图片；输出纯文本（非 JSON）。
+    PDF vision recognition（页切片多图 VLM，切片级多线程）。
+
+    渲染页数超过 max_pages_per_doc 时按该上限切成多段，每段独立识别、
+    独立入库：首段保留原文件名，后续段为「原文件名_{n}」（n 从 1 起）。
     """
     api_key: str = ""
     base_url: str = ""
@@ -127,6 +129,8 @@ class DocRecognitionConfig(BaseModel):
     prompt: str = 'pdf_recognize'
     dpi: int = 150
     image_format: str = 'jpeg'
+    # 单次 VLM 最多携带的渲染页数；> 该值则切成多个独立文档
+    max_pages_per_doc: int = 12
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(
             max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=600.0
@@ -137,6 +141,15 @@ class DocRecognitionConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("max_pages_per_doc", mode="before")
+    @classmethod
+    def _coerce_max_pages(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 12
+        return max(1, n)
 
 def _coerce_flush_every(v, default: int = 1000) -> int:
     """每处理多少条落盘一次；<=0 时回落到 default。"""
