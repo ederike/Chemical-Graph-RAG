@@ -26,7 +26,6 @@ try:
 except ImportError:  # pragma: no cover
     _tqdm = None
 
-
 class QuestionGenerator:
     """
     按跳数配置从 doc.content 抽样，调用 LLM 生成场景问题。

@@ -33,9 +33,6 @@ from .state import (
     sum_retrieve_latency,
 )
 
-
-# ── context ──────────────────────────────────────────────────────────────────
-
 @dataclass
 class AgentContext:
     cfg: AgentConfig
@@ -54,9 +51,6 @@ class AgentContext:
     def chat_text(self, system: str, user: str) -> str:
         return answer_of(self.chat(system, user))
 
-
-# ── plan ─────────────────────────────────────────────────────────────────────
-
 def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     query = (state.get('query') or '').strip()
     ctx.logger.info(f'[agent.plan] query={query!r}')
@@ -71,9 +65,6 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
         + ' | '.join(f"{s['id']}:{s['question'][:40]}" for s in steps)
     )
     return {'plan': steps, 'results': {}, 'error': ''}
-
-
-# ── execute ──────────────────────────────────────────────────────────────────
 
 def _resolve_question(
     ctx: AgentContext,
@@ -102,7 +93,6 @@ def _resolve_question(
     except Exception as e:
         ctx.logger.warning(f'[agent.execute] resolve failed step={step.get("id")}: {e}')
     return f'{planned}\n（已知：{prior[:500]}）'
-
 
 def execute_node(ctx: AgentContext, state: AgentState) -> dict:
     query   = state.get('query') or ''
@@ -134,12 +124,8 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
 
     return {'results': results}
 
-
 def route_after_execute(state: AgentState) -> str:
     return 'synthesize' if plan_done(state.get('plan') or [], state.get('results') or {}) else 'execute'
-
-
-# ── synthesize ───────────────────────────────────────────────────────────────
 
 def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
     query   = state.get('query') or ''

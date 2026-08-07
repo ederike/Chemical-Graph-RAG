@@ -7,10 +7,8 @@ import hashlib
 import json
 import inspect
 
-
 def hash_str(s):
     return hashlib.md5(s.encode()).hexdigest()
-
 
 # 构建流水线进度条：不显示 elapsed/remaining，只保留速率 + postfix
 TQDM_BAR_FORMAT = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{rate_fmt}{postfix}]'
@@ -159,7 +157,6 @@ class Cache:
 class NonRetryableError(Exception):
     """明确不可恢复的错误：@Retry 遇到后不再重试，直接失败。"""
 
-
 def _normalize_wait_schedule(wait) -> list:
     """
     将 wait 规范为非负秒数列表（指数退避 schedule）。
@@ -192,7 +189,6 @@ def _normalize_wait_schedule(wait) -> list:
         except (TypeError, ValueError):
             continue
     return out if out else [0.0]
-
 
 class Retry:
     """

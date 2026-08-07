@@ -1,7 +1,6 @@
 from pathlib import Path
 from .database import BaseDB,BaseVDB
 
-
 class DocDB(BaseDB):
     def __init__(self,db_path):
         name='doc'
@@ -104,7 +103,6 @@ class EdgeDB(BaseDB):
             );
             """
         super().__init__(db_path,name,create_table_sql)
-
 
 class DocVDB(BaseVDB):
     def __init__(self,vdb_path,dim):

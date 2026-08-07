@@ -1,55 +1,23 @@
+"""Pipeline entry: build index then optionally run benchmark."""
 from src.DHMF import DHMF
 from src.utils.config import Config
-import time 
-import json
 from benchmark.config import DEFAULT_CONFIG_PATH
 from benchmark.workflow import TestQueryWorkflow
-config = Config.from_yaml('example/a/config_open.yaml')
 
-ChemicalGraph = DHMF(config)
+if __name__ == '__main__':
+    config = Config.from_yaml('example/a/config_open.yaml')
+    graph = DHMF(config)
 
-# --- build pipeline ---
-# ChemicalGraph.insert_clear()
-# ChemicalGraph.summary_clear()
-# ChemicalGraph.chunk_clear()
-# ChemicalGraph.extract_clear()
-# ChemicalGraph.build_clear()
+    graph.insert_default()
+    graph.summary()
+    graph.chunk()
+    graph.extract()
+    graph.build()
+    graph.vectorization()
 
-# ChemicalGraph.download_from_oss()
-ChemicalGraph.insert_default()   
-ChemicalGraph.summary()          
-ChemicalGraph.chunk()            
-ChemicalGraph.extract()
-ChemicalGraph.build()            
-ChemicalGraph.vectorization()
+    # graph.recommend()
+    # print(graph.query('...', mode='dual_path', pretty=True))
+    # print(graph.agent_query('...', pretty=True))
 
-# ChemicalGraph.recommend()
-
-
-# --- dual-path RAG ---
-# print(ChemicalGraph.query(
-#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么',
-#     mode='dual_path',
-#     pretty=True,
-# ))
-
-# print(ChemicalGraph.query(
-#     'CAS号为25120-20-1的东西是什么',
-#     mode='dual_path',
-#     pretty=True,
-# ))
-
-
-# --- 多跳 Agent（配置见 config.agent）---
-# print(ChemicalGraph.agent_query(
-#     'NFPA 评级为健康1,相对密度为1.10左右，自燃温度高于400°C以上的产品有什么？',
-#     pretty=True,
-# ))
-
-# print(ChemicalGraph.agent_query(
-#     '比较 ABS 722 与 Admex™ 6187 的用途有什么不同',
-#     pretty=True,
-# ))
-
-wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
-wf.run()
+    wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
+    wf.run()

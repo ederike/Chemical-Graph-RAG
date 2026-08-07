@@ -14,7 +14,6 @@ from langgraph.graph import END, START, StateGraph
 from .nodes import AgentContext, execute_node, plan_node, route_after_execute, synthesize_node
 from .state import AgentState
 
-
 def build_agent_graph(ctx: AgentContext) -> Any:
     g = StateGraph(AgentState)
     g.add_node('plan',       partial(plan_node,       ctx))

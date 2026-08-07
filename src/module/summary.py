@@ -22,7 +22,6 @@ from typing import Dict
 import logging
 import tiktoken
 
-
 class Summary:
     def __init__(
         self,

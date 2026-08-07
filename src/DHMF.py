@@ -3,14 +3,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .custom_module.doc import Doc
-from .custom_module.summary import Summary
-from .custom_module.chunk import Chunk
-from .custom_module.extract import Extract
-from .custom_module.build import Build
-from .custom_module.vectorization import Vectorization
-from .custom_module.retrieve import Retrieve
-from .custom_module.recommend import Recommend
+from .module.doc import Doc
+from .module.summary import Summary
+from .module.chunk import Chunk
+from .module.extract import Extract
+from .module.build import Build
+from .module.vectorization import Vectorization
+from .module.retrieve import Retrieve
+from .module.recommend import Recommend
 
 from .utils.OpenAIAPI import LLM
 from .utils.prompt import PROMPT
@@ -70,7 +70,6 @@ class DHMF:
         Console-only by default. File log is created only when a build stage starts
         (see ensure_build_logger). Query never creates a new log file.
         """
-        # Unique logger per instance to avoid handler stacking across reinits
         self.logger = logging.getLogger(f"DHMF.{id(self)}")
         self.logger.handlers.clear()
         self.logger.propagate = False
@@ -85,14 +84,10 @@ class DHMF:
 
         self._file_handler = None
         self._build_log_path = None
+        self.logger.setLevel(
+            logging.DEBUG if self.config.settings.debug else logging.INFO
+        )
 
-        if self.config.settings.debug:
-            self.logger.setLevel(logging.DEBUG)
-        else:
-            self.logger.setLevel(logging.INFO)
-
-        # self.logger.debug(f"config: {self.config}")
-        # Default LLM for dual-path answer: retrieve stage → settings
         from .utils.config import resolve_credentials
         api_key, base_url = resolve_credentials(self.config, self.config.retrieve)
         self.llmmodel = LLM(api_key, base_url)
@@ -129,7 +124,6 @@ class DHMF:
         if reset_session or self.metrics._wall_start is None:
             if reset_session:
                 self.metrics.reset()
-                # reload lifetime after reset so inheritance is current
                 self.metrics.load_lifetime()
             if self.metrics._wall_start is None:
                 self.metrics.start_pipeline()
@@ -169,7 +163,6 @@ class DHMF:
         if mysql_cfg is None:
             raise RuntimeError("config.dm_data_mysql is required for download_from_oss")
 
-        # Param priority over yaml
         if limit is None:
             limit = int(getattr(oss_cfg, 'limit', 0) or 0) if oss_cfg else 0
         else:
@@ -180,9 +173,14 @@ class DHMF:
 
         table = getattr(oss_cfg, 'table', 'spider_product') if oss_cfg else 'spider_product'
         download_subdir = (
-            getattr(oss_cfg, 'download_dir', None) or getattr(self.config.doc, 'doc_dir', 'doc') or 'doc'
+            getattr(oss_cfg, 'download_dir', None)
+            or getattr(self.config.doc, 'doc_dir', 'doc')
+            or 'doc'
         )
-        bucket_key = getattr(oss_cfg, 'bucket_key', 'ky-products-files') if oss_cfg else 'ky-products-files'
+        bucket_key = (
+            getattr(oss_cfg, 'bucket_key', 'ky-products-files')
+            if oss_cfg else 'ky-products-files'
+        )
         download_dir = Path(self.config.settings.working_path) / download_subdir
 
         self.logger.info(
@@ -208,15 +206,8 @@ class DHMF:
         self.logger.info(f"Finish download_from_oss: {summary}")
         return summary
 
-    # Alias (historical typo spelling)
-    download_form_oss = download_from_oss
-
     def insert_default(self):
-        """
-        Default insert — source files always under working_path/doc (e.g. example/a/doc):
-          - source_type=pdf: recognize *.pdf then insert
-          - source_type=txt: legacy *.txt insert
-        """
+        """Insert docs from working_path/doc (pdf recognition or plain txt)."""
         self.begin_build()
         source_type = getattr(self.config.doc, 'source_type', 'pdf')
         if source_type == 'txt':
@@ -224,14 +215,9 @@ class DHMF:
             folder_path = Path(self.config.settings.working_path) / getattr(
                 self.config.doc, 'doc_dir', 'doc'
             )
-            text_files = list(folder_path.glob("*.txt"))
-            for file_path in text_files:
-                with open(file_path, "r", encoding="utf-8") as file:
-                    text = file.read()
-                doc_list.append({
-                    "name": file_path.name,
-                    "content": text,
-                })
+            for file_path in folder_path.glob('*.txt'):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    doc_list.append({'name': file_path.name, 'content': f.read()})
             self.insert(doc_list)
         else:
             self.insert_pdfs()
@@ -252,8 +238,7 @@ class DHMF:
         if pdf_paths is None:
             all_pdfs = self.doc_module.list_pdf_files()
         else:
-            from pathlib import Path as _Path
-            all_pdfs = [_Path(p) for p in pdf_paths]
+            all_pdfs = [Path(p) for p in pdf_paths]
 
         if skip_existing:
             existing = self.doc_module.get_existing_doc_names()
@@ -288,8 +273,6 @@ class DHMF:
             self.logger.info(
                 f"PDF batch {batch_i}/{n_batches}: recognize {len(batch)} file(s)"
             )
-            # 批次内不再二次 skip（外层已过滤）；metrics 仍由 prepare_from_pdfs 汇总
-            # progress_total=整次任务待识别总量（非本批 flush_every）
             doc_list = self.doc_module.prepare_from_pdfs(
                 pdf_paths=batch,
                 skip_existing=False,
@@ -407,7 +390,6 @@ class DHMF:
 
             if not docs:
                 self.logger.warning(f"delete: no document found with name={name!r}")
-                # still allow clearing recognition cache for that filename
                 if clear_cache:
                     counts['cache'] = self.doc_module.clear_recognition_cache(name)
                 summary[name] = counts
@@ -415,7 +397,6 @@ class DHMF:
 
             doc_ids = counts['doc_ids']
 
-            # Collect related row ids for VDB cleanup (before SQL delete)
             chunk_ids, hyperedge_ids, node_ids, edge_ids = [], [], [], []
             for doc_id in doc_ids:
                 chunk_ids.extend([r['id'] for r in self.db['chunk'].search('doc_id', doc_id)])
@@ -424,7 +405,6 @@ class DHMF:
                 if delete_edge:
                     edge_ids.extend([r['id'] for r in self.db['edge'].search('doc_id', doc_id)])
 
-            # Delete child tables first, then doc
             for doc_id in doc_ids:
                 counts['node'] += self.db['node'].delete('doc_id', doc_id)
                 counts['hyperedge'] += self.db['hyperedge'].delete('doc_id', doc_id)
@@ -542,14 +522,9 @@ class DHMF:
         self.vectorization_module.clear(self.db[db_name],self.vdb[db_name])
 
     def recommend(self):
-        """
-        相似超边推荐（离线、可单独运行，不挂进 build 流水线）。
-        按 recommend 配置：关键词筛节点 → HDBSCAN 聚类 → 写 hyperedge.recommendation。
-        每次调用先清空再全量重算。依赖 node 向量已建好（vectorization）。
-        """
+        """Offline similar-hyperedge recommendation (clears then recomputes)."""
         self.logger.info("Start recommend (similar hyperedges).")
         summary = self.recommend_module.run()
-        # 检索侧若缓存了 hyperedge 表，使缓存失效
         if hasattr(self.retrieve_module, '_precomputed'):
             self.retrieve_module._precomputed = False
         self.logger.info(f"Finish recommend. summary={summary}")
@@ -567,7 +542,6 @@ class DHMF:
         if not raw:
             return {'thought': '', 'answer': '', 'raw': raw}
 
-        # Prefer last Answer/回答/结论 marker as final answer boundary
         ans_pat = re.compile(
             r'(?:^|\n)\s*(?:Answer|回答|结论)\s*[:：]\s*',
             re.IGNORECASE,
@@ -585,7 +559,6 @@ class DHMF:
             thought = thought_pat.sub('', head, count=1).strip() if head else ''
             return {'thought': thought, 'answer': answer, 'raw': raw}
 
-        # No Answer label: only Thought → thought; plain text → answer
         if thought_pat.match(raw):
             thought = thought_pat.sub('', raw, count=1).strip()
             return {'thought': thought, 'answer': '', 'raw': raw}
@@ -633,7 +606,6 @@ class DHMF:
             lines.append('-' * 60)
             lines.append(parsed['raw'])
 
-        # token + 延迟（精简：输入/输出/总计）
         pt = respond.get('usage_prompt_tokens')
         ct = respond.get('usage_completion_tokens')
         tt = respond.get('usage_total_tokens')
@@ -668,22 +640,16 @@ class DHMF:
         return '\n'.join(lines)
 
     def query(self, query, mode='dual_path', pretty=False):
-        """
-        Query the knowledge base and generate an answer.
-        mode:
-          - 'dual_path': 双路向量 + 可选关键词精确匹配求交后，文档级 rerank(top_k) 进上下文作答
-        pretty=True: return a formatted multi-line string (Thought / Answer split).
-        """
+        """Dual-path RAG query. pretty=True returns formatted Thought/Answer text."""
         if mode != 'dual_path':
             raise ValueError(
                 f"Unknown query mode: {mode!r}. Supported: 'dual_path'. "
                 f"For multi-hop agent use agent_query()."
             )
 
-        # ---- dual-path RAG ----
         t_all = time.perf_counter()
         t0 = time.perf_counter()
-        retrieval_items = self.retrieve_module.retrive_items(query)
+        retrieval_items = self.retrieve_module.retrieve_items(query)
         retrieval_result = self.retrieve_module._format_retrieved_chunks(retrieval_items)
         retrieve_latency_s = time.perf_counter() - t0
         system_prompt = PROMPT.get('query_answer_system', '')
@@ -700,7 +666,6 @@ class DHMF:
         if isinstance(respond, dict):
             respond['retrieve_latency_s'] = retrieve_latency_s
             respond['latency_s'] = time.perf_counter() - t_all
-            # 供评测：检索到的文档来源文件名 / doc_id（去重保序）
             sources, doc_ids = [], []
             seen_src, seen_did = set(), set()
             for it in retrieval_items or []:
@@ -720,14 +685,6 @@ class DHMF:
         return respond
 
     def agent_query(self, query, pretty=False):
-        """
-        轻量多跳 Agent 查询（薄封装 → src.agent）。
-
-        规划依赖步骤图 → query_skill 单跳检索作答 → 汇总；
-        模型与作答提示词均走 config.agent，与 query()/retrieve 解耦。
-
-        pretty=True: 返回可读多行字符串（含步骤摘要）。
-        返回 dict 时字段与 query() 对齐，并额外含 plan / steps。
-        """
+        """Multi-hop agent query (plan → single-hop skills → synthesize)."""
         from .agent.runner import run_agent_query
         return run_agent_query(self, query, pretty=pretty)

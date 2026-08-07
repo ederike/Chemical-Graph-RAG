@@ -25,7 +25,6 @@ from .utils import project_root, resolve_path
 
 logger = logging.getLogger("benchmark.workflow")
 
-
 class TestQueryWorkflow:
     """
     主调用类：问题生成 / RAG 评测 / 汇总报告。
@@ -50,9 +49,6 @@ class TestQueryWorkflow:
 
         self._setup_logging(self.cfg.log_level)
 
-    # ------------------------------------------------------------------
-    # factory
-    # ------------------------------------------------------------------
     @classmethod
     def from_config(
         cls,
@@ -62,9 +58,6 @@ class TestQueryWorkflow:
         cfg = BenchmarkConfig.from_yaml(config_path)
         return cls(cfg)
 
-    # ------------------------------------------------------------------
-    # setup
-    # ------------------------------------------------------------------
     def _setup_logging(self, level: int):
         """
         benchmark 默认安静：只让 ERROR 以上走 console。
@@ -195,9 +188,6 @@ class TestQueryWorkflow:
             logging.getLogger("DHMF").setLevel(prev)
         return self.dhmf
 
-    # ------------------------------------------------------------------
-    # I/O
-    # ------------------------------------------------------------------
     def _resolve_path(self, path: Union[str, Path]) -> Path:
         p = Path(path)
         return p if p.is_absolute() else resolve_path(p)
@@ -253,9 +243,6 @@ class TestQueryWorkflow:
         print(f"[loaded] eval_results <- {path}", file=sys.stderr)
         return data
 
-    # ------------------------------------------------------------------
-    # steps
-    # ------------------------------------------------------------------
     def generate_questions(self, save: bool = True) -> Dict[str, Any]:
         """
         步骤 1：生成多跳问题集。

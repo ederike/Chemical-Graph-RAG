@@ -14,20 +14,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-
 def _safe_int(v) -> int:
     try:
         return int(v or 0)
     except (TypeError, ValueError):
         return 0
 
-
 def _safe_float(v) -> float:
     try:
         return float(v or 0.0)
     except (TypeError, ValueError):
         return 0.0
-
 
 @dataclass
 class StageAgg:
@@ -40,7 +37,6 @@ class StageAgg:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
-
 
 @dataclass
 class CostSnapshot:
@@ -96,7 +92,6 @@ class CostSnapshot:
             build_count=_safe_int(data.get('build_count')),
         )
 
-
 class PipelineMetrics:
     """
     Track build cost from recognition → vectorization.
@@ -126,9 +121,6 @@ class PipelineMetrics:
         self.lifetime_before = CostSnapshot()
         self._lifetime_loaded: bool = False
 
-    # ------------------------------------------------------------------
-    # lifetime persistence
-    # ------------------------------------------------------------------
     def set_persist_path(self, path: Path):
         self.persist_path = Path(path)
 
@@ -225,9 +217,6 @@ class PipelineMetrics:
             self._session_committed = True
         self.save_lifetime(after_commit=True)
 
-    # ------------------------------------------------------------------
-    # session lifecycle
-    # ------------------------------------------------------------------
     def reset(self):
         with self._lock:
             self.total_seconds = 0.0

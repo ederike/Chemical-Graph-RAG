@@ -26,7 +26,6 @@ from sklearn.cluster import HDBSCAN, KMeans
 from ..utils.config import Config
 from ..utils.database import BaseDB, BaseVDB
 
-
 class Recommend:
     def __init__(
         self,
@@ -40,9 +39,6 @@ class Recommend:
         self.logger = logger
         self.config = config
 
-    # ------------------------------------------------------------------
-    # public
-    # ------------------------------------------------------------------
     def run(self) -> dict:
         """
         完整跑一遍推荐计算并写库。返回统计摘要。
@@ -104,9 +100,6 @@ class Recommend:
             'skipped_missing': skipped,
         }
 
-    # ------------------------------------------------------------------
-    # step 1: keyword filter on node.name
-    # ------------------------------------------------------------------
     def _collect_nodes_by_keywords(self, keywords: List[str]) -> List[dict]:
         node_db = self.db['node']
         by_id: Dict[int, dict] = {}
@@ -125,9 +118,6 @@ class Recommend:
             self.logger.info(f"[recommend] keyword={kw!r} hits={len(rows)}")
         return list(by_id.values())
 
-    # ------------------------------------------------------------------
-    # step 2: load vectors from node.vdb
-    # ------------------------------------------------------------------
     def _faiss_id_to_vector_map(self) -> Dict[int, np.ndarray]:
         """Build id → vector from FAISS IndexIDMap (node.vdb)."""
         base_vdb = self.vdb.get('node')
@@ -185,9 +175,6 @@ class Recommend:
             return np.zeros((0, 0), dtype=np.float64), [], skipped
         return np.vstack(vecs), used, skipped
 
-    # ------------------------------------------------------------------
-    # step 3: HDBSCAN + enforce max cluster size
-    # ------------------------------------------------------------------
     def _prepare_matrix(self, vectors: np.ndarray, metric: str) -> Tuple[np.ndarray, str]:
         """
         cosine → L2 归一化后用 euclidean（与角度距离单调一致，数值更稳）。
@@ -380,9 +367,6 @@ class Recommend:
         )
         return labels
 
-    # ------------------------------------------------------------------
-    # step 4: cluster → hyperedge recommendation graph
-    # ------------------------------------------------------------------
     def _labels_to_recommendations(
         self, nodes: List[dict], labels: np.ndarray
     ) -> Tuple[Dict[int, Set[int]], int, int]:
@@ -422,9 +406,6 @@ class Recommend:
 
         return rec_map, n_clusters, noise
 
-    # ------------------------------------------------------------------
-    # step 5: clear + write
-    # ------------------------------------------------------------------
     def _clear_all_recommendations(self) -> None:
         """每次重跑先清空全部 recommendation。"""
         try:

@@ -14,7 +14,6 @@ logger_default = logging.getLogger(__name__)
 # Characters illegal in filenames on common OSes
 _ILLEGAL_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
-
 def sanitize_product_filename(product_name: str, row_id: Any) -> Optional[str]:
     """
     Build local filename: {sanitized_product_name}_{id}.pdf
@@ -39,7 +38,6 @@ def sanitize_product_filename(product_name: str, row_id: Any) -> Optional[str]:
         return f"null_name_{rid}.pdf"
     return f"{name}_{rid}.pdf"
 
-
 def _normalize_file_type(file_type: Union[str, int, None]) -> Optional[int]:
     """
     Return SQL type filter value, or None for all types.
@@ -63,7 +61,6 @@ def _normalize_file_type(file_type: Union[str, int, None]) -> Optional[int]:
         return iv
     raise ValueError(f"Unsupported file_type: {file_type!r} (use 1, 2, or all)")
 
-
 def _get_bucket_conf(ali_oss: dict, bucket_key: str) -> dict:
     if not ali_oss:
         raise ValueError("config.ali_oss is empty; set OSS credentials in yaml")
@@ -77,7 +74,6 @@ def _get_bucket_conf(ali_oss: dict, bucket_key: str) -> dict:
             f"Keys: {list(ali_oss.keys())}"
         )
     return conf
-
 
 def fetch_spider_products(
     mysql_conf: Any,
@@ -150,7 +146,6 @@ def fetch_spider_products(
 
     log.info(f"[oss_download] fetched {len(rows)} row(s) from {table}")
     return rows
-
 
 def download_rows_from_oss(
     rows: List[Dict[str, Any]],

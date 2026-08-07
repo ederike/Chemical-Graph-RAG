@@ -8,7 +8,6 @@ from openai import OpenAI
 
 from .utils import Cache
 
-
 _EXTRA_BODY_KEYS = (
     "enable_thinking",
     "thinking_budget",
@@ -26,7 +25,6 @@ _LOCAL_DROP_CREATE_KEYS = (
 # 与 @Cache 装饰的 LLM.generate 共用同一 cache 库，便于校验失败时删毒缓存
 _LLM_CACHE = Cache(cache_dir="cache/OpenAI", cache_name="llm_cache")
 
-
 def split_model_args(model_args):
     """
     Split create() kwargs vs provider extra_body.
@@ -40,7 +38,6 @@ def split_model_args(model_args):
         if key in create_kwargs:
             extra_body[key] = create_kwargs.pop(key)
     return create_kwargs, extra_body
-
 
 def _usage_from_completion(completion) -> dict:
     """Extract token usage; include reasoning_tokens when present."""
@@ -71,7 +68,6 @@ def _usage_from_completion(completion) -> dict:
         pass
     return out
 
-
 def _is_private_or_local_url(base_url: str) -> bool:
     """True when base_url points at typical internal / loopback hosts."""
     if not base_url:
@@ -99,16 +95,13 @@ def _is_private_or_local_url(base_url: str) -> bool:
             pass
     return False
 
-
 def _is_placeholder_key(api_key: str) -> bool:
     k = (api_key or "").strip().lower()
     return k in ("", "none", "empty", "ollama", "token-abc123", "no-key", "nokey")
 
-
 def _is_qwen3_family(model_id: str) -> bool:
     m = (model_id or "").lower()
     return "qwen3" in m
-
 
 def _strip_think_tags(content: Optional[str]) -> str:
     """
@@ -127,7 +120,6 @@ def _strip_think_tags(content: Optional[str]) -> str:
                 rest = rest[1:]
             return rest.lstrip("\n")
     return text
-
 
 def _prepare_local_call(
     model_args: dict,
@@ -173,7 +165,6 @@ def _prepare_local_call(
         extra_body["chat_template_kwargs"] = ctk
 
     return create_kwargs, extra_body, msgs
-
 
 class LLM:
     def __init__(
@@ -335,7 +326,6 @@ class LLM:
         response.update(_usage_from_completion(completion))
         return response
 
-
 def normalize_embedding_model_args(model_args: Optional[dict] = None) -> dict:
     """
     规范化 embedding model_args，供 API 与缓存键共用。
@@ -363,7 +353,6 @@ def normalize_embedding_model_args(model_args: Optional[dict] = None) -> dict:
         except (TypeError, ValueError):
             ma.pop("dimensions", None)
     return ma
-
 
 class Embedding:
     """
@@ -628,7 +617,6 @@ class Embedding:
         if model_args.get("model"):
             return self._generate_openai(prompt, model_args)
         return self._generate_local(prompt)
-
 
 class Reranker:
     """

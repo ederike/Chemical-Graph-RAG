@@ -17,14 +17,9 @@ try:
 except ImportError:  # pragma: no cover
     _tqdm = None
 
-
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
-
-# ------------------------------------------------------------------
-# 进度条 / 失败输出（避免刷屏中间日志）
-# ------------------------------------------------------------------
 def progress_iter(
     iterable: Iterable,
     *,
@@ -50,7 +45,6 @@ def progress_iter(
         )
     return _simple_progress(iterable, total=total, desc=desc)
 
-
 def _simple_progress(
     iterable: Iterable,
     *,
@@ -64,7 +58,6 @@ def _simple_progress(
         yield x
     print(file=sys.stderr)
 
-
 def fail_print(msg: str) -> None:
     """打印失败项（tqdm.write 避免打断进度条）。"""
     text = f"[FAIL] {msg}"
@@ -72,7 +65,6 @@ def fail_print(msg: str) -> None:
         _tqdm.write(text, file=sys.stderr)
     else:
         print(text, file=sys.stderr)
-
 
 @contextmanager
 def quiet_loggers(*names: str, level: int = logging.ERROR):
@@ -101,14 +93,12 @@ def quiet_loggers(*names: str, level: int = logging.ERROR):
                     pass
             lg.propagate = prop
 
-
 def resolve_path(path: str | Path, base: Optional[Path] = None) -> Path:
     p = Path(path)
     if p.is_absolute():
         return p
     root = base or project_root()
     return (root / p).resolve()
-
 
 def load_docs_from_db(db_path: str | Path) -> List[Dict[str, Any]]:
     """读取 main.db 的 doc 表，返回 id/name/content 列表。"""
@@ -134,7 +124,6 @@ def load_docs_from_db(db_path: str | Path) -> List[Dict[str, Any]]:
         raise RuntimeError(f"doc 表无可用 content: {db_path}")
     return docs
 
-
 def truncate_text(text: str, max_chars: Optional[int]) -> str:
     """
     按字符数截断文本。
@@ -152,7 +141,6 @@ def truncate_text(text: str, max_chars: Optional[int]) -> str:
     keep = max(0, limit - 20)
     return text[:keep].rstrip() + "\n…(内容已截断)"
 
-
 def format_docs_block(
     docs: Sequence[Dict[str, Any]],
     max_chars_per_doc: Optional[int] = 4000,
@@ -168,7 +156,6 @@ def format_docs_block(
             f"content:\n{content}"
         )
     return "\n\n".join(parts)
-
 
 def extract_json_object(text: str) -> Optional[dict]:
     """从 LLM 输出中尽量解析出 JSON 对象。"""
@@ -200,7 +187,6 @@ def extract_json_object(text: str) -> Optional[dict]:
         except Exception:
             pass
     return None
-
 
 def call_llm(
     llm,
@@ -234,7 +220,6 @@ def call_llm(
     out["latency_s"] = latency
     return out
 
-
 def parse_hop_spec(hop_counts: Dict[Any, Any]) -> Dict[int, int]:
     """
     规范化跳数配置。
@@ -254,19 +239,16 @@ def parse_hop_spec(hop_counts: Dict[Any, Any]) -> Dict[int, int]:
         raise ValueError("hop_counts 为空，请至少配置一种跳数的问题数量")
     return dict(sorted(out.items()))
 
-
 def mean(values: Sequence[float]) -> Optional[float]:
     vals = [float(x) for x in values if x is not None]
     if not vals:
         return None
     return sum(vals) / len(vals)
 
-
 def safe_div(a: float, b: float) -> Optional[float]:
     if b == 0:
         return None
     return a / b
-
 
 def normalize_filename(name: str) -> str:
     """归一化文件名便于召回比对（小写、去路径、去两端空格）。"""
@@ -275,7 +257,6 @@ def normalize_filename(name: str) -> str:
     s = str(name).strip().replace("\\", "/")
     s = s.split("/")[-1]
     return s.lower()
-
 
 def match_doc_names(expected: Sequence[str], retrieved: Sequence[str]) -> Tuple[List[str], List[str], List[str]]:
     """

@@ -31,7 +31,6 @@ except ImportError:  # pragma: no cover
 # llm-acc 仅二分类
 JUDGMENT_LABELS = ("正确", "错误")
 
-
 def normalize_judgment(raw: str) -> Optional[str]:
     """将模型输出归一为 正确 / 错误。"""
     if raw is None:
@@ -58,7 +57,6 @@ def normalize_judgment(raw: str) -> Optional[str]:
         if k.lower() == low or k in s:
             return "正确"
     return None
-
 
 class QueryEvaluator:
     """
@@ -115,9 +113,6 @@ class QueryEvaluator:
             nt = 1
         self.num_thread = max(1, nt)
 
-    # ------------------------------------------------------------------
-    # query dispatch
-    # ------------------------------------------------------------------
     @staticmethod
     def _normalize_query_mode(mode: Any) -> str:
         """
@@ -141,9 +136,6 @@ class QueryEvaluator:
             return self.dhmf.agent_query(question, pretty=False)
         return self.dhmf.query(question, mode="dual_path", pretty=False)
 
-    # ------------------------------------------------------------------
-    # single item
-    # ------------------------------------------------------------------
     def _extract_answer_text(self, respond: Any) -> str:
         if not isinstance(respond, dict):
             return str(respond or "")
@@ -452,9 +444,6 @@ class QueryEvaluator:
             return True
         return False
 
-    # ------------------------------------------------------------------
-    # batch + summary
-    # ------------------------------------------------------------------
     @staticmethod
     def _slim_dataset_meta(meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """问题集 meta 精简：只保留出题侧关键字段。"""

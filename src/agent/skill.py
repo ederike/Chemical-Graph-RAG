@@ -1,7 +1,7 @@
 """
 query_skill：单跳精准查询。
 
-语义 ≈ 一次 DHMF.query（retrive_items + LLM 作答），
+语义 ≈ 一次 DHMF.query（retrieve_items + LLM 作答），
 但 LLM / 改写全部走 agent 配置，与 retrieve 的模型配置解耦。
 """
 
@@ -19,13 +19,11 @@ from .state import answer_of, first_line
 if TYPE_CHECKING:
     from ..DHMF import DHMF
 
-
 def build_agent_llm(config) -> LLM:
     """从 config.agent（回退 settings）构造 LLM。"""
     agent_cfg = getattr(config, 'agent', None)
     api_key, base_url = resolve_credentials(config, agent_cfg)
     return LLM(api_key, base_url)
-
 
 class QuerySkill:
     """双路检索 + agent LLM 作答，封装为可调用 skill。"""
@@ -44,8 +42,6 @@ class QuerySkill:
 
     def __call__(self, question: str) -> Dict[str, Any]:
         return self.run(question)
-
-    # ── public ───────────────────────────────────────────────────────────
 
     def run(self, question: str) -> Dict[str, Any]:
         q = (question or '').strip()
@@ -70,8 +66,6 @@ class QuerySkill:
         respond['retrieval_doc_ids']  = doc_ids
         respond['search_query']       = search_q or q
         return respond
-
-    # ── internals ────────────────────────────────────────────────────────
 
     def _chat(self, system: str, user: str) -> Any:
         return self.llm.generate(
@@ -104,7 +98,7 @@ class QuerySkill:
         if self.cfg.node_candidate_k is not None:
             kw['node_candidate_k'] = int(self.cfg.node_candidate_k)
 
-        items = retrieve.retrive_items(search_q, **kw)
+        items = retrieve.retrieve_items(search_q, **kw)
         return items, retrieve._format_retrieved_chunks(items)
 
     @staticmethod

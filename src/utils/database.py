@@ -96,7 +96,6 @@ class BaseDB:
         self.db.execute(sql, tuple(ids))
         return len(ids)
 
-
 class BaseVDB:
     def __init__(self,vdb_path: str,vdb_name: str,vdb_dim: int):
         self.vdb_path = Path(vdb_path)
@@ -154,7 +153,6 @@ class BaseVDB:
         self.save()
         return n
 
-
 class SQLiteDB:
     def __init__(self,db_path,table,create_table_sql):
         self.db_path = Path(db_path)
@@ -196,7 +194,6 @@ class SQLiteDB:
         with lock:
             self.cursor.executemany(SQL,values_list)
             self.conn.commit()
-
 
 class FassiVDB:
     def __init__(self,vdb_path,vdb_dim):

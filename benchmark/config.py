@@ -29,7 +29,6 @@ _QUESTION_GEN_PROMPT_ALIASES = {
     "fuzzy_matching": "QUESTION_GEN_Fuzzy_Matching",
 }
 
-
 def _normalize_question_gen_prompt(name: Any) -> str:
     """解析 generate.question_gen_prompt 为 Benchmark_PROMPT 中的键名。"""
     from .prompts import Benchmark_PROMPT
@@ -67,8 +66,6 @@ def _normalize_question_gen_prompt(name: Any) -> str:
         f"aliases: default/standard/user, fuzzy/fuzzy_matching"
     )
 
-
-
 def _deep_merge(base: dict, override: dict) -> dict:
     out = deepcopy(base) if base else {}
     for k, v in (override or {}).items():
@@ -80,7 +77,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
             out[k] = deepcopy(v)
     return out
 
-
 def _clean_model_args(ma: Optional[dict]) -> dict:
     if not ma:
         return {}
@@ -90,13 +86,11 @@ def _clean_model_args(ma: Optional[dict]) -> dict:
         out.pop("model", None)
     return out
 
-
 def _log_level(name: Any) -> int:
     if isinstance(name, int):
         return name
     s = str(name or "INFO").upper().strip()
     return getattr(logging, s, logging.INFO)
-
 
 def _opt_str(v) -> Optional[str]:
     if v is None:
@@ -105,7 +99,6 @@ def _opt_str(v) -> Optional[str]:
     if not s or s.lower() in ("null", "none", "~"):
         return None
     return s
-
 
 def _opt_bool(v) -> Optional[bool]:
     if v is None:
@@ -121,7 +114,6 @@ def _opt_bool(v) -> Optional[bool]:
         return False
     return bool(v)
 
-
 def _as_bool(v, default: bool = False) -> bool:
     if v is None:
         return default
@@ -134,7 +126,6 @@ def _as_bool(v, default: bool = False) -> bool:
         return False
     return bool(v)
 
-
 def _normalize_query_mode(mode: Any) -> str:
     s = str(mode or "dual_path").strip().lower().replace("-", "_")
     if s in ("agent", "agent_query", "multi_hop", "multihop"):
@@ -144,7 +135,6 @@ def _normalize_query_mode(mode: Any) -> str:
     raise ValueError(
         f"Unknown query_mode={mode!r}. Supported: 'dual_path' | 'agent'"
     )
-
 
 def _normalize_run_mode(mode: Any) -> str:
     s = str(mode or "all").strip().lower()
@@ -160,7 +150,6 @@ def _normalize_run_mode(mode: Any) -> str:
         f"Unknown run.mode={mode!r}. "
         f"Supported: 'generate' | 'evaluate' | 'report' | 'all'"
     )
-
 
 def resolve_file_path(
     output_dir: str,
@@ -190,7 +179,6 @@ def resolve_file_path(
         ts = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
         name = name.replace("{timestamp}", ts)
     return base / name
-
 
 @dataclass
 class BenchmarkConfig:
@@ -259,7 +247,6 @@ class BenchmarkConfig:
     config_file: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
-    # ------------------------------------------------------------------
     @classmethod
     def from_yaml(
         cls,
@@ -372,9 +359,6 @@ class BenchmarkConfig:
                     setattr(self, attr, str(resolve_path(p)))
         return self
 
-    # ------------------------------------------------------------------
-    # 文件路径：questions / eval_results / report
-    # ------------------------------------------------------------------
     def questions_file(self) -> Path:
         """生成问题集写出路径。"""
         return resolve_file_path(

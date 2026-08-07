@@ -23,9 +23,6 @@ from .state import (
 if TYPE_CHECKING:
     from ..DHMF import DHMF
 
-
-# ── pretty ───────────────────────────────────────────────────────────────────
-
 def _format_pretty(
     respond: dict,
     *,
@@ -66,9 +63,6 @@ def _format_pretty(
     if base.endswith('=' * 60):
         return base[: -len('=' * 60)].rstrip() + '\n' + body + '\n' + ('=' * 60)
     return base + '\n' + body
-
-
-# ── entry ────────────────────────────────────────────────────────────────────
 
 def run_agent_query(
     dhmf: "DHMF",

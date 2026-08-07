@@ -57,7 +57,6 @@ Benchmark_PROMPT['QUESTION_GEN_USER'] = """
 24. 应用基材(金属/木器/塑料/混凝土/皮革/织物)
 34. 国产替代方案(进口→国产映射)
 
-
 ----- 文档资料 -----
 {docs_block}
 
@@ -115,7 +114,6 @@ Benchmark_PROMPT['QUESTION_GEN_Fuzzy_Matching'] = """
 
 Output:
 """
-
 
 Benchmark_PROMPT['JUDGE_SYSTEM'] = (
     '你是严谨的 RAG 评测裁判。根据问题、标准答案、完整参考文档与系统回答，'
