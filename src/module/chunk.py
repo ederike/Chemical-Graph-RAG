@@ -1,5 +1,6 @@
 import tiktoken
 from tqdm import tqdm
+from ..utils.utils import TQDM_BAR_FORMAT
 import re
 import logging
 from typing import Dict
@@ -141,8 +142,16 @@ class BaseChunk:
         self.logger.debug(f"The number of documents to be chunk :{len(self.tasks)}")
 
     def processing(self):
-        for task in tqdm(self.tasks):
+        n = len(self.tasks)
+        bar = tqdm(
+            self.tasks,
+            desc='chunk',
+            unit='doc',
+            bar_format=TQDM_BAR_FORMAT,
+        )
+        for task in bar:
             self.processing_single_task(task)
+            bar.set_postfix(total=n)
 
     def save(self):
         n_chunk = len(self.chunk_db.buffer)

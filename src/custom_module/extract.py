@@ -6,7 +6,7 @@ import copy
 import time
 
 from ..utils.prompt import PROMPT
-from ..utils.utils import Retry
+from ..utils.utils import Retry, TQDM_BAR_FORMAT
 
 
 class Extract(BaseExtract):
@@ -217,17 +217,19 @@ class Extract(BaseExtract):
         t_wall = time.perf_counter()
 
         def _postfix():
-            if self.metrics is None:
-                return {}
-            s = self.metrics.stage_snapshot('extract')
-            return {
-                'real': s['real'],
-                'tok': s['tokens'],
-                'tot_s': f"{s['total_s']:.1f}s",
-            }
+            pf = {'total': n}
+            if self.metrics is not None:
+                s = self.metrics.stage_snapshot('extract')
+                pf['real'] = s['real']
+            return pf
 
         if self.config.extract.num_thread <= 1:
-            bar = tqdm(self.tasks, desc='extract', unit='chunk')
+            bar = tqdm(
+                self.tasks,
+                desc='extract',
+                unit='chunk',
+                bar_format=TQDM_BAR_FORMAT,
+            )
             for task in bar:
                 self.processing_single_task(task)
                 bar.set_postfix(**_postfix())
@@ -237,7 +239,13 @@ class Extract(BaseExtract):
                     executor.submit(self.processing_single_task, task)
                     for task in self.tasks
                 ]
-                bar = tqdm(as_completed(futures), total=n, desc='extract', unit='chunk')
+                bar = tqdm(
+                    as_completed(futures),
+                    total=n,
+                    desc='extract',
+                    unit='chunk',
+                    bar_format=TQDM_BAR_FORMAT,
+                )
                 for future in bar:
                     future.result()
                     bar.set_postfix(**_postfix())

@@ -9,10 +9,10 @@ config = Config.from_yaml('example/a/config_open.yaml')
 ChemicalGraph = DHMF(config)
 
 # --- build pipeline ---
-ChemicalGraph.insert_clear()
-ChemicalGraph.chunk_clear()
-ChemicalGraph.extract_clear()
-ChemicalGraph.build_clear()
+# ChemicalGraph.insert_clear()
+# ChemicalGraph.chunk_clear()
+# ChemicalGraph.extract_clear()
+# ChemicalGraph.build_clear()
 
 ChemicalGraph.download_from_oss()
 ChemicalGraph.insert_default()

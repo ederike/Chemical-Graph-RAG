@@ -10,7 +10,7 @@ import time
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.prompt import PROMPT
-from ..utils.utils import hash_str, CacheDB, Retry, NonRetryableError
+from ..utils.utils import hash_str, CacheDB, Retry, NonRetryableError, TQDM_BAR_FORMAT
 from ..utils.config import resolve_credentials
 
 
@@ -433,7 +433,12 @@ class Doc(BaseDoc):
 
         return result
 
-    def prepare_from_pdfs(self, pdf_paths=None, skip_existing: bool = True):
+    def prepare_from_pdfs(
+        self,
+        pdf_paths=None,
+        skip_existing: bool = True,
+        progress_total: int = None,
+    ):
         """
         Recognize PDFs into doc_list tasks (before insert).
         Each PDF becomes one independent document; texts are not mixed.
@@ -443,6 +448,8 @@ class Doc(BaseDoc):
 
         skip_existing: if True (default), skip PDFs whose name is already in doc table
                        — avoids re-recognize and re-insert of already processed files.
+        progress_total: overall files to recognize this run (across batches).
+                        Shown as postfix total=N; bar n/total stays batch-local.
         """
         if pdf_paths is None:
             pdf_paths = self.list_pdf_files()
@@ -483,6 +490,14 @@ class Doc(BaseDoc):
             self.logger.info("No new PDFs to recognize.")
             return []
 
+        if progress_total is None:
+            progress_total = len(to_process)
+        else:
+            try:
+                progress_total = max(int(progress_total), len(to_process))
+            except (TypeError, ValueError):
+                progress_total = len(to_process)
+
         recog = self.config.doc.recognition
         num_thread = max(1, int(getattr(recog, 'num_thread', 1) or 1))
         results = []
@@ -502,14 +517,11 @@ class Doc(BaseDoc):
             return out
 
         def _postfix():
-            if self.metrics is None:
-                return {}
-            s = self.metrics.stage_snapshot('recognize')
-            return {
-                'real': s['real'],
-                'cache': s['cache'],
-                'tok': s['tokens'],
-            }
+            pf = {'total': progress_total}
+            if self.metrics is not None:
+                s = self.metrics.stage_snapshot('recognize')
+                pf['real'] = s['real']
+            return pf
 
         self.logger.info(
             f"PDF recognition start: {len(to_process)} file(s), "
@@ -518,7 +530,12 @@ class Doc(BaseDoc):
         t0 = time.perf_counter()
 
         if num_thread <= 1:
-            bar = tqdm(to_process, desc='PDF recognize', unit='pdf')
+            bar = tqdm(
+                to_process,
+                desc='recognize',
+                unit='pdf',
+                bar_format=TQDM_BAR_FORMAT,
+            )
             for p in bar:
                 try:
                     result = _one(p)
@@ -533,8 +550,9 @@ class Doc(BaseDoc):
                 bar = tqdm(
                     as_completed(futures),
                     total=len(futures),
-                    desc='PDF recognize',
+                    desc='recognize',
                     unit='pdf',
+                    bar_format=TQDM_BAR_FORMAT,
                 )
                 for future in bar:
                     p = futures[future]

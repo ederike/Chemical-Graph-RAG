@@ -2,6 +2,7 @@ from ..module.vectorization import BaseVectorization
 from ..utils.utils import Retry
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+from ..utils.utils import TQDM_BAR_FORMAT
 import time
 
 
@@ -73,26 +74,35 @@ class Vectorization(BaseVectorization):
         t_wall = time.perf_counter()
 
         def _postfix():
-            if self.metrics is None:
-                return {}
-            s = self.metrics.stage_snapshot(stage)
-            # do not show cache hits (too noisy for node/hyperedge/chunk)
-            return {
-                'real': s['real'],
-                'tok': s['tokens'],
-                'flush': self._flushed_count,
-                'tot_s': f"{s['total_s']:.1f}s",
+            pf = {
+                'total': n,
+                'flush': getattr(self, '_flushed_count', 0),
             }
+            if self.metrics is not None:
+                s = self.metrics.stage_snapshot(stage)
+                pf['real'] = s['real']
+            return pf
 
         if self.config.vectorization.num_thread <= 1:
-            bar = tqdm(self.tasks, desc=f'vectorize:{table}', unit='item')
+            bar = tqdm(
+                self.tasks,
+                desc=f'vectorize:{table}',
+                unit='item',
+                bar_format=TQDM_BAR_FORMAT,
+            )
             for task in bar:
                 self.processing_single_task(task)
                 bar.set_postfix(**_postfix())
         else:
             with ThreadPoolExecutor(max_workers=self.config.vectorization.num_thread) as executor:
                 futures = [executor.submit(self.processing_single_task, task) for task in self.tasks]
-                bar = tqdm(as_completed(futures), total=n, desc=f'vectorize:{table}', unit='item')
+                bar = tqdm(
+                    as_completed(futures),
+                    total=n,
+                    desc=f'vectorize:{table}',
+                    unit='item',
+                    bar_format=TQDM_BAR_FORMAT,
+                )
                 for future in bar:
                     future.result()
                     bar.set_postfix(**_postfix())

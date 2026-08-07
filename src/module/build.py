@@ -1,4 +1,5 @@
 from tqdm import tqdm
+from ..utils.utils import TQDM_BAR_FORMAT
 import json
 import logging
 from typing import Dict
@@ -157,8 +158,16 @@ class BaseBuild:
 
     def processing(self):
         self.hyperedge_id_temp = 0
-        for task in tqdm(self.tasks):
+        n = len(self.tasks)
+        bar = tqdm(
+            self.tasks,
+            desc='build',
+            unit='chunk',
+            bar_format=TQDM_BAR_FORMAT,
+        )
+        for task in bar:
             self.processing_single_task(task)
+            bar.set_postfix(total=n)
 
     def save(self):
         n_he = len(self.hyperedge_db.buffer)

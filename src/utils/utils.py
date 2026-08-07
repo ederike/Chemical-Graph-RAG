@@ -11,6 +11,10 @@ import inspect
 def hash_str(s):
     return hashlib.md5(s.encode()).hexdigest()
 
+
+# 构建流水线进度条：不显示 elapsed/remaining，只保留速率 + postfix
+TQDM_BAR_FORMAT = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{rate_fmt}{postfix}]'
+
 class CacheDB(BaseDB):
     def __init__(self,cache_path,cache_name):
         cache_path=Path(cache_path)

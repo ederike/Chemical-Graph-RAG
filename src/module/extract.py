@@ -1,4 +1,5 @@
 from tqdm import tqdm
+from ..utils.utils import TQDM_BAR_FORMAT
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
@@ -156,14 +157,30 @@ class BaseExtract:
         self.logger.debug(f"The number of chunks to be extracted :{len(self.tasks)}")
 
     def processing(self):
+        n = len(self.tasks)
         if self.config.extract.num_thread <= 1:
-            for task in tqdm(self.tasks):
+            bar = tqdm(
+                self.tasks,
+                desc='extract',
+                unit='chunk',
+                bar_format=TQDM_BAR_FORMAT,
+            )
+            for task in bar:
                 self.processing_single_task(task)
+                bar.set_postfix(total=n)
         else:
             with ThreadPoolExecutor(max_workers=self.config.extract.num_thread) as executor:
                 futures = [executor.submit(self.processing_single_task, task) for task in self.tasks]
-                for future in tqdm(as_completed(futures), total=len(futures)):
-                    result = future.result()
+                bar = tqdm(
+                    as_completed(futures),
+                    total=n,
+                    desc='extract',
+                    unit='chunk',
+                    bar_format=TQDM_BAR_FORMAT,
+                )
+                for future in bar:
+                    future.result()
+                    bar.set_postfix(total=n)
 
     def save(self):
         with self._buffer_lock:

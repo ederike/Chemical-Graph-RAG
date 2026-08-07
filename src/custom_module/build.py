@@ -189,5 +189,16 @@ class Build(BaseBuild):
             by_doc[task['doc_id']].append(task)
 
         from tqdm import tqdm
-        for doc_id in tqdm(sorted(by_doc.keys()), desc='build', unit='doc'):
+        from ..utils.utils import TQDM_BAR_FORMAT
+
+        doc_ids = sorted(by_doc.keys())
+        n = len(doc_ids)
+        bar = tqdm(
+            doc_ids,
+            desc='build',
+            unit='doc',
+            bar_format=TQDM_BAR_FORMAT,
+        )
+        for doc_id in bar:
             self.processing_doc_chunks(by_doc[doc_id])
+            bar.set_postfix(total=n)

@@ -286,9 +286,11 @@ class DHMF:
                 f"PDF batch {batch_i}/{n_batches}: recognize {len(batch)} file(s)"
             )
             # 批次内不再二次 skip（外层已过滤）；metrics 仍由 prepare_from_pdfs 汇总
+            # progress_total=整次任务待识别总量（非本批 flush_every）
             doc_list = self.doc_module.prepare_from_pdfs(
                 pdf_paths=batch,
                 skip_existing=False,
+                progress_total=len(to_process),
             )
             if not doc_list:
                 self.logger.warning(

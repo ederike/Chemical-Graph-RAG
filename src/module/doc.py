@@ -1,5 +1,6 @@
 import tiktoken
 from tqdm import tqdm
+from ..utils.utils import TQDM_BAR_FORMAT
 from typing import Dict
 import logging
 from ..utils.utils import hash_str
@@ -53,8 +54,16 @@ class BaseDoc:
         self.logger.debug(f"Number of inserted documents :{len(self.tasks)}")
 
     def processing(self):
-        for task in tqdm(self.tasks):
+        n = len(self.tasks)
+        bar = tqdm(
+            self.tasks,
+            desc='insert',
+            unit='doc',
+            bar_format=TQDM_BAR_FORMAT,
+        )
+        for task in bar:
             self.processing_single_task(task)
+            bar.set_postfix(total=n)
 
     def save(self):
         buf = self.doc_db.buffer
