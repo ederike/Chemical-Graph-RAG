@@ -71,21 +71,24 @@ class RetryConfig(BaseModel):
 
 
 class DocRecognitionConfig(BaseModel):
-    """PDF vision recognition settings (multimodal VLM)."""
+    """
+    PDF vision recognition（逐页 VLM，文件级多线程）。
+    每页单独调用，中间页历史仅带上一页识别文本；输出纯文本（非 JSON）。
+    """
     api_key: str = ""
     base_url: str = ""
     model_args: dict = Field(default_factory=lambda: {
         'model': 'Qwen3-VL-8B-Instruct',
         'temperature': 0.0,
         'enable_thinking': False,
-        'response_format': {'type': 'json_object'},
     })
     use_cache: bool = True
+    # 按文件并行（单文件内页序串行）
     num_thread: int = 4
     prompt: str = 'pdf_recognize'
     dpi: int = 150
     image_format: str = 'png'
-    # 长 PDF / 多图 VL 调用默认给足单次超时
+    # 单页 VL 调用超时
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=300.0)
     )
@@ -122,10 +125,12 @@ class DocConfig(BaseModel):
 
 
 class ChunkConfig(BaseModel):
+    """
+    分块：hyperedge 总结 → head（整块）；doc 识别正文 → body_n（按 token + 重叠）。
+    """
     count_token: bool = True
-    chunk_size_min: int = 300
     chunk_size_max: int = 512
-    force_single_chunk: bool = True
+    # 相邻 body 块重叠比例（相对 chunk_size_max）。0.1 = 10%
     chunk_overlap: float = 0.1
     # 切块分批：chunk 行累计达 N 条则写库
     flush_every: int = 1000
@@ -147,6 +152,37 @@ class ChunkConfig(BaseModel):
     @classmethod
     def _flush(cls, v):
         return _coerce_flush_every(v, 1000)
+
+
+class SummaryConfig(BaseModel):
+    """
+    文档总结（insert 之后、chunk 之前，可独立运行）。
+    对 doc.content 全文 LLM 总结 → 写入 hyperedge.content。
+    """
+    api_key: str = ""
+    base_url: str = ""
+    model_args: dict = Field(default_factory=lambda: {
+        'model': 'qwen3.6-27b',
+        'temperature': 0.2,
+        'enable_thinking': False,
+    })
+    prompt: str = 'doc_summary'
+    use_cache: bool = True
+    num_thread: int = 8
+    flush_every: int = 500
+    retry: RetryConfig = Field(
+        default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=120.0)
+    )
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def _coerce_str(cls, v):
+        return _none_to_empty(v)
+
+    @field_validator("flush_every", mode="before")
+    @classmethod
+    def _flush(cls, v):
+        return _coerce_flush_every(v, 500)
 
 
 class ExtractConfig(BaseModel):
@@ -179,10 +215,12 @@ class ExtractConfig(BaseModel):
 
 
 class BuildConfig(BaseModel):
-    target: List[str] = Field(default_factory=list)
-    # hyperedge.content uses full chunk text instead of extract.knowledge
-    hyperedge_use_full_chunk: bool = True
-    # 构图分批：node+hyperedge+edge 累计达 N 条则写库
+    """
+    构图：超边已在 summary 写入；本步建 node，并可选回写 hyperedge.extra/chunk_id。
+    target 可选：hyperedge（更新元数据）、node。
+    """
+    target: List[str] = Field(default_factory=lambda: ['hyperedge', 'node'])
+    # 构图分批：node + hyperedge 更新累计达 N 条则写库
     flush_every: int = 1000
 
     @field_validator("flush_every", mode="before")
@@ -478,6 +516,7 @@ class OssDownloadConfig(BaseModel):
 class Config(BaseModel):
     settings: SettingsConfig
     doc: DocConfig = Field(default_factory=DocConfig)
+    summary: SummaryConfig = Field(default_factory=SummaryConfig)
     chunk: ChunkConfig = Field(default_factory=ChunkConfig)
     extract: ExtractConfig = Field(default_factory=ExtractConfig)
     build: BuildConfig = Field(default_factory=BuildConfig)
@@ -499,7 +538,7 @@ class Config(BaseModel):
 
         # Known top-level pipeline keys consumed by Config model
         known = {
-            'settings', 'doc', 'chunk', 'extract', 'build',
+            'settings', 'doc', 'summary', 'chunk', 'extract', 'build',
             'vectorization', 'retrieve', 'recommend', 'agent',
             'dm_data_mysql', 'ali_oss', 'oss_download',
         }

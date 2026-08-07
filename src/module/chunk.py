@@ -104,7 +104,7 @@ class BaseChunk:
         chunks = self.dynamic_division(
             text=text,
             tokener=self.tokener,
-            min_tokens=self.config.chunk.chunk_size_min,
+            min_tokens=int(getattr(self.config.chunk, 'chunk_size_min', 300) or 300),
             max_tokens=self.config.chunk.chunk_size_max,
         )
         for chunk in chunks:

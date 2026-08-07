@@ -7,16 +7,17 @@ import tiktoken
 
 class Chunk(BaseChunk):
     """
-    基于 PDF 识别 JSON 的分块：
-      - doc.extra / content 提供 {"head","body"}
-      - head → 1 个头块（name=head，写入 chunk 表；后续 build 写入 hyperedge）
-      - body → 按 token 切成 body_1, body_2, … 索引块
-      - head 与 body 块均进入后续 extract
+    分块（summary 之后）：
+      - hyperedge.content → 1 个头块 name=head（不分块）
+      - doc.content（全文识别）→ 按 token 切成 body_1, body_2, …
+      - 切块逻辑：按句子打包到 max_tokens，相邻块保留 overlap_ratio 重叠
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.metrics = None  # set by DHMF
+    def __init__(self, db, logger, config):
+        super().__init__(db, logger, config)
+        self.hyperedge_db = db['hyperedge']
+        self.metrics = None 
+        self._pending_he_bind = []
 
     @staticmethod
     def _normalize_overlap_ratio(overlap_ratio) -> float:
@@ -31,7 +32,6 @@ class Chunk(BaseChunk):
     def split_document_into_chunks(self, document, max_tokens=512, overlap_ratio=0.1):
         """
         按句子打包到 max_tokens；相邻块保留 overlap_ratio * max_tokens 的尾部重叠。
-        overlap_ratio: 0~1（0.1 = 10%），相对 max_tokens。
         """
         encoding = tiktoken.get_encoding('cl100k_base')
         max_tokens = max(1, int(max_tokens or 512))
@@ -47,7 +47,6 @@ class Chunk(BaseChunk):
         current_token_count = 0
 
         def _emit_and_keep_overlap():
-            """写出当前块，并把末尾 overlap 部分作为下一块起点。"""
             nonlocal current_chunk, current_token_count
             if not current_chunk:
                 return
@@ -83,7 +82,6 @@ class Chunk(BaseChunk):
             if current_chunk:
                 _emit_and_keep_overlap()
 
-            # 单句超长：硬切（滑动窗口带重叠）
             if sentence_tokens > max_tokens:
                 tokens = encoding.encode(sentence)
                 prefix_tokens = []
@@ -114,7 +112,6 @@ class Chunk(BaseChunk):
                     current_chunk = []
                     current_token_count = 0
             else:
-                # 重叠前缀 + 本句仍可能超限：单独起块
                 if current_chunk and current_token_count + sentence_tokens > max_tokens:
                     current_chunk = [sentence]
                     current_token_count = sentence_tokens
@@ -129,51 +126,20 @@ class Chunk(BaseChunk):
 
         return chunks
 
-    @staticmethod
-    def _parse_json_obj(raw) -> dict:
-        if not raw:
-            return {}
-        if isinstance(raw, dict):
-            return raw
-        try:
-            obj = json.loads(raw)
-            return obj if isinstance(obj, dict) else {}
-        except Exception:
-            return {}
-
     def resolve_head_body(self, task: dict) -> tuple:
         """
-        从 doc 行解析 head / body。
-        优先级：
-          1) task['extra'] 中的 head/body
-          2) task['content'] 作为 {"head","body"} JSON
-          3) 顶层 task['head'] / task['body']
-          4) 整段 content 当作 body（head 为空）——兜底，保证可分块
+        head = 该文档超边 content（summary 写入）
+        body = doc.content（全文识别）
+        返回 (head, body, hyperedge_row_or_None)
         """
-        extra = self._parse_json_obj(task.get('extra'))
-        head = (extra.get('head') if isinstance(extra.get('head'), str) else None)
-        body = (extra.get('body') if isinstance(extra.get('body'), str) else None)
-
-        if head is None and body is None:
-            content = task.get('content') or ''
-            try:
-                from .doc import Doc as _Doc
-                parsed = _Doc.parse_recognition_json(content)
-            except Exception:
-                parsed = None
-            if parsed is not None:
-                head = parsed.get('head') or ''
-                body = parsed.get('body') or ''
-            else:
-                head = task.get('head') if isinstance(task.get('head'), str) else ''
-                body = task.get('body') if isinstance(task.get('body'), str) else ''
-                if not head and not body:
-                    body = (content or '').strip()
-                    head = ''
-
-        head = (head or '').strip()
-        body = (body or '').strip()
-        return head, body
+        doc_id = task.get('id')
+        body = (task.get('content') or '').strip()
+        head = ''
+        he_rows = self.hyperedge_db.search('doc_id', doc_id) or []
+        he_row = he_rows[0] if he_rows else None
+        if he_row:
+            head = (he_row.get('content') or '').strip()
+        return head, body, he_row
 
     def processing_single_task(self, task):
         t0 = time.perf_counter()
@@ -183,26 +149,23 @@ class Chunk(BaseChunk):
             getattr(self.config.chunk, 'chunk_overlap', 0.1)
         )
 
-        head, body = self.resolve_head_body(task)
-
-        pieces = []  # list of (content, is_head, chunk_index)
-
-        # 头块：始终写入一块（即使 head 为空也占位，保证每文档有超边源）
-        if head:
-            pieces.append((head, True, 0))
-        elif body:
-            # head 缺失：用 body 首段充当头块，其余为索引块
-            body_parts = self.split_document_into_chunks(
-                body, max_tokens=max_tokens, overlap_ratio=overlap_ratio
+        head, body, he_row = self.resolve_head_body(task)
+        if not head and not body:
+            self.logger.warning(
+                f"Skip chunk doc_id={doc_id} name={task.get('name')!r}: "
+                f"empty head and body"
             )
-            if body_parts:
-                pieces.append((body_parts[0], True, 0))
-                body = '\n'.join(body_parts[1:])
-            else:
-                pieces.append((body, True, 0))
-                body = ''
-        else:
-            pieces.append(('', True, 0))
+            return
+        if he_row is None:
+            self.logger.warning(
+                f"Doc {task.get('name') or doc_id}: no hyperedge; "
+                f"run summary first. Skip."
+            )
+            return
+
+        pieces = []  # (content, is_head, chunk_index)
+
+        pieces.append((head or '', True, 0))
 
         if body:
             body_parts = self.split_document_into_chunks(
@@ -220,6 +183,7 @@ class Chunk(BaseChunk):
                 'chunk_index': int(chunk_index),
                 'role': 'head' if is_head else 'body',
                 'chunk_overlap': overlap_ratio,
+                'source': 'hyperedge.summary' if is_head else 'doc.recognition',
             }
             add_chunk = {
                 'doc_id': doc_id,
@@ -228,14 +192,20 @@ class Chunk(BaseChunk):
                 'extra': json.dumps(extra, ensure_ascii=False),
             }
             if self.config.chunk.count_token:
-                add_chunk['tokens'] = len(self.tokener.encode(add_chunk['content'] or ''))
+                add_chunk['tokens'] = len(
+                    self.tokener.encode(add_chunk['content'] or '')
+                )
             self.chunk_db.buffer.append(add_chunk)
 
-        update_doc = {
+        self.doc_db.buffer.append({
             'id': doc_id,
             'status': 'chunk',
-        }
-        self.doc_db.buffer.append(update_doc)
+        })
+
+        self._pending_he_bind.append({
+            'hyperedge_id': he_row['id'],
+            'doc_id': doc_id,
+        })
 
         if self.metrics is not None:
             self.metrics.record(
@@ -243,8 +213,97 @@ class Chunk(BaseChunk):
                 time.perf_counter() - t0,
                 cache_hit=False,
                 name=task.get('name') or f'doc_{doc_id}',
-                extra=f'n_chunks={len(pieces)} head=1 body={max(0, len(pieces)-1)}',
+                extra=(
+                    f'n_chunks={len(pieces)} head=1 '
+                    f'body={max(0, len(pieces) - 1)}'
+                ),
                 log=False,
             )
-        # 按 chunk 行数分批落库（满 flush_every 写一次）
         self._maybe_flush()
+
+    def prepare(self):
+        """Only docs already summarized (status=summary), unless debug."""
+        if self.config.settings.debug:
+            summarized = self.doc_db.search('status', 'summary') or []
+            chunked = self.doc_db.search('status', 'chunk') or []
+            all_docs = self.doc_db.search_all() or []
+            seen = set()
+            tasks = []
+            for r in list(summarized) + list(chunked) + list(all_docs):
+                rid = r.get('id')
+                if rid in seen:
+                    continue
+                he = self.hyperedge_db.search('doc_id', rid) or []
+                if not he:
+                    continue
+                seen.add(rid)
+                tasks.append(r)
+            self.tasks = tasks
+        else:
+            self.tasks = self.doc_db.search('status', 'summary') or []
+        self.doc_db.buffer_clear()
+        self.chunk_db.buffer_clear()
+        self._flushed_count = 0
+        self._pending_he_bind = []
+        self.logger.debug(f"The number of documents to be chunk: {len(self.tasks)}")
+
+    def save(self):
+        n_chunk = len(self.chunk_db.buffer)
+        n_doc = len(self.doc_db.buffer)
+        if n_chunk <= 0 and n_doc <= 0:
+            return
+
+        rows = self.chunk_db.db.execute("SELECT MAX(id) FROM chunk")
+        max_id_before = (
+            rows[0]['MAX(id)']
+            if rows and rows[0]['MAX(id)'] is not None
+            else 0
+        )
+
+        pending = list(self._pending_he_bind or [])
+        he_by_doc = {p['doc_id']: p['hyperedge_id'] for p in pending}
+        head_bind = []
+        next_id = max_id_before
+        for ch in self.chunk_db.buffer:
+            next_id += 1
+            if (ch.get('name') or '').strip().lower() == 'head':
+                did = ch.get('doc_id')
+                hid = he_by_doc.get(did)
+                if hid is not None:
+                    head_bind.append({'id': hid, 'chunk_id': next_id})
+
+        if self.doc_db.buffer:
+            self.doc_db.update(self.doc_db.buffer)
+            self.doc_db.buffer_clear()
+        if self.chunk_db.buffer:
+            self.chunk_db.add(self.chunk_db.buffer)
+            self._flushed_count += n_chunk
+            self.chunk_db.buffer_clear()
+
+        if head_bind:
+            self.hyperedge_db.update(head_bind)
+
+        self._pending_he_bind = []
+        self.logger.info(
+            f"[chunk] flush chunks={n_chunk} docs={n_doc} "
+            f"he_bind={len(head_bind)} total_chunks_flushed={self._flushed_count}"
+        )
+
+    def clear(self):
+        """
+        清空 chunk 表；有超边的 doc → status=summary，否则 → new。
+        """
+        self.chunk_db.clear()
+        docs = self.doc_db.search_all() or []
+        updates = []
+        for d in docs:
+            he = self.hyperedge_db.search('doc_id', d['id']) or []
+            updates.append({
+                'id': d['id'],
+                'status': 'summary' if he else 'new',
+            })
+        if updates:
+            self.doc_db.update(updates)
+        self.logger.info(
+            f"[chunk] clear: chunks wiped, docs status reset n={len(updates)}"
+        )

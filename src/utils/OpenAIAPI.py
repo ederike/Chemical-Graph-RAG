@@ -298,7 +298,7 @@ class LLM:
         response.update(_usage_from_completion(completion))
         return response
 
-    def generate_vision(self, prompt, images, model_args, **kwargs):
+    def generate_vision(self, prompt, images, model_args, history=None, **kwargs):
         """
         Multimodal generation: text prompt + list of image payloads.
 
@@ -306,9 +306,12 @@ class LLM:
           - {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
           - or raw base64 string (will be wrapped as png data url)
         prompt: {"system": str, "user": str}
+        history: optional prior turns (no images), e.g.
+          [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+          Used so middle pages can see the previous page's recognition text only.
         """
         user_content = [{"type": "text", "text": prompt.get("user", "")}]
-        for img in images:
+        for img in images or []:
             if isinstance(img, dict) and img.get("type") == "image_url":
                 user_content.append(img)
             elif isinstance(img, dict) and "url" in img:
@@ -333,6 +336,13 @@ class LLM:
         system = prompt.get("system") or ""
         if system:
             messages.append({"role": "system", "content": system})
+        for turn in history or []:
+            if not isinstance(turn, dict):
+                continue
+            role = turn.get("role")
+            content = turn.get("content")
+            if role in ("user", "assistant", "system") and content is not None:
+                messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": user_content})
 
         response = {}

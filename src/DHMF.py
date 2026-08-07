@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .custom_module.doc import Doc
+from .custom_module.summary import Summary
 from .custom_module.chunk import Chunk
 from .custom_module.extract import Extract
 from .custom_module.build import Build
@@ -47,6 +48,7 @@ class DHMF:
         self.metrics.load_lifetime()
 
         self.doc_module = Doc(db=self.db,logger=self.logger,config=self.config)
+        self.summary_module = Summary(db=self.db,logger=self.logger,config=self.config)
         self.chunk_module = Chunk(db=self.db,logger=self.logger,config=self.config)
         self.extract_module = Extract(db=self.db,logger=self.logger,config=self.config)
         self.build_module = Build(db=self.db,logger=self.logger,config=self.config)
@@ -57,6 +59,7 @@ class DHMF:
         )
 
         self.doc_module.metrics = self.metrics
+        self.summary_module.metrics = self.metrics
         self.chunk_module.metrics = self.metrics
         self.extract_module.metrics = self.metrics
         self.build_module.metrics = self.metrics
@@ -322,8 +325,41 @@ class DHMF:
         )
 
     def insert_clear(self):
+        """清空 doc 表；同步清空 summary 写入的 hyperedge，避免悬空超边。"""
         self.doc_module.clear()
+        try:
+            self.summary_module.clear()
+        except Exception as e:
+            self.logger.warning(f"insert_clear: summary/hyperedge clear skipped: {e}")
         self.vectorization_clear('doc')
+
+    def summary(self):
+        """
+        文档总结（可独立运行）：doc.content → LLM → hyperedge.content。
+        须在 insert 之后、chunk 之前执行。
+        """
+        self.begin_build()
+        self.logger.info("Start document summary → hyperedge.content.")
+        self.summary_module.usage_prompt_tokens = 0
+        self.summary_module.usage_completion_tokens = 0
+        self.summary_module.prepare()
+        if not self.summary_module.tasks:
+            self.logger.info("No documents to summarize.")
+            return
+        self.summary_module.processing()
+        self.summary_module.save()
+        self.metrics.log_stage('summary')
+        self.logger.info(
+            f"Finish summary. "
+            f"stage_tokens prompt={self.summary_module.usage_prompt_tokens} "
+            f"completion={self.summary_module.usage_completion_tokens}"
+        )
+
+    def summary_clear(self):
+        """清除超边总结；doc status summary→new。不影响 chunk/node（请按需 chunk_clear/build_clear）。"""
+        self.begin_build()
+        self.summary_module.clear()
+        self.vectorization_clear('hyperedge')
 
     def delete(
         self,
@@ -467,9 +503,12 @@ class DHMF:
         self.logger.info(f"Finish building.")
     
     def build_clear(self):
+        """
+        清除构图产物（node/edge）与相关向量；不删除 summary 写入的 hyperedge 正文。
+        若需重做总结请调用 summary_clear()。
+        """
         self.begin_build()
         self.build_module.clear()
-        self.vectorization_clear('hyperedge')
         self.vectorization_clear('node')
         self.vectorization_clear('edge')
 

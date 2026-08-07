@@ -6,18 +6,18 @@ import time
 
 class Build(BaseBuild):
     """
-    构图逻辑（识别 JSON 管线）：
-      - 识别结果 {"head","body"} → chunk 表已有 head 块 + body_* 块
-      - 每文档一头块 → 写入 hyperedge 表，hyperedge.content = head 文本
+    构图（summary 已写入 hyperedge）：
+      - 每文档已有唯一超边（content = LLM 总结）
       - 每个 chunk（含 head）上的抽取实体 → node 表
-      - node.chunk_id = 所属块；node.hyperedge_id = 该文档唯一超边
+      - node.chunk_id = 所属块；node.hyperedge_id = 该文档已有超边真实 id
+      - 不再新建 hyperedge 行；可选更新 hyperedge.extra 中的实体聚合
       - 不再构建 edge 表
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.metrics = None  # set by DHMF
-        self._doc_he_temp = {}
+        self._doc_he_cache = {}
 
     @staticmethod
     def _parse_extra(raw):
@@ -71,7 +71,9 @@ class Build(BaseBuild):
                 for name, content in entities.items():
                     if content == '':
                         continue
-                    if name not in all_entities or len(str(content)) > len(str(all_entities[name])):
+                    if name not in all_entities or len(str(content)) > len(
+                        str(all_entities[name])
+                    ):
                         all_entities[name] = content
             elif isinstance(entities, list):
                 for name in entities:
@@ -89,6 +91,14 @@ class Build(BaseBuild):
             return [extra]
         return []
 
+    def _hyperedge_for_doc(self, doc_id):
+        if doc_id in self._doc_he_cache:
+            return self._doc_he_cache[doc_id]
+        rows = self.hyperedge_db.search('doc_id', doc_id) or []
+        he = rows[0] if rows else None
+        self._doc_he_cache[doc_id] = he
+        return he
+
     def processing_single_task(self, task):
         """兼容单任务调用：实际批量逻辑在 processing。"""
         self.processing_doc_chunks([task])
@@ -102,6 +112,15 @@ class Build(BaseBuild):
         chunks = sorted(chunks, key=self._chunk_sort_key)
         doc_id = chunks[0]['doc_id']
 
+        he = self._hyperedge_for_doc(doc_id)
+        if he is None:
+            self.logger.error(
+                f"build: no hyperedge for doc_id={doc_id}; "
+                f"run summary before build. Skip."
+            )
+            return
+        he_id = he['id']
+
         head = None
         for c in chunks:
             if self._is_head_chunk(c):
@@ -110,33 +129,22 @@ class Build(BaseBuild):
         if head is None:
             head = chunks[0]
 
-        he_temp = self._doc_he_temp.get(doc_id)
-        if he_temp is None:
-            he_temp = self.hyperedge_id_temp
-            self._doc_he_temp[doc_id] = he_temp
-            self.hyperedge_id_temp += 1
-
-            if 'hyperedge' in self.config.build.target:
-                # 超边内容 = 识别 JSON 的 head（头块 content）
-                head_text = (head.get('content') or '').strip()
-                head_entities = self._merge_entities(self._extracts_from_chunk(head))
-                hyperedge = {
-                    'doc_id': doc_id,
-                    'chunk_id': head['id'],
-                    'name': head.get('name') or 'head',
-                    'content': head_text,
-                    'extra': json.dumps(
-                        {
-                            'is_head': True,
-                            'role': 'head',
-                            'source': 'recognition.head',
-                            'entities': head_entities,
-                            'source_chunk_id': head['id'],
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-                self.hyperedge_db.buffer.append(hyperedge)
+        # 可选：把 head 实体写回超边 extra（不改 content）
+        if 'hyperedge' in self.config.build.target:
+            head_entities = self._merge_entities(self._extracts_from_chunk(head))
+            prev_extra = self._parse_extra(he.get('extra'))
+            prev_extra.update({
+                'is_head': True,
+                'role': 'head',
+                'source': prev_extra.get('source') or 'summary',
+                'entities': head_entities,
+                'source_chunk_id': head['id'],
+            })
+            self.hyperedge_db.buffer.append({
+                'id': he_id,
+                'chunk_id': head['id'],
+                'extra': json.dumps(prev_extra, ensure_ascii=False),
+            })
 
         entity_count = 0
         for task in chunks:
@@ -146,11 +154,15 @@ class Build(BaseBuild):
 
             if 'node' in self.config.build.target:
                 for node_name, content in all_entities.items():
-                    emb_text = f'{node_name}\n{content}'.strip() if content else str(node_name)
+                    emb_text = (
+                        f'{node_name}\n{content}'.strip()
+                        if content
+                        else str(node_name)
+                    )
                     node = {
                         'doc_id': doc_id,
                         'chunk_id': task['id'],
-                        'hyperedge_id': he_temp,
+                        'hyperedge_id': he_id,  # 真实 DB id
                         'name': node_name,
                         'content': content or '',
                         'embedding_content': emb_text,
@@ -171,13 +183,60 @@ class Build(BaseBuild):
                 extra=f'chunks={len(chunks)} entities≈{entity_count}',
                 log=False,
             )
-        # 整文档处理完后再判断分批落库，避免同一 doc 的 node/超边被拆批
         self._maybe_flush()
 
+    def prepare_save(self):
+        """
+        超边已在 summary 阶段入库；node.hyperedge_id 为真实 id，无需 temp 映射。
+        hyperedge.buffer 中的行全部带 id，走 update。
+        """
+        return
+
+    def save(self):
+        n_he = len(self.hyperedge_db.buffer)
+        n_node = len(self.node_db.buffer)
+        n_edge = len(self.edge_db.buffer)
+        n_chunk = len(self.chunk_db.buffer)
+        if n_he <= 0 and n_node <= 0 and n_edge <= 0 and n_chunk <= 0:
+            return
+
+        if self.chunk_db.buffer:
+            self.chunk_db.update(self.chunk_db.buffer)
+            self.chunk_db.buffer_clear()
+
+        # hyperedge: update only (created by summary)
+        if self.hyperedge_db.buffer:
+            self.hyperedge_db.update(self.hyperedge_db.buffer)
+            self.hyperedge_db.buffer_clear()
+
+        if self.node_db.buffer:
+            self.node_db.add(self.node_db.buffer)
+            self.node_db.buffer_clear()
+
+        if self.edge_db.buffer:
+            self.edge_db.add(self.edge_db.buffer)
+            self.edge_db.buffer_clear()
+
+        flushed = n_he + n_node + n_edge
+        self._flushed_count += flushed
+        self.logger.info(
+            f"[build] flush hyperedge_upd={n_he} node={n_node} edge={n_edge} "
+            f"chunk_status={n_chunk} total_items_flushed={self._flushed_count}"
+        )
+
+    def clear(self):
+        """
+        清除构图产物（node/edge），重置 chunk status→extract。
+        不删除 hyperedge（由 summary 维护）；不碰 doc/chunk 正文。
+        """
+        self.chunk_db.update_key('status', 'extract')
+        self.node_db.clear()
+        self.edge_db.clear()
+        # 不 clear hyperedge_db
+
     def processing(self):
-        """按文档聚合：一头块一超边，全块抽节点；按 flush_every 分批写库。"""
-        self.hyperedge_id_temp = 0
-        self._doc_he_temp = {}
+        """按文档聚合：绑定已有超边，全块抽节点；按 flush_every 分批写库。"""
+        self._doc_he_cache = {}
         self._flushed_count = 0
         self.hyperedge_db.buffer_clear()
         self.node_db.buffer_clear()
