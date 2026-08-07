@@ -46,9 +46,16 @@ class SettingsConfig(BaseModel):
 
 
 class RetryConfig(BaseModel):
-    """Per-stage @Retry parameters (seconds for wait/timeout)."""
+    """
+    Per-stage @Retry parameters (seconds for wait/timeout).
+
+    wait 支持：
+      - 标量：固定间隔，如 0.1
+      - 列表：指数退避序列，如 [10, 30, 60]
+        （第 1/2/3 次失败后分别等待；超出序列则用最后一项）
+    """
     max_attempt: int = 3
-    wait: float = 0.1
+    wait: Union[float, List[float]] = 0.1
     timeout: float = 60.0
 
     @field_validator("max_attempt", mode="before")
@@ -60,7 +67,45 @@ class RetryConfig(BaseModel):
             return 3
         return max(1, n)
 
-    @field_validator("wait", "timeout", mode="before")
+    @field_validator("wait", mode="before")
+    @classmethod
+    def _coerce_wait(cls, v):
+        # 标量
+        if v is None:
+            return 0.1
+        if isinstance(v, (list, tuple)):
+            out = []
+            for x in v:
+                try:
+                    out.append(max(0.0, float(x)))
+                except (TypeError, ValueError):
+                    continue
+            return out if out else [0.1]
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return 0.1
+            if ',' in s:
+                out = []
+                for p in s.split(','):
+                    p = p.strip()
+                    if not p:
+                        continue
+                    try:
+                        out.append(max(0.0, float(p)))
+                    except (TypeError, ValueError):
+                        continue
+                return out if out else [0.1]
+            try:
+                return max(0.0, float(s))
+            except (TypeError, ValueError):
+                return 0.1
+        try:
+            return max(0.0, float(v))
+        except (TypeError, ValueError):
+            return 0.1
+
+    @field_validator("timeout", mode="before")
     @classmethod
     def _coerce_nonneg_float(cls, v):
         try:
@@ -89,9 +134,13 @@ class DocRecognitionConfig(BaseModel):
     dpi: int = 150
     # 页渲染格式：jpeg（推荐，体积小）/ png
     image_format: str = 'jpeg'
-    # 单页 VL 调用超时
+    # 中间页参考：上一页识别正文只取末尾 N 字符
+    prev_text_max_chars: int = 2000
+    # 单页 VL：最多 4 次尝试，失败后指数退避 10s → 30s → 60s
     retry: RetryConfig = Field(
-        default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=300.0)
+        default_factory=lambda: RetryConfig(
+            max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=300.0
+        )
     )
 
     @field_validator("api_key", "base_url", mode="before")

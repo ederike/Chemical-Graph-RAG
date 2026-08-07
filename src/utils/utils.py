@@ -160,6 +160,40 @@ class NonRetryableError(Exception):
     """明确不可恢复的错误：@Retry 遇到后不再重试，直接失败。"""
 
 
+def _normalize_wait_schedule(wait) -> list:
+    """
+    将 wait 规范为非负秒数列表（指数退避 schedule）。
+
+    支持：
+      - 标量 float/int → [wait]
+      - list/tuple → [w0, w1, ...]（如 [10, 30, 60]）
+      - 逗号分隔字符串 → 同上
+    第 n 次失败后的休眠取 schedule[min(n-1, len-1)]。
+    """
+    if wait is None:
+        return [0.0]
+    if isinstance(wait, (list, tuple)):
+        raw = list(wait)
+    elif isinstance(wait, str):
+        s = wait.strip()
+        if not s:
+            return [0.0]
+        if ',' in s:
+            raw = [p.strip() for p in s.split(',') if p.strip()]
+        else:
+            raw = [s]
+    else:
+        raw = [wait]
+
+    out = []
+    for x in raw:
+        try:
+            out.append(max(0.0, float(x)))
+        except (TypeError, ValueError):
+            continue
+    return out if out else [0.0]
+
+
 class Retry:
     """
     方法级重试装饰器。
@@ -169,12 +203,16 @@ class Retry:
       2. 装饰器构造时传入的 max_attempt / wait / timeout 默认值
 
     config_attr 指向带 max_attempt / wait / timeout 的对象或 dict。
+
+    wait 支持标量或退避序列：
+      wait=0.1          → 每次失败固定等 0.1s
+      wait=[10, 30, 60] → 第 1/2/3 次失败后分别等 10/30/60s（超出序列则用末项）
     """
 
     def __init__(
         self,
         max_attempt: int = 5,
-        wait: float = 0.1,
+        wait=0.1,
         timeout: float = 10000,
         config_attr: str = None,
     ):
@@ -184,39 +222,69 @@ class Retry:
         self.config_attr = config_attr
 
     def _resolve_params(self, args):
-        max_attempt, wait, timeout = self.max_attempt, self.wait, self.timeout
+        max_attempt = self.max_attempt
+        wait = self.wait
+        timeout = self.timeout
         if not self.config_attr or not args:
-            return max_attempt, wait, timeout
+            return (
+                max(1, int(max_attempt)),
+                _normalize_wait_schedule(wait),
+                max(0.0, float(timeout)),
+            )
 
         cfg_root = getattr(args[0], 'config', None)
         if cfg_root is None:
-            return max_attempt, wait, timeout
+            return (
+                max(1, int(max_attempt)),
+                _normalize_wait_schedule(wait),
+                max(0.0, float(timeout)),
+            )
 
         obj = cfg_root
         try:
             for part in self.config_attr.split('.'):
                 obj = getattr(obj, part)
         except AttributeError:
-            return max_attempt, wait, timeout
+            return (
+                max(1, int(max_attempt)),
+                _normalize_wait_schedule(wait),
+                max(0.0, float(timeout)),
+            )
 
         if obj is None:
-            return max_attempt, wait, timeout
+            return (
+                max(1, int(max_attempt)),
+                _normalize_wait_schedule(wait),
+                max(0.0, float(timeout)),
+            )
 
         if isinstance(obj, dict):
             max_attempt = int(obj.get('max_attempt', max_attempt))
-            wait = float(obj.get('wait', wait))
+            wait = obj.get('wait', wait)
             timeout = float(obj.get('timeout', timeout))
         else:
             max_attempt = int(getattr(obj, 'max_attempt', max_attempt))
-            wait = float(getattr(obj, 'wait', wait))
+            wait = getattr(obj, 'wait', wait)
             timeout = float(getattr(obj, 'timeout', timeout))
 
-        return max(1, max_attempt), max(0.0, wait), max(0.0, timeout)
+        return (
+            max(1, int(max_attempt)),
+            _normalize_wait_schedule(wait),
+            max(0.0, float(timeout)),
+        )
+
+    @staticmethod
+    def _backoff_seconds(schedule: list, attempt: int) -> float:
+        """第 attempt 次失败后的休眠秒数（attempt 从 1 起）。"""
+        if not schedule:
+            return 0.0
+        idx = min(max(0, attempt - 1), len(schedule) - 1)
+        return float(schedule[idx])
 
     def __call__(self, func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            max_attempt, wait, timeout = self._resolve_params(args)
+            max_attempt, wait_schedule, timeout = self._resolve_params(args)
             # 尽量从 self.logger 打日志（Doc/Extract 等实例方法）
             logger = None
             if args:
@@ -254,8 +322,16 @@ class Retry:
                             f"attempt {attempt}/{max_attempt} failed "
                             f"(timeout={timeout}s): {err_msg}"
                         )
-                    if attempt < max_attempt and wait > 0:
-                        time.sleep(wait)
+                    if attempt < max_attempt:
+                        delay = self._backoff_seconds(wait_schedule, attempt)
+                        if delay > 0:
+                            if logger is not None:
+                                logger.info(
+                                    f"[Retry] {func.__qualname__} backoff "
+                                    f"{delay:.1f}s before attempt "
+                                    f"{attempt + 1}/{max_attempt}"
+                                )
+                            time.sleep(delay)
                 finally:
                     # 超时后不要 wait=True 堵死下一次重试（后台请求仍可能跑完）
                     try:

@@ -158,10 +158,32 @@ class Doc(BaseDoc):
             'pipeline': 'page_plain_text_v1',
             'image_format': getattr(recog, 'image_format', 'jpeg'),
             'prev_once': True,
+            'prev_text_max_chars': int(
+                getattr(recog, 'prev_text_max_chars', 2000) or 2000
+            ),
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
         ).hexdigest()
+
+    def _clip_prev_text(self, prev_text: str) -> str:
+        """上一页参考正文：只保留末尾 N 字符（默认 2000），控制 prompt 体积。"""
+        text = (prev_text or '').strip()
+        if not text:
+            return ''
+        try:
+            max_chars = int(
+                getattr(
+                    self.config.doc.recognition, 'prev_text_max_chars', 2000
+                )
+                or 2000
+            )
+        except (TypeError, ValueError):
+            max_chars = 2000
+        max_chars = max(0, max_chars)
+        if max_chars <= 0 or len(text) <= max_chars:
+            return text
+        return text[-max_chars:]
 
     def _page_recognition_cache_key(
         self,
@@ -172,7 +194,8 @@ class Doc(BaseDoc):
     ) -> str:
         """Per-page cache key (includes previous-page text hash for context)."""
         recog = self.config.doc.recognition
-        prev_hash = hashlib.md5((prev_text or '').encode('utf-8')).hexdigest()[:16]
+        prev_clip = self._clip_prev_text(prev_text)
+        prev_hash = hashlib.md5(prev_clip.encode('utf-8')).hexdigest()[:16]
         payload = {
             'scope': 'page',
             'file_hash': file_hash,
@@ -186,6 +209,9 @@ class Doc(BaseDoc):
             'pipeline': 'page_plain_text_v1',
             'image_format': getattr(recog, 'image_format', 'jpeg'),
             'prev_once': True,
+            'prev_text_max_chars': int(
+                getattr(recog, 'prev_text_max_chars', 2000) or 2000
+            ),
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
@@ -248,7 +274,12 @@ class Doc(BaseDoc):
     # ------------------------------------------------------------------
     # Single-page vision recognition
     # ------------------------------------------------------------------
-    @Retry(max_attempt=3, wait=0.1, timeout=300, config_attr='doc.recognition.retry')
+    @Retry(
+        max_attempt=4,
+        wait=[10, 30, 60],
+        timeout=300,
+        config_attr='doc.recognition.retry',
+    )
     def recognize_page(
         self,
         image_b64: str,
@@ -262,13 +293,14 @@ class Doc(BaseDoc):
     ):
         """
         Recognize one page image with VLM.
-        中间页：上一页完整识别正文只拼进当前 user 文本一次（不截断、不 multi-turn 重复）。
+        中间页：上一页识别正文末尾截断后只拼进当前 user 文本一次（不 multi-turn 重复）。
         """
         attempt = int(kwargs.get('attempt', 1) or 1)
         max_attempt = int(kwargs.get('max_attempt', 1) or 1)
         pdf_path = Path(pdf_path)
         recog = self.config.doc.recognition
-        prev_text = (prev_text or '').strip()
+        # 只取上一页末尾 N 字符，控制多模态 prompt 体积
+        prev_text = self._clip_prev_text(prev_text)
 
         cache_key = self._page_recognition_cache_key(
             pdf_path, file_hash, page_idx, prev_text
@@ -303,11 +335,12 @@ class Doc(BaseDoc):
         )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
 
-        # 中间页：上一页正文只拼一遍（写进当前 user 文本），不 multi-turn 重复
+        # 中间页：上一页正文（已截断）只拼一遍，不 multi-turn 重复
         if page_idx > 0 and prev_text:
             user_prompt = (
                 f"{user_prompt}\n\n"
-                f"上一页图片的识别结果如下，供当前页衔接参考：\n{prev_text}"
+                f"上一页图片的识别结果如下（末尾片段，供当前页衔接参考）：\n"
+                f"{prev_text}"
             )
 
         model_args = dict(recog.model_args or {})
@@ -389,8 +422,9 @@ class Doc(BaseDoc):
         """
         PDF → 逐页图像 → 每页单独 VLM 识别 → 按序拼接为文档正文。
 
-        页间：仅中间页在对话历史中携带上一页识别文本（不跨文件、不回传上页图）。
+        页间：中间页 user 文本携带上一页识别正文末尾片段（默认 2000 字）。
         多线程在文件级（prepare_from_pdfs），单文件内页序串行。
+        任一步失败（坏 PDF / API 重试耗尽）向上抛出，由 prepare_from_pdfs 跳过该文件。
 
         返回 dict 供 insert：
           content : 全文纯文本（各页识别结果按序拼接）
@@ -420,7 +454,7 @@ class Doc(BaseDoc):
 
         images_b64 = self.pdf_to_images_b64(pdf_path)
         if not images_b64:
-            raise ValueError(f"No pages rendered from PDF: {pdf_path}")
+            raise NonRetryableError(f"No pages rendered from PDF: {pdf_path.name}")
 
         page_count = len(images_b64)
         page_texts = []
@@ -441,14 +475,16 @@ class Doc(BaseDoc):
                 prev_text=prev_text,
             )
             if page_out is None:
+                # 重试耗尽：跳过整个文件（不中断批处理）
                 raise RuntimeError(
-                    f"Failed to recognize {pdf_path.name} page {page_idx + 1}/{page_count} "
-                    f"after all retries"
+                    f"Failed to recognize {pdf_path.name} page "
+                    f"{page_idx + 1}/{page_count} after all retries"
                 )
             text = (page_out.get('text') or '').strip()
             if not text:
                 raise RuntimeError(
-                    f"Empty page text for {pdf_path.name} page {page_idx + 1}/{page_count}"
+                    f"Empty page text for {pdf_path.name} "
+                    f"page {page_idx + 1}/{page_count}"
                 )
             page_texts.append(text)
             prev_text = text
@@ -556,15 +592,50 @@ class Doc(BaseDoc):
         results_lock = threading.Lock()
 
         def _one(path):
+            """单文件识别；任何错误只跳过当前文件，不中断整批。"""
             try:
                 out = self.recognize_pdf(path)
+            except NonRetryableError as e:
+                self.logger.warning(
+                    f"Skip PDF (invalid/unreadable): {path.name}: {e}"
+                )
+                if self.metrics is not None:
+                    self.metrics.record(
+                        'recognize',
+                        0.0,
+                        skipped=True,
+                        name=path.name,
+                        log=False,
+                        accumulate_time=False,
+                    )
+                return None
             except Exception as e:
-                self.logger.error(f"Failed to recognize {path}: {e}")
+                self.logger.warning(
+                    f"Skip PDF after error: {path.name}: {e}"
+                )
+                if self.metrics is not None:
+                    self.metrics.record(
+                        'recognize',
+                        0.0,
+                        skipped=True,
+                        name=path.name,
+                        log=False,
+                        accumulate_time=False,
+                    )
                 return None
             if out is None:
-                self.logger.error(
-                    f"Failed to recognize {path} after all retries"
+                self.logger.warning(
+                    f"Skip PDF (recognition returned empty): {path.name}"
                 )
+                if self.metrics is not None:
+                    self.metrics.record(
+                        'recognize',
+                        0.0,
+                        skipped=True,
+                        name=path.name,
+                        log=False,
+                        accumulate_time=False,
+                    )
             return out
 
         def _postfix():
