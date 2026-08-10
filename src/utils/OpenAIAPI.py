@@ -555,9 +555,16 @@ class Embedding:
         return False
 
     def _generate_openai(self, prompt, model_args):
-        """OpenAI 兼容 embeddings.create（需 model_args.model）；超时自动重试。"""
+        """
+        OpenAI 兼容 embeddings.create（需 model_args.model）；超时自动重试。
+
+        prompt 可为 str（单条）或 list[str]（批量）。
+        - 单条：answer 为 list[float]
+        - 批量：answer 为 list[list[float]]，顺序与 input 一致（按 data.index 排序）
+        """
         response = {}
         embedding = None
+        is_batch = isinstance(prompt, list)
         # 已规范化：dimensions 可直接进 create kwargs
         create_kwargs, extra_body = split_model_args(model_args)
         call_kwargs = {
@@ -572,7 +579,17 @@ class Embedding:
             try:
                 embedding = self._openai().embeddings.create(**call_kwargs)
                 response["status"] = 1
-                response["answer"] = embedding.data[0].embedding
+                if is_batch:
+                    # OpenAI/xinference 可能乱序返回；按 index 还原
+                    items = sorted(embedding.data, key=lambda d: int(getattr(d, "index", 0) or 0))
+                    response["answer"] = [d.embedding for d in items]
+                    if len(response["answer"]) != len(prompt):
+                        raise ValueError(
+                            f"batch embedding size mismatch: "
+                            f"got {len(response['answer'])} want {len(prompt)}"
+                        )
+                else:
+                    response["answer"] = embedding.data[0].embedding
                 last_err = None
                 break
             except Exception as e:
@@ -607,9 +624,182 @@ class Embedding:
 
         先规范化 dimension/dim/dims → dimensions，再进缓存键与 API，
         避免「写了 dimension 但服务端不认 / 缓存键不一致」。
+
+        单条文本请用本方法；多条请用 generate_batch（按条缓存 + 一次 API）。
         """
         model_args = normalize_embedding_model_args(model_args)
+        if isinstance(prompt, list):
+            # 兼容误传 list：走 batch，再按单条接口形状返回
+            rows = self.generate_batch(prompt, model_args=model_args, **kwargs)
+            if len(rows) == 1:
+                return rows[0]
+            # 多条：拼成与旧本地 batch 类似的聚合响应
+            if any(r.get("status") != 1 for r in rows):
+                bad = next(r for r in rows if r.get("status") != 1)
+                return bad
+            return {
+                "status": 1,
+                "answer": [r["answer"] for r in rows],
+                "usage_prompt_tokens": sum(
+                    (r.get("usage_prompt_tokens") or 0) for r in rows
+                    if not r.get("_cache_hit")
+                ) or None,
+                "usage_completion_tokens": 0,
+                "usage_total_tokens": sum(
+                    (r.get("usage_total_tokens") or 0) for r in rows
+                    if not r.get("_cache_hit")
+                ) or None,
+                "_cache_hit": all(r.get("_cache_hit") for r in rows),
+            }
         return self._generate_cached(prompt, model_args, **kwargs)
+
+    def generate_batch(self, prompts, model_args=None, **kwargs):
+        """
+        批量向量化：一次 API 请求嵌入多条文本；缓存仍按「单条」键读写，
+        与 generate() 完全兼容（续跑/半缓存批次只请求 miss 的子集）。
+
+        Returns:
+            list[dict] — 与 generate() 单条响应同结构，长度 == len(prompts)
+        """
+        import hashlib
+        import json
+
+        model_args = normalize_embedding_model_args(model_args)
+        use_cache = kwargs.get("use_cache", True)
+        if prompts is None:
+            return []
+        if not isinstance(prompts, list):
+            return [self.generate(prompts, model_args=model_args, **kwargs)]
+        if len(prompts) == 0:
+            return []
+        if len(prompts) == 1:
+            return [self.generate(prompts[0], model_args=model_args, **kwargs)]
+
+        # 与 @Cache 装饰的 _generate_cached 键一致：{prompt, model_args}
+        if not hasattr(self, "_emb_cache") or self._emb_cache is None:
+            self._emb_cache = Cache(cache_dir="cache/OpenAI", cache_name="emb_cache")
+        cache = self._emb_cache
+
+        n = len(prompts)
+        results: List[Optional[dict]] = [None] * n
+        miss_idx: List[int] = []
+        miss_prompts: List[Any] = []
+        miss_hashes: List[str] = []
+        miss_inp_json: List[str] = []
+
+        for i, p in enumerate(prompts):
+            if use_cache:
+                inp = {"prompt": p, "model_args": model_args or {}}
+                inp_json = json.dumps(inp, ensure_ascii=False, indent=2)
+                inp_hash = hashlib.md5(inp_json.encode("utf-8")).hexdigest()
+                out_json = cache.cache_db.search_cache(inp_hash)
+                if out_json is not None:
+                    try:
+                        out = json.loads(out_json)["output"]
+                        if isinstance(out, dict):
+                            out = dict(out)
+                            out["_cache_hit"] = True
+                            results[i] = out
+                            continue
+                    except Exception:
+                        pass
+                miss_hashes.append(inp_hash)
+                miss_inp_json.append(inp_json)
+            else:
+                miss_hashes.append("")
+                miss_inp_json.append("")
+            miss_idx.append(i)
+            miss_prompts.append(p)
+
+        if miss_prompts:
+            if model_args.get("model"):
+                api = self._generate_openai(miss_prompts, model_args)
+            else:
+                api = self._generate_local(miss_prompts)
+
+            if api.get("status") != 1:
+                err = {
+                    "status": 0,
+                    "answer": api.get("answer"),
+                    "usage_prompt_tokens": None,
+                    "usage_completion_tokens": None,
+                    "usage_total_tokens": None,
+                    "_cache_hit": False,
+                }
+                for i in miss_idx:
+                    results[i] = dict(err)
+            else:
+                answers = api.get("answer")
+                if not isinstance(answers, list) or (
+                    answers and not isinstance(answers[0], (list, tuple))
+                ):
+                    # 本地单元素或异常形状：尽量兜底
+                    if isinstance(answers, list) and answers and isinstance(answers[0], (int, float)):
+                        answers = [answers]
+                    else:
+                        answers = [answers] * len(miss_prompts)
+
+                n_miss = len(miss_prompts)
+                # 均分 usage 到每条（仅用于 metrics；缓存里各存一份）
+                pt = api.get("usage_prompt_tokens")
+                tt = api.get("usage_total_tokens")
+                try:
+                    pt_each = int(pt) // n_miss if pt is not None else None
+                    tt_each = int(tt) // n_miss if tt is not None else None
+                    # 余数补给第一条，避免总和漂移
+                    pt_rem = (int(pt) - pt_each * n_miss) if pt is not None and pt_each is not None else 0
+                    tt_rem = (int(tt) - tt_each * n_miss) if tt is not None and tt_each is not None else 0
+                except (TypeError, ValueError):
+                    pt_each = tt_each = None
+                    pt_rem = tt_rem = 0
+
+                for j, i in enumerate(miss_idx):
+                    emb = answers[j] if j < len(answers) else None
+                    if emb is None:
+                        results[i] = {
+                            "status": 0,
+                            "answer": "missing embedding in batch response",
+                            "usage_prompt_tokens": None,
+                            "usage_completion_tokens": None,
+                            "usage_total_tokens": None,
+                            "_cache_hit": False,
+                        }
+                        continue
+                    up = (pt_each + (pt_rem if j == 0 else 0)) if pt_each is not None else None
+                    ut = (tt_each + (tt_rem if j == 0 else 0)) if tt_each is not None else None
+                    out = {
+                        "status": 1,
+                        "answer": emb,
+                        "usage_prompt_tokens": up,
+                        "usage_completion_tokens": 0,
+                        "usage_total_tokens": ut,
+                        "_cache_hit": False,
+                    }
+                    results[i] = out
+                    if use_cache and Cache._should_store(out):
+                        to_store = {
+                            k: v for k, v in out.items() if not str(k).startswith("_")
+                        }
+                        payload = json.dumps({"output": to_store}, ensure_ascii=False, indent=2)
+                        try:
+                            cache.cache_db.update_cache(
+                                miss_inp_json[j], payload, miss_hashes[j]
+                            )
+                        except Exception:
+                            pass
+
+        # 理论上无 None；兜底
+        for i in range(n):
+            if results[i] is None:
+                results[i] = {
+                    "status": 0,
+                    "answer": "internal: empty batch slot",
+                    "usage_prompt_tokens": None,
+                    "usage_completion_tokens": None,
+                    "usage_total_tokens": None,
+                    "_cache_hit": False,
+                }
+        return results  # type: ignore[return-value]
 
     @Cache(cache_dir="cache/OpenAI", cache_name="emb_cache")
     def _generate_cached(self, prompt, model_args=None, **kwargs):

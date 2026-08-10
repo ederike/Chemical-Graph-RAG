@@ -277,6 +277,9 @@ class VectorizationConfig(BaseModel):
     default_target: List[str] = Field(default_factory=list)
     use_cache: bool = True
     num_thread: int = 1
+    # Texts per embeddings API request (OpenAI input=list). 1 = legacy one-by-one.
+    # Throughput ≈ num_thread × batch_size (server still rate-limits concurrent requests).
+    batch_size: int = 1
     # How often to batch embeddings into in-memory FAISS.
     flush_every: int = 1000
     # How often to rewrite the full FAISS file + mark SQLite done.
@@ -293,6 +296,15 @@ class VectorizationConfig(BaseModel):
     @classmethod
     def _flush(cls, v):
         return _coerce_flush_every(v, 1000)
+
+    @field_validator("batch_size", mode="before")
+    @classmethod
+    def _batch_size(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 1
+        return max(1, n)
 
     @field_validator("index_save_every", "task_page_size", mode="before")
     @classmethod

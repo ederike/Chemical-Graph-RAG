@@ -512,7 +512,7 @@ class DHMF:
         for db_name in db_name_list:
             self.logger.info(f"Start vectorization {db_name}.")
             self.vectorization_module.prepare(self.db[db_name],self.vdb[db_name])
-            self.vectorization_module.processing()  # tqdm progress + stage metrics summary
+            self.vectorization_module.processing() 
             self.vectorization_module.save()
             self.logger.info(f"Finish vectorization {db_name}.")
 

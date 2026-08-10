@@ -114,7 +114,8 @@ class Vectorization:
             f"vectorization prepare: table={getattr(db, 'table', '?')} "
             f"undone={self.total_undone} flush_every={self.flush_every} "
             f"index_save_every={self.index_save_every} "
-            f"task_page_size={self.task_page_size}"
+            f"task_page_size={self.task_page_size} "
+            f"batch_size={self.batch_size} num_thread={self.config.vectorization.num_thread}"
         )
 
     def save(self):
@@ -163,6 +164,13 @@ class Vectorization:
             tps = max(self.flush_every * 5, 5000)
         self.task_page_size = max(self.flush_every, tps)
 
+        # Texts per embeddings API call (list input). 1 = one request per text.
+        try:
+            bs = int(getattr(config.vectorization, 'batch_size', 1) or 1)
+        except (TypeError, ValueError):
+            bs = 1
+        self.batch_size = max(1, bs)
+
         self._buffer_lock = threading.Lock()
         self._flush_io_lock = threading.Lock()
         self._flushed_count = 0
@@ -202,26 +210,18 @@ class Vectorization:
             limit=limit,
         )
 
-    @Retry(max_attempt=3, wait=0.1, timeout=60, config_attr='vectorization.retry')
-    def processing_single_task(self, task, **kwargs):
+    def _task_text(self, task):
         emb_content = task.get('embedding_content')
         if emb_content is None:
             emb_content = task.get('content')
-        if emb_content is None:
-            return
+        return emb_content
 
-        t0 = time.perf_counter()
-        model_args = self.config.vectorization.model_args
-        table = getattr(self.task_db, 'table', 'unknown')
-
-        response = self.embedding.generate(
-            emb_content,
-            model_args=model_args,
-            use_cache=self.config.vectorization.use_cache,
-        )
-        if response['status'] != 1:
-            self.logger.error(f"Embedding failed, status: {response['status']}")
-            raise Exception(f"Embedding failed, status: {response['status']}")
+    def _record_one_result(self, task, response, dt, table, stage):
+        """Metrics + append embedding for one task result dict."""
+        if response is None or response.get('status') != 1:
+            ans = (response or {}).get('answer')
+            self.logger.error(f"Embedding failed, status: {(response or {}).get('status')}")
+            raise Exception(f"Embedding failed, status: {(response or {}).get('status')}: {ans}")
 
         cache_hit = bool(response.get('_cache_hit'))
         prompt_tok = response.get('usage_prompt_tokens') or 0
@@ -234,7 +234,6 @@ class Vectorization:
             self.usage_prompt_tokens += prompt_tok or 0
             self.usage_total_tokens += total_tok or 0
 
-        dt = time.perf_counter() - t0
         if self.metrics is not None:
             self.metrics.record(
                 f'vectorization:{table}',
@@ -250,39 +249,122 @@ class Vectorization:
 
         self._append_embedding(task['id'], response['answer'])
 
+    @Retry(max_attempt=3, wait=0.1, timeout=60, config_attr='vectorization.retry')
+    def processing_single_task(self, task, **kwargs):
+        emb_content = self._task_text(task)
+        if emb_content is None:
+            return 0
+
+        t0 = time.perf_counter()
+        model_args = self.config.vectorization.model_args
+        table = getattr(self.task_db, 'table', 'unknown')
+        stage = f'vectorization:{table}'
+
+        response = self.embedding.generate(
+            emb_content,
+            model_args=model_args,
+            use_cache=self.config.vectorization.use_cache,
+        )
+        self._record_one_result(
+            task, response, time.perf_counter() - t0, table, stage
+        )
+        return 1
+
+    @Retry(max_attempt=3, wait=0.1, timeout=120, config_attr='vectorization.retry')
+    def processing_batch_task(self, tasks, **kwargs):
+        """
+        Embed a list of tasks in one API call (OpenAI input=list).
+        Per-text cache still applies; only misses hit the server.
+        Returns number of successfully embedded items.
+        """
+        if not tasks:
+            return 0
+        if len(tasks) == 1:
+            return self.processing_single_task(tasks[0])
+
+        pairs = []
+        for task in tasks:
+            text = self._task_text(task)
+            if text is None:
+                continue
+            pairs.append((task, text))
+        if not pairs:
+            return 0
+
+        t0 = time.perf_counter()
+        model_args = self.config.vectorization.model_args
+        table = getattr(self.task_db, 'table', 'unknown')
+        stage = f'vectorization:{table}'
+        texts = [t for _, t in pairs]
+
+        responses = self.embedding.generate_batch(
+            texts,
+            model_args=model_args,
+            use_cache=self.config.vectorization.use_cache,
+        )
+        dt = time.perf_counter() - t0
+        # Wall time for the whole HTTP batch is shared across items for metrics.
+        dt_each = dt / max(len(pairs), 1)
+
+        if not isinstance(responses, list) or len(responses) != len(pairs):
+            raise Exception(
+                f"Embedding batch size mismatch: got "
+                f"{len(responses) if isinstance(responses, list) else type(responses)} "
+                f"want {len(pairs)}"
+            )
+
+        n_ok = 0
+        for (task, _), response in zip(pairs, responses):
+            self._record_one_result(task, response, dt_each, table, stage)
+            n_ok += 1
+        return n_ok
+
     def _process_page(self, tasks, bar, stage):
-        """Embed one page of tasks (thread pool or serial)."""
+        """Embed one page of tasks (thread pool × batch_size)."""
         if not tasks:
             return
+
+        batch_size = max(1, int(self.batch_size or 1))
+        # Slice page into micro-batches for one API call each.
+        batches = [
+            tasks[i: i + batch_size]
+            for i in range(0, len(tasks), batch_size)
+        ]
 
         def _postfix():
             pf = {
                 'total': self.total_undone,
                 'flush': getattr(self, '_flushed_count', 0),
+                'bs': batch_size,
             }
             if self.metrics is not None:
                 s = self.metrics.stage_snapshot(stage)
                 pf['real'] = s['real']
             return pf
 
+        def _run_batch(batch):
+            if batch_size <= 1 or len(batch) == 1:
+                return self.processing_single_task(batch[0]) if batch else 0
+            return self.processing_batch_task(batch)
+
         if self.config.vectorization.num_thread <= 1:
-            for task in tasks:
-                self.processing_single_task(task)
+            for batch in batches:
+                _run_batch(batch)
                 if bar is not None:
-                    bar.update(1)
+                    bar.update(len(batch))
                     bar.set_postfix(**_postfix())
         else:
             with ThreadPoolExecutor(
                 max_workers=self.config.vectorization.num_thread
             ) as executor:
-                futures = [
-                    executor.submit(self.processing_single_task, task)
-                    for task in tasks
-                ]
+                futures = {
+                    executor.submit(_run_batch, batch): len(batch)
+                    for batch in batches
+                }
                 for future in as_completed(futures):
                     future.result()
                     if bar is not None:
-                        bar.update(1)
+                        bar.update(futures[future])
                         bar.set_postfix(**_postfix())
 
     def processing(self):
