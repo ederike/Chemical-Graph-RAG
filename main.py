@@ -9,11 +9,11 @@ if __name__ == '__main__':
     graph = DHMF(config)
 
     # graph.download_from_oss()
-    graph.insert_default()
-    graph.summary()
-    graph.chunk()
-    graph.extract()
-    graph.build()
+    # graph.insert_default()
+    # graph.summary()
+    # graph.chunk()
+    # graph.extract()
+    # graph.build()
     graph.vectorization()
 
     # graph.recommend()

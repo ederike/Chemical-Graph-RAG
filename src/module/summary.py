@@ -557,11 +557,11 @@ class Summary:
         self._flushed_count += len(he_buf)
         self.hyperedge_db.buffer_clear()
         self.doc_db.buffer_clear()
-        self.logger.info(
-            f"[summary] flush hyperedge_add={len(he_add)} "
-            f"hyperedge_upd={len(he_upd)} docs={len(doc_buf)} "
-            f"total_he_flushed={self._flushed_count}"
-        )
+        # self.logger.info(
+        #     f"[summary] flush hyperedge_add={len(he_add)} "
+        #     f"hyperedge_upd={len(he_upd)} docs={len(doc_buf)} "
+        #     f"total_he_flushed={self._flushed_count}"
+        # )
 
     def clear(self):
         """

@@ -16,3 +16,4 @@ benchmark_results_new-prompt/
 .grok/
 cache_1/
 cache_half/
+test/

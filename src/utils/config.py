@@ -277,7 +277,14 @@ class VectorizationConfig(BaseModel):
     default_target: List[str] = Field(default_factory=list)
     use_cache: bool = True
     num_thread: int = 1
+    # How often to batch embeddings into in-memory FAISS.
     flush_every: int = 1000
+    # How often to rewrite the full FAISS file + mark SQLite done.
+    # None → 5× flush_every (fewer multi-GB writes on WSL).
+    index_save_every: Optional[int] = None
+    # Keyset page size when loading undone rows (id/content only).
+    # None → max(flush_every×5, 5000). Avoids SELECT * of millions of rows.
+    task_page_size: Optional[int] = None
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
     )
@@ -286,6 +293,17 @@ class VectorizationConfig(BaseModel):
     @classmethod
     def _flush(cls, v):
         return _coerce_flush_every(v, 1000)
+
+    @field_validator("index_save_every", "task_page_size", mode="before")
+    @classmethod
+    def _optional_positive_int(cls, v):
+        if v is None or v == "" or v == 0:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod

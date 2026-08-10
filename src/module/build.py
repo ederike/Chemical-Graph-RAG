@@ -253,10 +253,10 @@ class Build:
 
         flushed = n_he + n_node + n_edge
         self._flushed_count += flushed
-        self.logger.info(
-            f"[build] flush hyperedge_upd={n_he} node={n_node} edge={n_edge} "
-            f"chunk_status={n_chunk} total_items_flushed={self._flushed_count}"
-        )
+        # self.logger.info(
+        #     f"[build] flush hyperedge_upd={n_he} node={n_node} edge={n_edge} "
+        #     f"chunk_status={n_chunk} total_items_flushed={self._flushed_count}"
+        # )
 
     def clear(self):
         """

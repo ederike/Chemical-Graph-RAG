@@ -1,4 +1,5 @@
 import faiss
+import os
 import sqlite3
 from pathlib import Path
 import threading
@@ -108,6 +109,50 @@ class BaseDB:
     def search(self,key: str,value):
         sql = f"SELECT * FROM {self.table} WHERE {key} = ?"
         return self.db.execute(sql, (value,))
+
+    def count_by(self, key: str, value) -> int:
+        """Count rows where key == value (no row payload loaded)."""
+        sql = f"SELECT COUNT(*) AS cnt FROM {self.table} WHERE {key} = ?"
+        rows = self.db.execute(sql, (value,))
+        if not rows:
+            return 0
+        try:
+            return int(rows[0].get('cnt') or 0)
+        except (TypeError, ValueError, AttributeError):
+            return 0
+
+    def search_by(
+        self,
+        key: str,
+        value,
+        *,
+        columns=None,
+        after_id: int = 0,
+        limit: int = 0,
+    ):
+        """
+        Keyset-paginated SELECT for large tables.
+
+        columns: optional list of column names (defaults to *).
+        after_id: only rows with id > after_id (stable resume within a run).
+        limit: max rows; 0/None means no limit (avoid on multi-million tables).
+        """
+        if columns:
+            cols = [c for c in columns if c in self.table_columns]
+            if 'id' not in cols:
+                cols = ['id'] + cols
+            if not cols:
+                cols = list(self.table_columns)
+            col_sql = ','.join(cols)
+        else:
+            col_sql = '*'
+        sql = f"SELECT {col_sql} FROM {self.table} WHERE {key} = ? AND id > ?"
+        params: list = [value, int(after_id or 0)]
+        sql += " ORDER BY id ASC"
+        if limit and int(limit) > 0:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return self.db.execute(sql, tuple(params))
 
     def search_all(self):
         sql = f"SELECT * FROM {self.table}"
@@ -276,12 +321,27 @@ class FassiVDB:
             self.vdb = None
         
     def save(self):
+        """
+        Persist index atomically: write to *.vdb.tmp then os.replace.
+        Avoids truncated/corrupt index if process dies mid-write; also
+        reduces peak open-file risk vs in-place overwrite of multi-GB files.
+        """
         if self.vdb is None:
             return
         with self._lock:
             if not self.vdb_path.parent.exists():
                 self.vdb_path.parent.mkdir(parents=True)
-            faiss.write_index(self.vdb, str(self.vdb_path))
+            tmp_path = self.vdb_path.with_suffix(self.vdb_path.suffix + '.tmp')
+            try:
+                faiss.write_index(self.vdb, str(tmp_path))
+                os.replace(str(tmp_path), str(self.vdb_path))
+            except Exception:
+                try:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
+                raise
 
     def clear(self):
         if self.vdb is None:

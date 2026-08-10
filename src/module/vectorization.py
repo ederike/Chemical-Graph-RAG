@@ -1,3 +1,4 @@
+import gc
 import logging
 import threading
 import time
@@ -10,9 +11,13 @@ from ..utils.database import BaseDB, BaseVDB
 from ..utils.config import Config, resolve_credentials
 from ..utils.utils import Retry, TQDM_BAR_FORMAT
 
+# Columns required for embedding; never SELECT * on multi-million tables.
+_TASK_COLUMNS = ('id', 'content', 'embedding_content')
+
+
 class Vectorization:
     def _append_embedding(self, task_id, emb):
-        """Append one result; flush FAISS+SQLite when buffer reaches flush_every."""
+        """Append one result; flush in-memory when buffer reaches flush_every."""
         to_flush_db = None
         to_flush_vdb = None
         with self._buffer_lock:
@@ -32,44 +37,94 @@ class Vectorization:
         if to_flush_vdb is not None:
             self._flush_buffers(to_flush_db, to_flush_vdb)
 
-    def _flush_buffers(self, db_buf, vdb_buf):
-        """Write a detached buffer batch to VDB + DB and persist the index."""
-        n = len(vdb_buf) if vdb_buf else 0
-        if vdb_buf:
-            self.task_vdb.add(vdb_buf)
-            self.task_vdb.save()
-        if db_buf:
-            self.task_db.update(db_buf)
-        if n:
-            self._flushed_count += n
-            table = getattr(self.task_db, 'table', '?')
+    def _flush_buffers(self, db_buf, vdb_buf, *, force_checkpoint: bool = False):
+        """
+        Add vectors to in-memory FAISS; defer expensive full-index disk write
+        until index_save_every vectors (or force_checkpoint).
 
-    def prepare(self,db: BaseDB, vdb: BaseVDB):
+        Resume safety: SQLite embedding_status is only marked done after the
+        FAISS index has been successfully written to disk for that batch group.
+        Crash mid-buffer → those rows stay undone and are retried (cache hits).
         """
-        只拉 embedding_status='undone'，支持中断后续跑：
-          - 已 flush 的行是 done，不会再进任务列表 → 不重复写
-          - 未 flush 的尾巴仍是 undone，下次会重做（有 cache 则几乎只读缓存）
-        debug=True 时也只做 undone（全量重算请 clear vdb + 重置 status）。
+        if not vdb_buf and not db_buf and not force_checkpoint:
+            return
+
+        with self._flush_io_lock:
+            n = len(vdb_buf) if vdb_buf else 0
+            if vdb_buf:
+                self.task_vdb.add(vdb_buf)
+                if db_buf:
+                    self._pending_status.extend(db_buf)
+                self._vectors_since_save += n
+                self._flushed_count += n
+
+            if force_checkpoint or self._vectors_since_save >= self.index_save_every:
+                self._checkpoint_disk()
+
+    def _checkpoint_disk(self):
+        """Write full FAISS index once, then mark corresponding SQLite rows done."""
+        # Always persist index if we have anything unsaved in memory path,
+        # or if there are pending status rows (vectors already in FAISS RAM).
+        if self._vectors_since_save <= 0 and not self._pending_status:
+            return
+
+        table = getattr(self.task_db, 'table', '?')
+        n_status = len(self._pending_status)
+        n_vecs = self._vectors_since_save
+        t0 = time.perf_counter()
+
+        # Full-index write (costly on multi-GB files) — once per checkpoint.
+        self.task_vdb.save()
+
+        if self._pending_status:
+            # SQLite update can itself be huge; chunk it to avoid one giant write.
+            pending = self._pending_status
+            self._pending_status = []
+            chunk = max(self.flush_every, 1000)
+            for i in range(0, len(pending), chunk):
+                self.task_db.update(pending[i: i + chunk])
+            del pending
+
+        self._vectors_since_save = 0
+        dt = time.perf_counter() - t0
+        self.logger.info(
+            f"[vectorization] checkpoint table={table} "
+            f"vecs_since_save={n_vecs} status_rows={n_status} disk_time={dt:.2f}s "
+            f"total_flushed={self._flushed_count}"
+        )
+        # Release peak memory after multi-GB index serialization on WSL.
+        gc.collect()
+
+    def prepare(self, db: BaseDB, vdb: BaseVDB):
         """
-        self.task_db=db
-        self.task_vdb=vdb
-        self.tasks=self.task_db.search('embedding_status','undone')
+        Bind DB/VDB only. Do NOT load all undone rows into memory (node table
+        can be millions of rows — SELECT * would OOM / crash WSL).
+
+        Actual rows are keyset-paginated inside processing().
+        """
+        self.task_db = db
+        self.task_vdb = vdb
         self.task_db.buffer_clear()
         self.task_vdb.buffer_clear()
         self._flushed_count = 0
+        self._pending_status = []
+        self._vectors_since_save = 0
+        self.total_undone = self.task_db.count_by('embedding_status', 'undone')
         self.logger.info(
             f"vectorization prepare: table={getattr(db, 'table', '?')} "
-            f"undone={len(self.tasks)} flush_every={self.flush_every}"
+            f"undone={self.total_undone} flush_every={self.flush_every} "
+            f"index_save_every={self.index_save_every} "
+            f"task_page_size={self.task_page_size}"
         )
 
     def save(self):
-        """Flush residual buffer (last incomplete batch). Safe under concurrency."""
+        """Flush residual buffer and force a final disk checkpoint."""
         with self._buffer_lock:
             db_buf = self.task_db.buffer
             vdb_buf = self.task_vdb.buffer
             self.task_db.buffer = []
             self.task_vdb.buffer = []
-        self._flush_buffers(db_buf, vdb_buf)
+        self._flush_buffers(db_buf, vdb_buf, force_checkpoint=True)
 
     def clear(self, db: BaseDB, vdb: BaseVDB):
         """Reset embedding flags and wipe the vector index; do not delete SQL rows."""
@@ -84,8 +139,38 @@ class Vectorization:
         except (TypeError, ValueError):
             fe = 1000
         self.flush_every = max(1, fe)
+
+        # How often to rewrite the full FAISS file + mark SQLite done.
+        # Default: 5× flush_every so we do far fewer multi-GB writes on WSL.
+        try:
+            ise = getattr(config.vectorization, 'index_save_every', None)
+            if ise is None or ise == 0:
+                ise = self.flush_every * 5
+            else:
+                ise = int(ise)
+        except (TypeError, ValueError):
+            ise = self.flush_every * 5
+        self.index_save_every = max(self.flush_every, ise)
+
+        # Keyset page size for loading undone rows (id/content only).
+        try:
+            tps = getattr(config.vectorization, 'task_page_size', None)
+            if tps is None or tps == 0:
+                tps = max(self.flush_every * 5, 5000)
+            else:
+                tps = int(tps)
+        except (TypeError, ValueError):
+            tps = max(self.flush_every * 5, 5000)
+        self.task_page_size = max(self.flush_every, tps)
+
         self._buffer_lock = threading.Lock()
+        self._flush_io_lock = threading.Lock()
         self._flushed_count = 0
+        self._pending_status = []
+        self._vectors_since_save = 0
+        self.total_undone = 0
+        self.tasks = []  # kept for compatibility; pages are ephemeral
+
         api_key, base_url = resolve_credentials(config, config.vectorization)
         emb_timeout, emb_retries, emb_wait = 120.0, 3, 0.5
         try:
@@ -107,11 +192,21 @@ class Vectorization:
         self.usage_prompt_tokens = 0
         self.usage_total_tokens = 0
 
+    def _fetch_task_page(self, after_id: int, limit: int):
+        """Load one page of undone rows with only columns needed for embedding."""
+        return self.task_db.search_by(
+            'embedding_status',
+            'undone',
+            columns=list(_TASK_COLUMNS),
+            after_id=after_id,
+            limit=limit,
+        )
+
     @Retry(max_attempt=3, wait=0.1, timeout=60, config_attr='vectorization.retry')
     def processing_single_task(self, task, **kwargs):
-        emb_content = task['embedding_content']
+        emb_content = task.get('embedding_content')
         if emb_content is None:
-            emb_content = task['content']
+            emb_content = task.get('content')
         if emb_content is None:
             return
 
@@ -155,19 +250,14 @@ class Vectorization:
 
         self._append_embedding(task['id'], response['answer'])
 
-    def processing(self):
-        """Run with a single progress bar; metrics use batch wall-clock."""
-        table = getattr(self.task_db, 'table', 'unknown')
-        stage = f'vectorization:{table}'
-        n = len(self.tasks)
-        if n == 0:
+    def _process_page(self, tasks, bar, stage):
+        """Embed one page of tasks (thread pool or serial)."""
+        if not tasks:
             return
-
-        t_wall = time.perf_counter()
 
         def _postfix():
             pf = {
-                'total': n,
+                'total': self.total_undone,
                 'flush': getattr(self, '_flushed_count', 0),
             }
             if self.metrics is not None:
@@ -176,28 +266,83 @@ class Vectorization:
             return pf
 
         if self.config.vectorization.num_thread <= 1:
-            bar = tqdm(
-                self.tasks,
-                desc=f'vectorize:{table}',
-                unit='item',
-                bar_format=TQDM_BAR_FORMAT,
-            )
-            for task in bar:
+            for task in tasks:
                 self.processing_single_task(task)
-                bar.set_postfix(**_postfix())
-        else:
-            with ThreadPoolExecutor(max_workers=self.config.vectorization.num_thread) as executor:
-                futures = [executor.submit(self.processing_single_task, task) for task in self.tasks]
-                bar = tqdm(
-                    as_completed(futures),
-                    total=n,
-                    desc=f'vectorize:{table}',
-                    unit='item',
-                    bar_format=TQDM_BAR_FORMAT,
-                )
-                for future in bar:
-                    future.result()
+                if bar is not None:
+                    bar.update(1)
                     bar.set_postfix(**_postfix())
+        else:
+            with ThreadPoolExecutor(
+                max_workers=self.config.vectorization.num_thread
+            ) as executor:
+                futures = [
+                    executor.submit(self.processing_single_task, task)
+                    for task in tasks
+                ]
+                for future in as_completed(futures):
+                    future.result()
+                    if bar is not None:
+                        bar.update(1)
+                        bar.set_postfix(**_postfix())
+
+    def processing(self):
+        """
+        Paginated vectorization:
+          - never holds all undone rows in RAM
+          - flushes embeddings into FAISS RAM every flush_every
+          - writes full FAISS file + SQLite status only every index_save_every
+          - forces a checkpoint at the end of each page and at the end of the run
+        """
+        table = getattr(self.task_db, 'table', 'unknown')
+        stage = f'vectorization:{table}'
+        n = int(self.total_undone or 0)
+        if n == 0:
+            return
+
+        t_wall = time.perf_counter()
+        after_id = 0
+        page_size = self.task_page_size
+        processed = 0
+
+        bar = tqdm(
+            total=n,
+            desc=f'vectorize:{table}',
+            unit='item',
+            bar_format=TQDM_BAR_FORMAT,
+        )
+        try:
+            while True:
+                tasks = self._fetch_task_page(after_id, page_size)
+                if not tasks:
+                    break
+
+                after_id = int(tasks[-1]['id'])
+                page_n = len(tasks)
+                self._process_page(tasks, bar, stage)
+                processed += page_n
+
+                # Residual buffer → FAISS RAM; disk write only when
+                # index_save_every is reached (avoids rewriting multi-GB
+                # indexes on every small page).
+                with self._buffer_lock:
+                    db_buf = self.task_db.buffer
+                    vdb_buf = self.task_vdb.buffer
+                    self.task_db.buffer = []
+                    self.task_vdb.buffer = []
+                self._flush_buffers(db_buf, vdb_buf, force_checkpoint=False)
+
+                # Drop page payload promptly (embeddings already in FAISS RAM).
+                del tasks, db_buf, vdb_buf
+                gc.collect()
+
+                # Keep going until a page returns empty (count may be approximate).
+                if processed >= n and page_n < page_size:
+                    break
+        finally:
+            bar.close()
+
+        # Final residual + forced disk checkpoint (SQLite status + FAISS file).
+        self.save()
 
         if self.metrics is not None:
             self.metrics.finalize_stage_wall_time(

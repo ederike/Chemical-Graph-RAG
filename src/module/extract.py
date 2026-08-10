@@ -34,9 +34,9 @@ class Extract:
         if to_flush:
             self.chunk_db.update(to_flush)
             self._flushed_count += len(to_flush)
-            self.logger.info(
-                f"[extract] flush n={len(to_flush)} total_flushed={self._flushed_count}"
-            )
+            # self.logger.info(
+            #     f"[extract] flush n={len(to_flush)} total_flushed={self._flushed_count}"
+            # )
 
     def prepare(self):
         if self.config.settings.debug:

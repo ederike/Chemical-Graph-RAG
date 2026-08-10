@@ -52,9 +52,9 @@ class Doc:
             return
         self.doc_db.add(buf)
         self._flushed_count += len(buf)
-        self.logger.info(
-            f"[doc] flush n={len(buf)} total_flushed={self._flushed_count}"
-        )
+        # self.logger.info(
+        #     f"[doc] flush n={len(buf)} total_flushed={self._flushed_count}"
+        # )
         self.doc_db.buffer_clear()
 
     def clear(self):

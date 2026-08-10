@@ -418,10 +418,10 @@ class Chunk:
             self.hyperedge_db.update(head_bind)
 
         self._pending_he_bind = []
-        self.logger.info(
-            f"[chunk] flush chunks={n_chunk} docs={n_doc} "
-            f"he_bind={len(head_bind)} total_chunks_flushed={self._flushed_count}"
-        )
+        # self.logger.info(
+        #     f"[chunk] flush chunks={n_chunk} docs={n_doc} "
+        #     f"he_bind={len(head_bind)} total_chunks_flushed={self._flushed_count}"
+        # )
 
     def clear(self):
         """
