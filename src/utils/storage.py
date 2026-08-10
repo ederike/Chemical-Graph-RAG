@@ -105,21 +105,21 @@ class EdgeDB(BaseDB):
         super().__init__(db_path,name,create_table_sql)
 
 class DocVDB(BaseVDB):
-    def __init__(self,vdb_path,dim):
-        super().__init__(vdb_path,'doc',dim)
+    def __init__(self, vdb_path, dim, shard_max_vectors=None):
+        super().__init__(vdb_path, 'doc', dim, shard_max_vectors=shard_max_vectors)
 
 class ChunkVDB(BaseVDB):
-    def __init__(self,vdb_path,dim):
-        super().__init__(vdb_path,'chunk',dim)
+    def __init__(self, vdb_path, dim, shard_max_vectors=None):
+        super().__init__(vdb_path, 'chunk', dim, shard_max_vectors=shard_max_vectors)
 
 class HyperedgeVDB(BaseVDB):
-    def __init__(self,vdb_path,dim):
-        super().__init__(vdb_path,'hyperedge',dim)
+    def __init__(self, vdb_path, dim, shard_max_vectors=None):
+        super().__init__(vdb_path, 'hyperedge', dim, shard_max_vectors=shard_max_vectors)
 
 class NodeVDB(BaseVDB):
-    def __init__(self,vdb_path,dim):
-        super().__init__(vdb_path,'node',dim)
+    def __init__(self, vdb_path, dim, shard_max_vectors=None):
+        super().__init__(vdb_path, 'node', dim, shard_max_vectors=shard_max_vectors)
 
 class EdgeVDB(BaseVDB):
-    def __init__(self,vdb_path,dim):
-        super().__init__(vdb_path,'edge',dim)
+    def __init__(self, vdb_path, dim, shard_max_vectors=None):
+        super().__init__(vdb_path, 'edge', dim, shard_max_vectors=shard_max_vectors)

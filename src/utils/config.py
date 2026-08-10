@@ -270,6 +270,17 @@ class BuildConfig(BaseModel):
         return _coerce_flush_every(v, 1000)
 
 class VectorizationConfig(BaseModel):
+    """
+    向量化配置。
+
+    日常只需关心：
+      - batch_size / num_thread  → API 并发（一次请求几条、几个请求并行）
+      - shard_max_vectors       → 进度批大小（拉任务 / 写 FAISS / 落盘封片 共用这一档）
+
+    下面三个是历史/细调项，在设置了 shard_max_vectors 后会自动对齐到它，
+    一般不用再写：
+      flush_every / index_save_every / task_page_size
+    """
     api_key: str = ""
     base_url: str = ""
     model_args: dict = Field(default_factory=dict)
@@ -280,13 +291,15 @@ class VectorizationConfig(BaseModel):
     # Texts per embeddings API request (OpenAI input=list). 1 = legacy one-by-one.
     # Throughput ≈ num_thread × batch_size (server still rate-limits concurrent requests).
     batch_size: int = 1
-    # How often to batch embeddings into in-memory FAISS.
+    # --- progress batch (prefer shard_max_vectors alone) ---
+    # Max vectors per FAISS shard = one durable batch:
+    #   load page → embed → write FAISS → save disk → seal/unload.
+    # Peak RAM ≈ N × dim × 4B (N=10000, dim=4096 → ~160MB).
+    # None/0 = mono single-file index (legacy; grows unboundedly in RAM).
+    shard_max_vectors: Optional[int] = None
+    # Legacy fine-tuning (auto-aligned to shard_max_vectors when it is set):
     flush_every: int = 1000
-    # How often to rewrite the full FAISS file + mark SQLite done.
-    # None → 5× flush_every (fewer multi-GB writes on WSL).
     index_save_every: Optional[int] = None
-    # Keyset page size when loading undone rows (id/content only).
-    # None → max(flush_every×5, 5000). Avoids SELECT * of millions of rows.
     task_page_size: Optional[int] = None
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=60.0)
@@ -306,7 +319,9 @@ class VectorizationConfig(BaseModel):
             return 1
         return max(1, n)
 
-    @field_validator("index_save_every", "task_page_size", mode="before")
+    @field_validator(
+        "index_save_every", "task_page_size", "shard_max_vectors", mode="before"
+    )
     @classmethod
     def _optional_positive_int(cls, v):
         if v is None or v == "" or v == 0:
@@ -321,6 +336,21 @@ class VectorizationConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @model_validator(mode="after")
+    def _align_progress_batch_to_shard(self):
+        """
+        One progress knob: when shard_max_vectors is set, force
+        flush_every = index_save_every = task_page_size = shard_max_vectors.
+        """
+        sm = self.shard_max_vectors
+        if sm is not None and int(sm) > 0:
+            sm = int(sm)
+            self.shard_max_vectors = sm
+            self.flush_every = sm
+            self.index_save_every = sm
+            self.task_page_size = sm
+        return self
 
     @model_validator(mode="after")
     def _normalize_emb_args_and_dim(self):

@@ -119,10 +119,17 @@ class Recommend:
         return list(by_id.values())
 
     def _faiss_id_to_vector_map(self) -> Dict[int, np.ndarray]:
-        """Build id → vector from FAISS IndexIDMap (node.vdb)."""
+        """Build id → vector from FAISS (supports sharded node VDB)."""
         base_vdb = self.vdb.get('node')
         if base_vdb is None:
             return {}
+        # Prefer BaseVDB helper (mono + sharded).
+        if hasattr(base_vdb, 'id_to_vector_map'):
+            try:
+                return base_vdb.id_to_vector_map()
+            except Exception as e:
+                self.logger.error(f"[recommend] id_to_vector_map failed: {e}")
+                return {}
         index = getattr(getattr(base_vdb, 'vdb', None), 'vdb', None)
         if index is None or getattr(index, 'ntotal', 0) <= 0:
             return {}

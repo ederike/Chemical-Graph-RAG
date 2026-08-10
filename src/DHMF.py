@@ -35,12 +35,21 @@ class DHMF:
             'edge':EdgeDB(db_path),
         }
 
-        self.vdb={
-            'doc':DocVDB(vdb_path,self.config.vectorization.dim),
-            'chunk':ChunkVDB(vdb_path,self.config.vectorization.dim),
-            'hyperedge':HyperedgeVDB(vdb_path,self.config.vectorization.dim),
-            'node':NodeVDB(vdb_path,self.config.vectorization.dim),
-            'edge':EdgeVDB(vdb_path,self.config.vectorization.dim),
+        # shard_max_vectors: split FAISS into on-disk batches so vectorization
+        # peak RAM ≈ one shard (not the full multi-GB IndexFlat).
+        try:
+            _shard_max = getattr(self.config.vectorization, 'shard_max_vectors', None)
+            if _shard_max is not None:
+                _shard_max = int(_shard_max) or None
+        except (TypeError, ValueError):
+            _shard_max = None
+        _dim = self.config.vectorization.dim
+        self.vdb = {
+            'doc': DocVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
+            'chunk': ChunkVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
+            'hyperedge': HyperedgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
+            'node': NodeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
+            'edge': EdgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
         }
 
         metrics_path = Path(self.config.settings.working_path) / 'DB' / 'build_metrics.json'

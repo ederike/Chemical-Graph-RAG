@@ -62,7 +62,13 @@ class Vectorization:
                 self._checkpoint_disk()
 
     def _checkpoint_disk(self):
-        """Write full FAISS index once, then mark corresponding SQLite rows done."""
+        """
+        Persist active FAISS shard, mark SQLite rows done, then (if sharded)
+        seal+unload the active shard so RAM only holds the next empty batch.
+
+        Resume safety: SQLite embedding_status is marked done only after the
+        FAISS file for this batch has been successfully written.
+        """
         # Always persist index if we have anything unsaved in memory path,
         # or if there are pending status rows (vectors already in FAISS RAM).
         if self._vectors_since_save <= 0 and not self._pending_status:
@@ -73,7 +79,7 @@ class Vectorization:
         n_vecs = self._vectors_since_save
         t0 = time.perf_counter()
 
-        # Full-index write (costly on multi-GB files) — once per checkpoint.
+        # Write active (or mono) index — sharded mode: only the small write shard.
         self.task_vdb.save()
 
         if self._pending_status:
@@ -85,14 +91,37 @@ class Vectorization:
                 self.task_db.update(pending[i: i + chunk])
             del pending
 
+        # Per-batch memory release: seal active shard → disk only, open empty active.
+        sealed = False
+        if hasattr(self.task_vdb, 'seal_and_rotate'):
+            try:
+                sealed = bool(self.task_vdb.seal_and_rotate(force=True))
+            except Exception as e:
+                self.logger.warning(
+                    f"[vectorization] seal_and_rotate failed (non-fatal): {e}"
+                )
+
         self._vectors_since_save = 0
         dt = time.perf_counter() - t0
+        stats = ''
+        if hasattr(self.task_vdb, 'shard_stats'):
+            try:
+                s = self.task_vdb.shard_stats()
+                if s.get('sharding'):
+                    stats = (
+                        f" shards_sealed={s.get('sealed_count')} "
+                        f"active={s.get('active')} "
+                        f"active_ntotal={s.get('active_ntotal')}"
+                    )
+            except Exception:
+                pass
         self.logger.info(
             f"[vectorization] checkpoint table={table} "
-            f"vecs_since_save={n_vecs} status_rows={n_status} disk_time={dt:.2f}s "
-            f"total_flushed={self._flushed_count}"
+            f"vecs_since_save={n_vecs} status_rows={n_status} "
+            f"disk_time={dt:.2f}s sealed={sealed} "
+            f"total_flushed={self._flushed_count}{stats}"
         )
-        # Release peak memory after multi-GB index serialization on WSL.
+        # Drop peak memory after seal (and any temp page-cache pressure).
         gc.collect()
 
     def prepare(self, db: BaseDB, vdb: BaseVDB):
@@ -109,14 +138,46 @@ class Vectorization:
         self._flushed_count = 0
         self._pending_status = []
         self._vectors_since_save = 0
+
+        # Enable FAISS sharding: each progress batch writes one shard, seals,
+        # unloads — peak RAM ≈ one batch, not the full multi-GB index.
+        smv = self.shard_max_vectors
+        if smv is not None and int(smv) > 0 and hasattr(vdb, 'enable_sharding'):
+            vdb.enable_sharding(int(smv))
+
         self.total_undone = self.task_db.count_by('embedding_status', 'undone')
-        self.logger.info(
-            f"vectorization prepare: table={getattr(db, 'table', '?')} "
-            f"undone={self.total_undone} flush_every={self.flush_every} "
-            f"index_save_every={self.index_save_every} "
-            f"task_page_size={self.task_page_size} "
-            f"batch_size={self.batch_size} num_thread={self.config.vectorization.num_thread}"
-        )
+        shard_info = ''
+        if hasattr(vdb, 'shard_stats'):
+            try:
+                s = vdb.shard_stats()
+                if s.get('sharding'):
+                    shard_info = (
+                        f" progress_batch={s.get('shard_max_vectors')} "
+                        f"sealed={s.get('sealed_count')} "
+                        f"active={s.get('active')}"
+                    )
+            except Exception:
+                pass
+        if self.shard_max_vectors:
+            # One knob already aligned flush/index_save/page → log compactly.
+            self.logger.info(
+                f"vectorization prepare: table={getattr(db, 'table', '?')} "
+                f"undone={self.total_undone} "
+                f"progress_batch={self.shard_max_vectors} "
+                f"(page=flush=save=seal) "
+                f"api_batch={self.batch_size}×{self.config.vectorization.num_thread}"
+                f"{shard_info}"
+            )
+        else:
+            self.logger.info(
+                f"vectorization prepare: table={getattr(db, 'table', '?')} "
+                f"undone={self.total_undone} flush_every={self.flush_every} "
+                f"index_save_every={self.index_save_every} "
+                f"task_page_size={self.task_page_size} "
+                f"batch_size={self.batch_size} "
+                f"num_thread={self.config.vectorization.num_thread} "
+                f"(mono, no shard_max_vectors)"
+            )
 
     def save(self):
         """Flush residual buffer and force a final disk checkpoint."""
@@ -135,34 +196,50 @@ class Vectorization:
     def __init__(self, logger: logging.Logger, config: Config):
         self.config = config
         self.logger = logger
-        try:
-            fe = int(getattr(config.vectorization, 'flush_every', 1000) or 1000)
-        except (TypeError, ValueError):
-            fe = 1000
-        self.flush_every = max(1, fe)
 
-        # How often to rewrite the full FAISS file + mark SQLite done.
-        # Default: 5× flush_every so we do far fewer multi-GB writes on WSL.
+        # --- Progress batch ---
+        # Preferred single knob: shard_max_vectors (Config already aligns
+        # flush_every / index_save_every / task_page_size to it when set).
+        # Mono mode (no shard): flush_every + index_save_every + task_page_size.
         try:
-            ise = getattr(config.vectorization, 'index_save_every', None)
-            if ise is None or ise == 0:
+            smv = getattr(config.vectorization, 'shard_max_vectors', None)
+            if smv is None or smv == 0:
+                smv = None
+            else:
+                smv = max(1, int(smv))
+        except (TypeError, ValueError):
+            smv = None
+        self.shard_max_vectors = smv
+
+        if smv is not None:
+            # One durable batch = page load = FAISS write = disk seal size.
+            self.flush_every = smv
+            self.index_save_every = smv
+            self.task_page_size = smv
+        else:
+            try:
+                fe = int(getattr(config.vectorization, 'flush_every', 1000) or 1000)
+            except (TypeError, ValueError):
+                fe = 1000
+            self.flush_every = max(1, fe)
+            try:
+                ise = getattr(config.vectorization, 'index_save_every', None)
+                if ise is None or ise == 0:
+                    ise = self.flush_every * 5
+                else:
+                    ise = int(ise)
+            except (TypeError, ValueError):
                 ise = self.flush_every * 5
-            else:
-                ise = int(ise)
-        except (TypeError, ValueError):
-            ise = self.flush_every * 5
-        self.index_save_every = max(self.flush_every, ise)
-
-        # Keyset page size for loading undone rows (id/content only).
-        try:
-            tps = getattr(config.vectorization, 'task_page_size', None)
-            if tps is None or tps == 0:
+            self.index_save_every = max(self.flush_every, ise)
+            try:
+                tps = getattr(config.vectorization, 'task_page_size', None)
+                if tps is None or tps == 0:
+                    tps = max(self.flush_every * 5, 5000)
+                else:
+                    tps = int(tps)
+            except (TypeError, ValueError):
                 tps = max(self.flush_every * 5, 5000)
-            else:
-                tps = int(tps)
-        except (TypeError, ValueError):
-            tps = max(self.flush_every * 5, 5000)
-        self.task_page_size = max(self.flush_every, tps)
+            self.task_page_size = max(self.flush_every, tps)
 
         # Texts per embeddings API call (list input). 1 = one request per text.
         try:

@@ -175,29 +175,290 @@ class BaseDB:
         return len(ids)
 
 class BaseVDB:
-    def __init__(self,vdb_path: str,vdb_name: str,vdb_dim: int):
+    """
+    FAISS vector store.
+
+    Monolithic mode (default):
+      {vdb_path}/{name}.vdb  — entire index always in RAM.
+
+    Sharded mode (enable_sharding / shard_max_vectors):
+      {vdb_path}/{name}.shards/
+        meta.json
+        0.vdb, 1.vdb, ...   — sealed shards on disk only
+        N.vdb               — active write shard (only this in RAM)
+
+    After each vectorization checkpoint the active shard is saved, sealed,
+    unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
+    (shard_max_vectors × dim × 4B), not the full corpus.
+    Search merges all sealed + active; sealed shards are loaded one-by-one.
+    """
+
+    def __init__(self, vdb_path: str, vdb_name: str, vdb_dim: int,
+                 shard_max_vectors: int = None):
         self.vdb_path = Path(vdb_path)
         self.vdb_name = vdb_name
         self.vdb_dim = vdb_dim
-        self.load()
-        
-        self.buffer=[]
-
-    def load(self):
+        self.buffer = []
+        self.shard_max_vectors = None
+        self._sharding = False
+        self.shards_dir = None
+        self._sealed = []          # list[str] filenames under shards_dir
+        self._active_name = None   # str filename of write shard
+        self._next_id = 0
         self.vdb_file_path = self.vdb_path / f'{self.vdb_name}.vdb'
-        self.vdb = FassiVDB(self.vdb_file_path,self.vdb_dim)
+        # self.vdb: FassiVDB | None — active (or sole mono) index handle
+        self.vdb = None
 
+        if shard_max_vectors is not None and int(shard_max_vectors) > 0:
+            self.enable_sharding(int(shard_max_vectors))
+        else:
+            self.load()
+
+    # ------------------------------------------------------------------ load / meta
+    def load(self):
+        """Load monolithic file, or re-open sharded layout if already present."""
+        shards_dir = self.vdb_path / f'{self.vdb_name}.shards'
+        if shards_dir.is_dir() and (shards_dir / 'meta.json').exists():
+            # Prefer existing shards even if caller did not pass shard_max.
+            meta = self._read_meta(shards_dir)
+            max_v = int(meta.get('shard_max_vectors') or 0) or 10000
+            self.enable_sharding(max_v)
+            return
+        self._sharding = False
+        self.shards_dir = None
+        self._sealed = []
+        self._active_name = None
+        self.vdb_file_path = self.vdb_path / f'{self.vdb_name}.vdb'
+        self.vdb = FassiVDB(self.vdb_file_path, self.vdb_dim)
+
+    def enable_sharding(self, shard_max_vectors: int):
+        """
+        Switch to (or reconfigure) sharded layout.
+        Existing monolithic {name}.vdb is moved to sealed 0.vdb and unloaded
+        so RAM only holds the new empty active write shard.
+        """
+        shard_max_vectors = max(1, int(shard_max_vectors))
+        if self._sharding:
+            self.shard_max_vectors = shard_max_vectors
+            self._write_meta()
+            return
+
+        self.shards_dir = self.vdb_path / f'{self.vdb_name}.shards'
+        self.shards_dir.mkdir(parents=True, exist_ok=True)
+        meta_path = self.shards_dir / 'meta.json'
+        mono = self.vdb_path / f'{self.vdb_name}.vdb'
+
+        if meta_path.exists():
+            meta = self._read_meta(self.shards_dir)
+            self._sealed = list(meta.get('sealed') or [])
+            self._active_name = meta.get('active')
+            self._next_id = int(meta.get('next_id') or 0)
+            self.shard_max_vectors = shard_max_vectors
+            self._sharding = True
+            # Drop any mono handle that was loaded at construction.
+            if self.vdb is not None:
+                self.vdb.unload()
+                self.vdb = None
+            self._open_active(create_if_missing=True)
+            self._write_meta()
+            return
+
+        # Migrate monolithic file → sealed shard 0 (keep data, free RAM).
+        sealed = []
+        next_id = 0
+        if mono.exists() and mono.stat().st_size > 0:
+            name = f'{next_id}.vdb'
+            dest = self.shards_dir / name
+            # Ensure mono is flushed then release RAM before rename.
+            if self.vdb is not None:
+                try:
+                    self.vdb.save()
+                except Exception:
+                    pass
+                self.vdb.unload()
+                self.vdb = None
+            os.replace(str(mono), str(dest))
+            sealed.append(name)
+            next_id = 1
+
+        if self.vdb is not None:
+            self.vdb.unload()
+            self.vdb = None
+
+        self._sealed = sealed
+        self._next_id = next_id
+        self._active_name = None
+        self.shard_max_vectors = shard_max_vectors
+        self._sharding = True
+        self._open_active(create_if_missing=True)
+        self._write_meta()
+
+    def _read_meta(self, shards_dir: Path) -> dict:
+        p = shards_dir / 'meta.json'
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                return json.load(f) or {}
+        except Exception:
+            return {}
+
+    def _write_meta(self):
+        if not self._sharding or self.shards_dir is None:
+            return
+        meta = {
+            'version': 1,
+            'dim': self.vdb_dim,
+            'shard_max_vectors': self.shard_max_vectors,
+            'next_id': self._next_id,
+            'sealed': list(self._sealed),
+            'active': self._active_name,
+        }
+        p = self.shards_dir / 'meta.json'
+        tmp = p.with_suffix('.json.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        os.replace(str(tmp), str(p))
+
+    def _open_active(self, create_if_missing: bool = True):
+        if not self._sharding:
+            return
+        if self._active_name:
+            path = self.shards_dir / self._active_name
+            if path.exists() or create_if_missing:
+                self.vdb = FassiVDB(path, self.vdb_dim)
+                self.vdb_file_path = path
+                return
+        # New empty active shard.
+        name = f'{self._next_id}.vdb'
+        self._next_id += 1
+        self._active_name = name
+        path = self.shards_dir / name
+        self.vdb = FassiVDB(path, self.vdb_dim)
+        self.vdb_file_path = path
+        self._write_meta()
+
+    def _ensure_active(self):
+        if self.vdb is not None and self.vdb.vdb is not None:
+            return
+        if self._sharding:
+            self._open_active(create_if_missing=True)
+        else:
+            self.vdb = FassiVDB(self.vdb_file_path, self.vdb_dim)
+
+    # ------------------------------------------------------------------ persist / rotate
     def save(self):
-        self.vdb.save()
+        """Persist active (or mono) index to disk. Does not unload."""
+        if self.vdb is not None:
+            self.vdb.save()
+        if self._sharding:
+            self._write_meta()
+
+    def seal_and_rotate(self, *, force: bool = True) -> bool:
+        """
+        After a successful save(): seal the active write shard to disk-only
+        storage and open a fresh empty active. Frees RAM for the previous batch.
+
+        force=True  — always seal if active has any vectors (per-checkpoint batching).
+        force=False — only when ntotal >= shard_max_vectors.
+        Returns True if a seal/rotate happened.
+        """
+        if not self._sharding or self.vdb is None:
+            return False
+        n = self.vdb.ntotal
+        if n <= 0:
+            return False
+        if not force and self.shard_max_vectors and n < self.shard_max_vectors:
+            return False
+
+        # File already written by save(); drop RAM handle and mark sealed.
+        name = self._active_name
+        self.vdb.unload()
+        self.vdb = None
+        if name and name not in self._sealed:
+            self._sealed.append(name)
+        self._active_name = None
+        self._open_active(create_if_missing=True)
+        self._write_meta()
+        return True
 
     def clear(self):
-        self.vdb.clear()
+        """Wipe all vectors (mono file and/or every shard)."""
+        if self._sharding and self.shards_dir is not None:
+            if self.vdb is not None:
+                self.vdb.unload()
+                self.vdb = None
+            # Remove shard files + meta.
+            try:
+                for p in self.shards_dir.glob('*'):
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+                try:
+                    self.shards_dir.rmdir()
+                except OSError:
+                    pass
+            except OSError:
+                pass
+            mono = self.vdb_path / f'{self.vdb_name}.vdb'
+            if mono.exists():
+                try:
+                    mono.unlink()
+                except OSError:
+                    pass
+            # Recreate empty sharded layout.
+            max_v = self.shard_max_vectors or 10000
+            self._sharding = False
+            self._sealed = []
+            self._active_name = None
+            self._next_id = 0
+            self.enable_sharding(max_v)
+            return
+
+        if self.vdb is not None:
+            self.vdb.clear()
         self.load()
 
     def buffer_clear(self):
-        self.buffer=[]
+        self.buffer = []
 
-    def add(self,data_list: list):
+    @property
+    def ntotal(self) -> int:
+        """Approximate total vectors (sealed on disk by file size not counted precisely)."""
+        n = 0
+        if self.vdb is not None:
+            n += self.vdb.ntotal
+        if self._sharding and self.shards_dir is not None:
+            for name in self._sealed:
+                if self._active_name and name == self._active_name:
+                    continue
+                path = self.shards_dir / name
+                if not path.exists():
+                    continue
+                # Cheap: open header only via full load is heavy; use faiss read.
+                # For logging we accept loading sealed once — callers rarely use ntotal.
+                try:
+                    tmp = FassiVDB(path, self.vdb_dim)
+                    n += tmp.ntotal
+                    tmp.unload()
+                except Exception:
+                    pass
+        return n
+
+    def active_ntotal(self) -> int:
+        if self.vdb is None:
+            return 0
+        return self.vdb.ntotal
+
+    def shard_stats(self) -> dict:
+        return {
+            'sharding': self._sharding,
+            'shard_max_vectors': self.shard_max_vectors,
+            'sealed_count': len(self._sealed) if self._sharding else 0,
+            'active': self._active_name,
+            'active_ntotal': self.active_ntotal(),
+        }
+
+    def add(self, data_list: list):
         if data_list == []:
             return
         ids = [data['id'] for data in data_list]
@@ -209,27 +470,139 @@ class BaseVDB:
                 emb = json.loads(emb)
             vecs.append(emb)
         vectors = np.asarray(vecs, dtype=np.float32)
-        # 幂等：同 id 先删再加，避免中断重跑 / 误重嵌时 FAISS 出现重复 id
-        self.vdb.remove(ids)
+        # 幂等：只在 active 写分片上先删再加（热路径不能扫全部 sealed，
+        # 否则每批都会把历史大分片重新 load 进内存）。
+        # sealed 上的删改走 remove()（删文档等冷路径）。
+        self._ensure_active()
+        if self.vdb is not None:
+            self.vdb.remove(ids)
         self.vdb.add(ids, vectors)
-    
-    def search(self,vector: list,topk: int=10):        
-        vector = np.array(vector).reshape(1, -1)
-        distances,ids = self.vdb.search(vector, topk)
-        if ids is None:
+
+    def search(self, vector: list, topk: int = 10):
+        vector = np.array(vector, dtype=np.float32).reshape(1, -1)
+        if topk <= 0:
             return []
-        pairs = [(float(d), int(i)) for d, i in zip(distances[0], ids[0]) if i != -1]
 
-        res=[{'distance':p[0],'id':p[1]} for p in pairs]
-        return res
+        if not self._sharding:
+            if self.vdb is None:
+                return []
+            distances, ids = self.vdb.search(vector, topk)
+            if ids is None:
+                return []
+            pairs = [(float(d), int(i)) for d, i in zip(distances[0], ids[0]) if i != -1]
+            return [{'distance': p[0], 'id': p[1]} for p in pairs]
 
-    def remove(self, ids):
-        """Remove vectors by id list from the FAISS index and persist."""
+        # Merge top-k across sealed (load one-by-one) + active.
+        heap = []  # (distance, id) keep best topk (smallest L2)
+        import heapq
+
+        def _consume(distances, ids):
+            if ids is None:
+                return
+            for d, i in zip(distances[0], ids[0]):
+                i = int(i)
+                if i == -1:
+                    continue
+                d = float(d)
+                if len(heap) < topk:
+                    heapq.heappush(heap, (-d, i))  # max-heap via negation
+                elif d < -heap[0][0]:
+                    heapq.heapreplace(heap, (-d, i))
+
+        for name in self._sealed:
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = FassiVDB(path, self.vdb_dim)
+            try:
+                distances, ids = tmp.search(vector, topk)
+                _consume(distances, ids)
+            finally:
+                tmp.unload()
+
+        if self.vdb is not None and self.vdb.vdb is not None:
+            distances, ids = self.vdb.search(vector, topk)
+            _consume(distances, ids)
+
+        pairs = sorted(((-neg_d, i) for neg_d, i in heap), key=lambda x: x[0])
+        return [{'distance': d, 'id': i} for d, i in pairs]
+
+    def remove(self, ids, persist: bool = True):
+        """Remove vectors by id list from active + all sealed shards."""
         if not ids:
             return 0
-        n = self.vdb.remove(ids)
-        self.save()
+        n = 0
+        if not self._sharding:
+            if self.vdb is None:
+                return 0
+            n = self.vdb.remove(ids)
+            if persist and n:
+                self.save()
+            return n
+
+        # Active
+        if self.vdb is not None and self.vdb.vdb is not None:
+            n += self.vdb.remove(ids)
+            if persist and n:
+                self.vdb.save()
+
+        # Sealed: load → remove → save if hit → unload
+        for name in list(self._sealed):
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = FassiVDB(path, self.vdb_dim)
+            try:
+                r = tmp.remove(ids)
+                if r:
+                    tmp.save()
+                    n += r
+            finally:
+                tmp.unload()
         return n
+
+    def iter_faiss_indexes(self):
+        """
+        Yield (label, faiss.Index) for recommend/export. Caller must not
+        retain indexes after the generator advances when sharded (sealed
+        are unloaded after each yield via context — actually we load sealed
+        fully; use reconstruct_id_map for safer export).
+        """
+        if not self._sharding:
+            if self.vdb is not None and self.vdb.vdb is not None:
+                yield 'mono', self.vdb.vdb
+            return
+        for name in self._sealed:
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = FassiVDB(path, self.vdb_dim)
+            try:
+                if tmp.vdb is not None:
+                    yield name, tmp.vdb
+            finally:
+                tmp.unload()
+        if self.vdb is not None and self.vdb.vdb is not None:
+            yield self._active_name or 'active', self.vdb.vdb
+
+    def id_to_vector_map(self) -> dict:
+        """Build id → vector across all shards (may be large; for recommend)."""
+        out = {}
+        for _label, index in self.iter_faiss_indexes():
+            try:
+                id_map = faiss.vector_to_array(index.id_map)
+            except Exception:
+                continue
+            inner = getattr(index, 'index', None)
+            if inner is None:
+                continue
+            for pos, nid in enumerate(id_map):
+                try:
+                    vec = inner.reconstruct(int(pos))
+                except Exception:
+                    continue
+                out[int(nid)] = np.asarray(vec, dtype=np.float64)
+        return out
 
 class SQLiteDB:
     def __init__(self,db_path,table,create_table_sql):
@@ -304,22 +677,37 @@ class SQLiteDB:
 
 
 class FassiVDB:
-    def __init__(self,vdb_path,vdb_dim):
+    def __init__(self, vdb_path, vdb_dim, *, create_empty: bool = True):
         self.vdb_path = Path(vdb_path)
         self.vdb_dim = vdb_dim
         self._lock = faiss_lock_for(self.vdb_path)
-        self.load()
+        self.vdb = None
+        self.load(create_empty=create_empty)
 
-    def load(self):
-        if self.vdb_path.exists():
+    @property
+    def ntotal(self) -> int:
+        if self.vdb is None:
+            return 0
+        try:
+            return int(self.vdb.ntotal)
+        except Exception:
+            return 0
+
+    def load(self, *, create_empty: bool = True):
+        if self.vdb_path.exists() and self.vdb_path.stat().st_size > 0:
             with self._lock:
                 self.vdb = faiss.read_index(str(self.vdb_path))
-        elif self.vdb_dim is not None:
+        elif self.vdb_dim is not None and create_empty:
             self.vdb = faiss.IndexIDMap(faiss.IndexFlatL2(self.vdb_dim))
             self.save()
         else:
             self.vdb = None
-        
+
+    def unload(self):
+        """Release the in-memory index; file on disk is kept."""
+        with self._lock:
+            self.vdb = None
+
     def save(self):
         """
         Persist index atomically: write to *.vdb.tmp then os.replace.
@@ -344,19 +732,21 @@ class FassiVDB:
                 raise
 
     def clear(self):
-        if self.vdb is None:
-            return
         with self._lock:
+            self.vdb = None
             file_path = Path(self.vdb_path)
             if file_path.exists():
-                file_path.unlink()
-        self.load()
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
+        self.load(create_empty=True)
 
-    def add(self,ids,items):
+    def add(self, ids, items):
         if self.vdb is None:
             return
         with self._lock:
-            self.vdb.add_with_ids(items,np.array(ids,dtype=np.int64))
+            self.vdb.add_with_ids(items, np.array(ids, dtype=np.int64))
 
     def remove(self, ids):
         """Remove vectors by ids. Returns number of vectors removed."""
@@ -367,11 +757,10 @@ class FassiVDB:
             selector = faiss.IDSelectorBatch(id_array)
             removed = self.vdb.remove_ids(selector)
         return int(removed)
-    
-    def search(self,item,topk):
+
+    def search(self, item, topk):
         if self.vdb is None:
-            return None,None
+            return None, None
         with self._lock:
             distances, ids = self.vdb.search(item, topk)
-
-        return distances,ids
+        return distances, ids
