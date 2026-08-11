@@ -14,11 +14,11 @@ if __name__ == '__main__':
     # graph.chunk()
     # graph.extract()
     # graph.build()
-    graph.vectorization()
+    # graph.vectorization()
 
     # graph.recommend()
     # print(graph.query('...', mode='dual_path', pretty=True))
-    # print(graph.agent_query('...', pretty=True))
+    # print(graph.agent_query('有什么产品可以用在给汽车涂料上的', pretty=True))
 
     wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
     wf.run()

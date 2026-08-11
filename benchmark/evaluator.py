@@ -878,7 +878,113 @@ class QueryEvaluator:
         }
         if enable_doc_recall:
             summary["doc_recall"] = {
-                # 唯一指标：各题 (命中gold数/gold总数) 的平均
+                # 各题 (命中gold数/gold总数) 的平均
                 "mean_recall": mean(recalls),
+                # 召回 × 答案准确率 列联表
+                "vs_accuracy": self._build_recall_vs_accuracy(results),
             }
         return summary
+
+    @staticmethod
+    def _build_recall_vs_accuracy(
+        results: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        文档召回 × LLM 答案准确率 对照表。
+
+        行（召回，基于 per-question recall.recall）：
+          - hit:     recall == 1.0（全部 gold 出现在 retrieval_sources）
+          - partial: 0 < recall < 1
+          - miss:    recall == 0.0
+          - unknown: 无有效 recall 字段
+        列（答案）：
+          - 正确 / 错误 / 未知（llm_acc）
+
+        另附 hit×错误 下 query 成功/失败拆分，便于区分「检索对但答错」与「流水线失败」。
+        """
+        # cells[recall_bucket][acc_label] = count
+        buckets = ("hit", "partial", "miss", "unknown")
+        acc_labels = ("正确", "错误", "未知")
+        cells: Dict[str, Dict[str, int]] = {
+            b: {lab: 0 for lab in acc_labels} for b in buckets
+        }
+        n_with_recall = 0
+        hit_wrong_query_ok = 0
+        hit_wrong_query_fail = 0
+
+        for r in results:
+            rec_obj = r.get("recall") if isinstance(r.get("recall"), dict) else None
+            rec_val = rec_obj.get("recall") if rec_obj else None
+            if rec_val is None:
+                bucket = "unknown"
+            else:
+                n_with_recall += 1
+                v = float(rec_val)
+                if v >= 1.0:
+                    bucket = "hit"
+                elif v <= 0.0:
+                    bucket = "miss"
+                else:
+                    bucket = "partial"
+
+            lab = r.get("llm_acc")
+            if lab not in ("正确", "错误"):
+                lab = "未知"
+            cells[bucket][lab] += 1
+
+            if bucket == "hit" and lab == "错误":
+                q_fail = bool(r.get("query_error")) or r.get("query_status") == 0
+                if q_fail:
+                    hit_wrong_query_fail += 1
+                else:
+                    hit_wrong_query_ok += 1
+
+        row_totals = {b: sum(cells[b].values()) for b in buckets}
+        col_totals = {
+            lab: sum(cells[b][lab] for b in buckets) for lab in acc_labels
+        }
+
+        # 便于阅读的二维 counts（只保留实际可能用到的格子；partial/unknown 仍写入）
+        table = {
+            "hit_correct": cells["hit"]["正确"],
+            "hit_wrong": cells["hit"]["错误"],
+            "partial_correct": cells["partial"]["正确"],
+            "partial_wrong": cells["partial"]["错误"],
+            "miss_correct": cells["miss"]["正确"],
+            "miss_wrong": cells["miss"]["错误"],
+            "unknown_correct": cells["unknown"]["正确"],
+            "unknown_wrong": cells["unknown"]["错误"],
+            "hit_unknown": cells["hit"]["未知"],
+            "partial_unknown": cells["partial"]["未知"],
+            "miss_unknown": cells["miss"]["未知"],
+            "unknown_unknown": cells["unknown"]["未知"],
+        }
+
+        matrix = [
+            {"recall": b, "accuracy": lab, "n": cells[b][lab]}
+            for b in buckets
+            for lab in acc_labels
+            if cells[b][lab] > 0 or b in ("hit", "miss") and lab in ("正确", "错误")
+        ]
+
+        return {
+            "definition": {
+                "hit": "recall == 1.0：全部 gold 文档出现在 retrieval_sources",
+                "partial": "0 < recall < 1：部分 gold 命中（多跳时出现）",
+                "miss": "recall == 0.0：gold 均未出现在 retrieval_sources",
+                "unknown": "该题无有效 recall 字段",
+                "correct": "llm_acc == 正确",
+                "wrong": "llm_acc == 错误",
+            },
+            "table": table,
+            "matrix": matrix,
+            "row_totals": row_totals,
+            "col_totals": col_totals,
+            "n_with_recall": n_with_recall,
+            "n_total": len(results),
+            "hit_wrong_breakdown": {
+                "query_ok": hit_wrong_query_ok,
+                "query_fail": hit_wrong_query_fail,
+                "note": "命中 gold 且答案错误时，按 query 是否失败再拆分",
+            },
+        }
