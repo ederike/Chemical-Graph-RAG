@@ -18,7 +18,7 @@ if __name__ == '__main__':
 
     # graph.recommend()
     # print(graph.query('...', mode='dual_path', pretty=True))
-    # print(graph.agent_query('有什么产品可以用在给汽车涂料上的', pretty=True))
+    print(graph.agent_query('满足 NFPA 评级为健康1、相对密度约1.10、自燃温度高于400°C 的产品，其生产公司还有什么抗氧化剂产品吗？', pretty=True))
 
-    wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
-    wf.run()
+    # wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
+    # wf.run()

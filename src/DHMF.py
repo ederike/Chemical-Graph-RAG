@@ -663,6 +663,11 @@ class DHMF:
         retrieval_items = self.retrieve_module.retrieve_items(query)
         retrieval_result = self.retrieve_module._format_retrieved_chunks(retrieval_items)
         retrieve_latency_s = time.perf_counter() - t0
+        retrieve_timing = {}
+        try:
+            retrieve_timing = dict(self.retrieve_module.get_last_timing() or {})
+        except Exception:
+            retrieve_timing = {}
         system_prompt = PROMPT.get('query_answer_system', '')
         respond_prompt = (
             PROMPT.get('query_answer', '{retrieval_result}\n.Question: {query}')
@@ -676,6 +681,7 @@ class DHMF:
         )
         if isinstance(respond, dict):
             respond['retrieve_latency_s'] = retrieve_latency_s
+            respond['retrieve_timing'] = retrieve_timing
             respond['latency_s'] = time.perf_counter() - t_all
             sources, doc_ids = [], []
             seen_src, seen_did = set(), set()

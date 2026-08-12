@@ -31,6 +31,7 @@ from .state import (
     ready_steps,
     step_result_from_skill,
     sum_retrieve_latency,
+    sum_retrieve_timing,
 )
 
 @dataclass
@@ -143,6 +144,7 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
             'usage_completion_tokens': r.get('usage_completion_tokens'),
             'usage_total_tokens':      r.get('usage_total_tokens'),
             'retrieve_latency_s':      r.get('retrieve_latency_s'),
+            'retrieve_timing':         dict(r.get('retrieve_timing') or {}),
             'retrieval_sources':       list(r.get('sources') or []),
         }
         return {'final_answer': answer, 'final_status': respond['status'], 'respond': respond}
@@ -159,6 +161,7 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
     answer = str(resp.get('answer') or '').strip()
     resp['retrieval_sources']  = merge_sources(plan, results)
     resp['retrieve_latency_s'] = sum_retrieve_latency(plan, results)
+    resp['retrieve_timing']    = sum_retrieve_timing(plan, results)
 
     return {
         'final_answer': answer,

@@ -18,3 +18,5 @@ benchmark_results_new-prompt/
 cache_1/
 cache_half/
 test/
+benchmark_results_old/
+docs/

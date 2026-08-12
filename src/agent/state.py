@@ -19,6 +19,7 @@ class StepResult(TypedDict, total=False):
     sources: List[str]
     status: int
     retrieve_latency_s: float
+    retrieve_timing: Dict[str, float]
     latency_s: float
     usage_prompt_tokens: Optional[int]
     usage_completion_tokens: Optional[int]
@@ -69,16 +70,55 @@ def merge_sources(plan: List[PlanStep], results: Dict[str, StepResult]) -> List[
 def sum_retrieve_latency(plan: List[PlanStep], results: Dict[str, StepResult]) -> float:
     return sum(float((results.get(s['id']) or {}).get('retrieve_latency_s') or 0.0) for s in plan)
 
+
+def _empty_retrieve_timing() -> Dict[str, float]:
+    return {
+        'precompute_s': 0.0,
+        'rewrite_s': 0.0,
+        'embed_s': 0.0,
+        'chunk_s': 0.0,
+        'node_s': 0.0,
+        'keyword_s': 0.0,
+        'expand_s': 0.0,
+        'rerank_s': 0.0,
+        'total_s': 0.0,
+    }
+
+
+def sum_retrieve_timing(
+    plan: List[PlanStep], results: Dict[str, StepResult]
+) -> Dict[str, float]:
+    """多 hop 累加各步 retrieve_timing。"""
+    out = _empty_retrieve_timing()
+    for s in plan:
+        t = (results.get(s['id']) or {}).get('retrieve_timing') or {}
+        if not isinstance(t, dict):
+            continue
+        for k in out:
+            try:
+                out[k] += float(t.get(k) or 0.0)
+            except (TypeError, ValueError):
+                pass
+    return out
+
 def aggregate_usage(plan: List[PlanStep], results: Dict[str, StepResult], respond: dict) -> dict:
     """累加各 hop + respond 的 token / 检索延迟（就地写 respond）。"""
     pt = ct = tt = None
     r_lat = 0.0
+    r_timing = _empty_retrieve_timing()
     for s in plan:
         r = results.get(s['id']) or {}
         pt = add_usage(pt, r.get('usage_prompt_tokens'))
         ct = add_usage(ct, r.get('usage_completion_tokens'))
         tt = add_usage(tt, r.get('usage_total_tokens'))
         r_lat += float(r.get('retrieve_latency_s') or 0.0)
+        t = r.get('retrieve_timing') or {}
+        if isinstance(t, dict):
+            for k in r_timing:
+                try:
+                    r_timing[k] += float(t.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    pass
 
     pt = add_usage(pt, respond.get('usage_prompt_tokens'))
     ct = add_usage(ct, respond.get('usage_completion_tokens'))
@@ -88,6 +128,8 @@ def aggregate_usage(plan: List[PlanStep], results: Dict[str, StepResult], respon
     respond['usage_total_tokens'] = tt
     if respond.get('retrieve_latency_s') is None:
         respond['retrieve_latency_s'] = r_lat
+    if respond.get('retrieve_timing') is None:
+        respond['retrieve_timing'] = r_timing
     return respond
 
 def _strip_fence(text: str) -> str:
@@ -211,10 +253,14 @@ def step_result_from_skill(
         sources = list(resp.get('retrieval_sources') or [])
         pt, ct, tt = usage_of(resp)
         r_lat   = float(resp.get('retrieve_latency_s') or 0.0)
+        r_timing = resp.get('retrieve_timing') or {}
+        if not isinstance(r_timing, dict):
+            r_timing = {}
     else:
         answer, status, sources = str(resp), 0, []
         pt = ct = tt = None
         r_lat = 0.0
+        r_timing = {}
 
     return StepResult(
         id=sid,
@@ -224,6 +270,7 @@ def step_result_from_skill(
         sources=sources,
         status=status,
         retrieve_latency_s=r_lat,
+        retrieve_timing=dict(r_timing),
         latency_s=latency_s,
         usage_prompt_tokens=pt,
         usage_completion_tokens=ct,

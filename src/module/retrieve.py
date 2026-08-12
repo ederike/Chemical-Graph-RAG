@@ -8,10 +8,36 @@ from ..utils.prompt import PROMPT
 from ..utils.config import resolve_credentials
 import json
 import re
+import threading
 import time
 from collections import defaultdict
 
 import numpy as np
+
+# retrieve_items 分阶段耗时字段（秒）；thread-local 保证并发评测不串号
+RETRIEVE_TIMING_KEYS = (
+    'precompute_s',
+    'rewrite_s',
+    'embed_s',
+    'chunk_s',
+    'node_s',
+    'keyword_s',
+    'expand_s',
+    'rerank_s',
+    'total_s',
+)
+
+
+def empty_retrieve_timing() -> dict:
+    return {k: 0.0 for k in RETRIEVE_TIMING_KEYS}
+
+
+def add_retrieve_timing(a, b) -> dict:
+    """逐项累加两份 retrieve_timing（缺省按 0）。"""
+    out = empty_retrieve_timing()
+    for k in RETRIEVE_TIMING_KEYS:
+        out[k] = float((a or {}).get(k) or 0.0) + float((b or {}).get(k) or 0.0)
+    return out
 
 class Retrieve:
     """
@@ -110,6 +136,26 @@ class Retrieve:
             'top_docs': 0,
             'doc_ids': [],
         }
+        # 最近一次 retrieve_items 的分阶段耗时（thread-local）
+        self._tls = threading.local()
+        self.last_timing = empty_retrieve_timing()
+
+    def get_last_timing(self) -> dict:
+        """当前线程最近一次 retrieve_items 分阶段耗时（秒）。"""
+        t = getattr(self._tls, 'timing', None)
+        if isinstance(t, dict) and t:
+            return dict(t)
+        return dict(self.last_timing or empty_retrieve_timing())
+
+    def _set_last_timing(self, timing: dict) -> None:
+        cleaned = empty_retrieve_timing()
+        for k in RETRIEVE_TIMING_KEYS:
+            try:
+                cleaned[k] = round(float((timing or {}).get(k) or 0.0), 6)
+            except (TypeError, ValueError):
+                cleaned[k] = 0.0
+        self._tls.timing = cleaned
+        self.last_timing = cleaned
 
     def _ensure_precompute(self):
         if self._precomputed:
@@ -1597,9 +1643,14 @@ class Retrieve:
 
         enable_query_rewrite / enable_keyword_exact:
           None 用配置；True/False 仅本次覆盖（不改共享 config）。
+
+        分阶段耗时写入 self.last_timing / get_last_timing()：
+          precompute / rewrite / embed / chunk / node / keyword / expand / rerank / total
         """
         t_all = time.perf_counter()
+        t0 = time.perf_counter()
         self._ensure_precompute()
+        t_precompute = time.perf_counter() - t0
 
         chunk_cand = self._resolve_topk(
             chunk_candidate_k,
@@ -1749,11 +1800,13 @@ class Retrieve:
         else:
             merged = dual_merged
 
+        t0 = time.perf_counter()
         passages = self._build_materials(merged)
         passages = self._enrich_passage_ids(passages)
 
         if not enable_rerank:
             passages = self._expand_recommendations(passages)
+        t_expand = time.perf_counter() - t0
 
         t0 = time.perf_counter()
         passages = self._rerank_materials(
@@ -1764,6 +1817,20 @@ class Retrieve:
             stage='final',
         )
         t_rerank = time.perf_counter() - t0
+
+        t_total = time.perf_counter() - t_all
+        timing = {
+            'precompute_s': t_precompute,
+            'rewrite_s': t_rewrite,
+            'embed_s': t_emb,
+            'chunk_s': t_chunk,
+            'node_s': t_node,
+            'keyword_s': t_keyword,
+            'expand_s': t_expand,
+            'rerank_s': t_rerank,
+            'total_s': t_total,
+        }
+        self._set_last_timing(timing)
 
         n_mat = len({p.get('material_id') for p in passages if p.get('material_id') is not None})
         n_rec = sum(1 for p in passages if p.get('role') == 'recommendation')
@@ -1784,10 +1851,10 @@ class Retrieve:
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "
             f"rec_expand={n_rec} passages={len(passages)} "
-            f"timing rewrite={t_rewrite:.3f}s embed={t_emb:.3f}s "
-            f"chunk={t_chunk:.3f}s node={t_node:.3f}s "
-            f"keyword={t_keyword:.3f}s rerank={t_rerank:.3f}s "
-            f"total={time.perf_counter()-t_all:.3f}s"
+            f"timing precompute={t_precompute:.3f}s rewrite={t_rewrite:.3f}s "
+            f"embed={t_emb:.3f}s chunk={t_chunk:.3f}s node={t_node:.3f}s "
+            f"keyword={t_keyword:.3f}s expand={t_expand:.3f}s "
+            f"rerank={t_rerank:.3f}s total={t_total:.3f}s"
         )
         return passages
 

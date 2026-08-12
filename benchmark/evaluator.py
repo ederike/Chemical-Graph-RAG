@@ -393,9 +393,22 @@ class QueryEvaluator:
                 except Exception:
                     tt = None
 
+            retrieve_timing = respond.get("retrieve_timing") or {}
+            if not isinstance(retrieve_timing, dict):
+                retrieve_timing = {}
+            # 扁平字段便于汇总；与 retrieve_timing 同源
             result["metrics"] = {
                 "query_latency_s": respond.get("latency_s"),
                 "retrieve_latency_s": respond.get("retrieve_latency_s"),
+                "retrieve_timing": dict(retrieve_timing),
+                "precompute_latency_s": retrieve_timing.get("precompute_s"),
+                "rewrite_latency_s": retrieve_timing.get("rewrite_s"),
+                "embed_latency_s": retrieve_timing.get("embed_s"),
+                "chunk_latency_s": retrieve_timing.get("chunk_s"),
+                "node_latency_s": retrieve_timing.get("node_s"),
+                "keyword_latency_s": retrieve_timing.get("keyword_s"),
+                "expand_latency_s": retrieve_timing.get("expand_s"),
+                "rerank_latency_s": retrieve_timing.get("rerank_s"),
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "total_tokens": tt,
@@ -768,16 +781,34 @@ class QueryEvaluator:
                 if isinstance(rec, dict) and rec.get("recall") is not None:
                     recalls.append(float(rec["recall"]))
 
-        q_lats = [
-            (r.get("metrics") or {}).get("query_latency_s")
-            for r in results
-            if (r.get("metrics") or {}).get("query_latency_s") is not None
-        ]
-        r_lats = [
-            (r.get("metrics") or {}).get("retrieve_latency_s")
-            for r in results
-            if (r.get("metrics") or {}).get("retrieve_latency_s") is not None
-        ]
+        def _metric_lats(key: str, rows=None) -> list:
+            rows = results if rows is None else rows
+            out = []
+            for r in rows:
+                v = (r.get("metrics") or {}).get(key)
+                if v is not None:
+                    try:
+                        out.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+            return out
+
+        # 检索分阶段字段：metrics 扁平键 → latency 汇总键
+        retrieve_stage_keys = (
+            ("precompute_latency_s", "mean_precompute_s", "sum_precompute_s"),
+            ("rewrite_latency_s", "mean_rewrite_s", "sum_rewrite_s"),
+            ("embed_latency_s", "mean_embed_s", "sum_embed_s"),
+            ("chunk_latency_s", "mean_chunk_s", "sum_chunk_s"),
+            ("node_latency_s", "mean_node_s", "sum_node_s"),
+            ("keyword_latency_s", "mean_keyword_s", "sum_keyword_s"),
+            ("expand_latency_s", "mean_expand_s", "sum_expand_s"),
+            ("rerank_latency_s", "mean_rerank_s", "sum_rerank_s"),
+        )
+
+        q_lats = _metric_lats("query_latency_s")
+        r_lats = _metric_lats("retrieve_latency_s")
+        w_lats = _metric_lats("wall_latency_s")
+        stage_lats = {mk: _metric_lats(src) for src, mk, _sk in retrieve_stage_keys}
 
         by_hop: Dict[str, Any] = {}
         hop_groups: Dict[Any, list] = defaultdict(list)
@@ -796,14 +827,11 @@ class QueryEvaluator:
                 "n": g_n,
                 "llm_acc_counts": g_acc,
                 "accuracy": safe_div(g_acc["正确"], g_judged) if g_judged else None,
-                "mean_query_latency_s": mean(
-                    [
-                        (r.get("metrics") or {}).get("query_latency_s")
-                        for r in group
-                        if (r.get("metrics") or {}).get("query_latency_s") is not None
-                    ]
-                ),
+                "mean_query_latency_s": mean(_metric_lats("query_latency_s", group)),
+                "mean_retrieve_latency_s": mean(_metric_lats("retrieve_latency_s", group)),
             }
+            for src, mk, _sk in retrieve_stage_keys:
+                hop_item[mk] = mean(_metric_lats(src, group))
             if enable_doc_recall:
                 g_recalls = [
                     float((r.get("recall") or {}).get("recall"))
@@ -821,11 +849,19 @@ class QueryEvaluator:
             1 for r in results
             if r.get("judge_status") == 0 or r.get("judge_error")
         )
-        w_lats = [
-            (r.get("metrics") or {}).get("wall_latency_s")
-            for r in results
-            if (r.get("metrics") or {}).get("wall_latency_s") is not None
-        ]
+
+        latency_summary: Dict[str, Any] = {
+            "mean_query_s": mean(q_lats),
+            "mean_retrieve_s": mean(r_lats),
+            "mean_wall_s": mean(w_lats),
+            "sum_query_s": sum(q_lats) if q_lats else None,
+            "sum_retrieve_s": sum(r_lats) if r_lats else None,
+            "sum_wall_s": sum(w_lats) if w_lats else None,
+        }
+        for src, mk, sk in retrieve_stage_keys:
+            vals = stage_lats[mk]
+            latency_summary[mk] = mean(vals)
+            latency_summary[sk] = sum(vals) if vals else None
 
         summary: Dict[str, Any] = {
             "n_total": n,
@@ -843,13 +879,7 @@ class QueryEvaluator:
                 "n_correct": n_correct,
                 "n_wrong": n_wrong,
             },
-            "latency": {
-                "mean_query_s": mean(q_lats),
-                "mean_retrieve_s": mean(r_lats),
-                "mean_wall_s": mean(w_lats),
-                "sum_query_s": sum(q_lats) if q_lats else None,
-                "sum_wall_s": sum(w_lats) if w_lats else None,
-            },
+            "latency": latency_summary,
             "tokens": {
                 "sum_prompt": self._sum_tokens(results, "prompt_tokens"),
                 "sum_completion": self._sum_tokens(results, "completion_tokens"),

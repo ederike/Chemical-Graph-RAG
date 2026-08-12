@@ -49,18 +49,20 @@ class QuerySkill:
         if not q:
             return {
                 'status': 0, 'answer': '（空查询）',
-                'retrieval_sources': [], 'retrieve_latency_s': 0.0, 'latency_s': 0.0,
+                'retrieval_sources': [], 'retrieve_latency_s': 0.0,
+                'retrieve_timing': {}, 'latency_s': 0.0,
             }
 
         search_q = self._rewrite(q) if self.cfg.enable_query_rewrite else q
 
         t0 = time.perf_counter()
-        items, retrieval_text = self._retrieve(search_q or q)
+        items, retrieval_text, retrieve_timing = self._retrieve(search_q or q)
         retrieve_latency_s = time.perf_counter() - t0
         sources, doc_ids = self._collect_refs(items)
 
         respond = self._answer(q, retrieval_text)
         respond['retrieve_latency_s'] = retrieve_latency_s
+        respond['retrieve_timing']    = retrieve_timing
         respond['latency_s']          = time.perf_counter() - t_all
         respond['retrieval_sources']  = sources
         respond['retrieval_doc_ids']  = doc_ids
@@ -99,7 +101,12 @@ class QuerySkill:
             kw['node_candidate_k'] = int(self.cfg.node_candidate_k)
 
         items = retrieve.retrieve_items(search_q, **kw)
-        return items, retrieve._format_retrieved_chunks(items)
+        timing = {}
+        try:
+            timing = dict(retrieve.get_last_timing() or {})
+        except Exception:
+            timing = {}
+        return items, retrieve._format_retrieved_chunks(items), timing
 
     @staticmethod
     def _collect_refs(items) -> tuple:
