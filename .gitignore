@@ -20,3 +20,5 @@ cache_half/
 test/
 benchmark_results_old/
 docs/
+.vscode/
+rules/
