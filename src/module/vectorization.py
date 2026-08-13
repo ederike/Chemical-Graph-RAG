@@ -165,9 +165,17 @@ class Vectorization:
 
         self.total_undone = self.task_db.count_by('embedding_status', 'undone')
         idx_type = getattr(vdb, 'index_type', getattr(self.config.vectorization, 'index_type', '?'))
-        hnsw_info = ''
+        idx_quant = getattr(vdb, 'index_quant', getattr(self.config.vectorization, 'index_quant', 'none'))
+        req_quant = getattr(self.config.vectorization, 'index_quant', 'none')
+        if str(req_quant) != str(idx_quant):
+            self.logger.warning(
+                f"[vectorization] index_quant yaml={req_quant} but existing "
+                f"shards use {idx_quant}; new vectors follow the on-disk encoding. "
+                f"vectorization_clear to rebuild as {req_quant}."
+            )
+        hnsw_info = f" quant={idx_quant}"
         if str(idx_type).lower() == 'hnsw':
-            hnsw_info = (
+            hnsw_info += (
                 f" hnsw_M={getattr(vdb, 'hnsw_M', '?')}"
                 f" efConstruction={getattr(vdb, 'hnsw_efConstruction', '?')}"
                 f" efSearch={getattr(vdb, 'hnsw_efSearch', '?')}"
@@ -548,6 +556,7 @@ class Vectorization:
 
         wall_s = time.perf_counter() - t_wall
         idx_type = getattr(self.task_vdb, 'index_type', '?')
+        idx_quant = getattr(self.task_vdb, 'index_quant', 'none')
         # Prefer VDB cumulative timing if available (same source of truth).
         add_s = self._index_add_seconds
         add_n = self._index_add_count
@@ -555,9 +564,9 @@ class Vectorization:
             add_s = float(getattr(self.task_vdb, 'index_add_seconds', 0.0) or add_s)
             add_n = int(getattr(self.task_vdb, 'index_add_count', 0) or add_n)
         per_1k = (add_s / add_n * 1000.0) if add_n else 0.0
-        hnsw_extra = ''
+        hnsw_extra = f" quant={idx_quant}"
         if str(idx_type).lower() == 'hnsw':
-            hnsw_extra = (
+            hnsw_extra += (
                 f" hnsw_M={getattr(self.task_vdb, 'hnsw_M', '?')}"
                 f" efConstruction={getattr(self.task_vdb, 'hnsw_efConstruction', '?')}"
                 f" efSearch={getattr(self.task_vdb, 'hnsw_efSearch', '?')}"

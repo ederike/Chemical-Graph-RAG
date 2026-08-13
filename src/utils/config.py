@@ -294,12 +294,18 @@ class VectorizationConfig(BaseModel):
     # --- progress batch (prefer shard_max_vectors alone) ---
     # Max vectors per FAISS shard = one durable batch:
     #   load page → embed → write FAISS → save disk → seal/unload.
-    # Peak RAM ≈ N × dim × 4B (N=10000, dim=4096 → ~160MB).
+    # Peak RAM ≈ N × dim × 4B (fp16: × 2B).
     # None/0 = mono single-file index (legacy; grows unboundedly in RAM).
     shard_max_vectors: Optional[int] = None
     # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
     # HNSW does not support in-place remove_ids; rebuild via vectorization_clear.
     index_type: str = "hnsw"
+    # FAISS stored-vector encoding (not the embedding API dtype):
+    #   none — float32 (IndexHNSWFlat / IndexFlatL2)
+    #   fp16 — ScalarQuantizer QT_fp16 (IndexHNSWSQ / IndexScalarQuantizer)
+    # Switching encoding is incompatible with existing .vdb shards;
+    # rebuild with vectorization_clear after changing this.
+    index_quant: str = "none"
     # HNSW graph degree (M). Higher = better recall, more RAM / build time.
     hnsw_M: int = 32
     # HNSW build-time search depth. Higher = better graph, slower build.
@@ -357,6 +363,26 @@ class VectorizationConfig(BaseModel):
         if s not in ("flat_l2", "hnsw"):
             return "hnsw"
         return s
+
+    @field_validator("index_quant", mode="before")
+    @classmethod
+    def _index_quant(cls, v):
+        if isinstance(v, bool):
+            return "fp16" if v else "none"
+        s = str(v or "none").strip().lower().replace("-", "_")
+        aliases_fp16 = {
+            "fp16", "float16", "half", "sq_fp16", "sqfp16",
+            "qt_fp16", "qtfp16", "sq16", "true", "on", "1", "yes",
+        }
+        aliases_none = {
+            "none", "off", "false", "flat", "fp32", "float32",
+            "no", "0", "",
+        }
+        if s in aliases_fp16:
+            return "fp16"
+        if s in aliases_none:
+            return "none"
+        return "none"
 
     @field_validator("hnsw_M", mode="before")
     @classmethod

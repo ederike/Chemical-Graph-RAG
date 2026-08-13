@@ -47,6 +47,7 @@ class DHMF:
         _vcfg = self.config.vectorization
         _index_kwargs = {
             'index_type': getattr(_vcfg, 'index_type', 'hnsw') or 'hnsw',
+            'index_quant': getattr(_vcfg, 'index_quant', 'none') or 'none',
             'hnsw_M': int(getattr(_vcfg, 'hnsw_M', 32) or 32),
             'hnsw_efConstruction': int(getattr(_vcfg, 'hnsw_efConstruction', 200) or 200),
             'hnsw_efSearch': int(getattr(_vcfg, 'hnsw_efSearch', 64) or 64),

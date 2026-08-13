@@ -15,15 +15,12 @@ if __name__ == '__main__':
     # graph.extract()
     # graph.build()
 
-    # Rebuild VDB as HNSW (old L2 kept at DB/vdb_L2).
-    # clear 必须先做：SQLite 里 embedding_status 仍是 done，只 vectorization() 会处理 0 行。
-    # embedding 走缓存；耗时主要在 HNSW add_with_ids（build_*.log 里 index_add / index_build_summary）。
-    # graph.vectorization_clear()   
-    # graph.vectorization()
+    graph.vectorization_clear()   
+    graph.vectorization()
 
     # graph.recommend()
     # print(graph.query('...', mode='dual_path', pretty=True))
-    print(graph.agent_query('满足 NFPA 评级为健康1、相对密度约1.10、自燃温度高于400°C 的产品，其生产公司还有什么抗氧化剂产品吗？', pretty=True))
+    # print(graph.agent_query('满足 NFPA 评级为健康1、相对密度约1.10、自燃温度高于400°C 的产品，其生产公司还有什么抗氧化剂产品吗？', pretty=True))
 
     # wf = TestQueryWorkflow.from_config(DEFAULT_CONFIG_PATH)
     # wf.run()

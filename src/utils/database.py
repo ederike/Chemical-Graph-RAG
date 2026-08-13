@@ -33,6 +33,19 @@ def faiss_lock_for(vdb_path) -> threading.Lock:
     return _lock_for(_faiss_locks, _faiss_locks_guard, vdb_path)
 
 
+def normalize_index_quant(v) -> str:
+    """none (float32) | fp16 (FAISS ScalarQuantizer QT_fp16)."""
+    if isinstance(v, bool):
+        return 'fp16' if v else 'none'
+    s = str(v or 'none').strip().lower().replace('-', '_')
+    if s in (
+        'fp16', 'float16', 'half', 'sq_fp16', 'sqfp16',
+        'qt_fp16', 'qtfp16', 'sq16', 'true', 'on', '1', 'yes',
+    ):
+        return 'fp16'
+    return 'none'
+
+
 class BaseDB:
     def __init__(self,db_path: str,db_name: str,create_table_sql: str):
         self.db_path = Path(db_path)
@@ -190,12 +203,15 @@ class BaseVDB:
 
     After each vectorization checkpoint the active shard is saved, sealed,
     unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
-    (shard_max_vectors × dim × 4B), not the full corpus.
+    (shard_max_vectors × dim × 4B, or × 2B when index_quant=fp16).
     Search merges all sealed + active; sealed shards are loaded one-by-one.
 
     index_type:
       flat_l2 — IndexFlatL2 (exact, full scan)
-      hnsw    — IndexHNSWFlat (approx ANN; build cost is add_with_ids)
+      hnsw    — IndexHNSWFlat / IndexHNSWSQ (approx ANN; build cost is add_with_ids)
+    index_quant:
+      none — float32 vectors
+      fp16 — FAISS ScalarQuantizer QT_fp16 (half-precision storage + search)
     """
 
     def __init__(
@@ -206,6 +222,7 @@ class BaseVDB:
         shard_max_vectors: int = None,
         *,
         index_type: str = 'hnsw',
+        index_quant: str = 'none',
         hnsw_M: int = 32,
         hnsw_efConstruction: int = 200,
         hnsw_efSearch: int = 64,
@@ -228,6 +245,8 @@ class BaseVDB:
         self.index_type = (index_type or 'hnsw').strip().lower()
         if self.index_type not in ('flat_l2', 'hnsw'):
             self.index_type = 'hnsw'
+        self._index_quant_requested = normalize_index_quant(index_quant)
+        self.index_quant = self._index_quant_requested
         self.hnsw_M = max(2, int(hnsw_M or 32))
         self.hnsw_efConstruction = max(1, int(hnsw_efConstruction or 200))
         self.hnsw_efSearch = max(1, int(hnsw_efSearch or 64))
@@ -247,6 +266,7 @@ class BaseVDB:
             self.vdb_dim,
             create_empty=create_empty,
             index_type=self.index_type,
+            index_quant=self.index_quant,
             hnsw_M=self.hnsw_M,
             hnsw_efConstruction=self.hnsw_efConstruction,
             hnsw_efSearch=self.hnsw_efSearch,
@@ -255,6 +275,7 @@ class BaseVDB:
     def index_stats(self) -> dict:
         return {
             'index_type': self.index_type,
+            'index_quant': self.index_quant,
             'hnsw_M': self.hnsw_M,
             'hnsw_efConstruction': self.hnsw_efConstruction,
             'hnsw_efSearch': self.hnsw_efSearch,
@@ -306,6 +327,15 @@ class BaseVDB:
             self._active_name = meta.get('active')
             self._next_id = int(meta.get('next_id') or 0)
             self.shard_max_vectors = shard_max_vectors
+            # Keep new shards consistent with on-disk encoding.
+            # Legacy meta without index_quant is float32.
+            if 'index_quant' in meta:
+                disk_q = normalize_index_quant(meta.get('index_quant'))
+            elif self._sealed:
+                disk_q = 'none'
+            else:
+                disk_q = self.index_quant
+            self.index_quant = disk_q
             self._sharding = True
             # Drop any mono handle that was loaded at construction.
             if self.vdb is not None:
@@ -364,6 +394,7 @@ class BaseVDB:
             'sealed': list(self._sealed),
             'active': self._active_name,
             'index_type': self.index_type,
+            'index_quant': self.index_quant,
             'hnsw_M': self.hnsw_M,
             'hnsw_efConstruction': self.hnsw_efConstruction,
             'hnsw_efSearch': self.hnsw_efSearch,
@@ -461,17 +492,30 @@ class BaseVDB:
                     mono.unlink()
                 except OSError:
                     pass
-            # Recreate empty sharded layout.
+            # Recreate empty sharded layout with the configured encoding
+            # (not whatever the wiped shards used).
             max_v = self.shard_max_vectors or 10000
             self._sharding = False
             self._sealed = []
             self._active_name = None
             self._next_id = 0
+            self.index_quant = getattr(
+                self, '_index_quant_requested', self.index_quant
+            )
             self.enable_sharding(max_v)
             return
 
+        self.index_quant = getattr(
+            self, '_index_quant_requested', self.index_quant
+        )
         if self.vdb is not None:
-            self.vdb.clear()
+            self.vdb.unload()
+            self.vdb = None
+        if self.vdb_file_path.exists():
+            try:
+                self.vdb_file_path.unlink()
+            except OSError:
+                pass
         self.load()
 
     def buffer_clear(self):
@@ -751,8 +795,11 @@ class FassiVDB:
     Single FAISS index file handle.
 
     index_type:
-      flat_l2 — IndexIDMap(IndexFlatL2)
-      hnsw    — IndexIDMap2(IndexHNSWFlat); graph is built during add_with_ids
+      flat_l2 — IndexIDMap(IndexFlatL2 or IndexScalarQuantizer)
+      hnsw    — IndexIDMap2(IndexHNSWFlat or IndexHNSWSQ)
+    index_quant:
+      none — float32
+      fp16 — ScalarQuantizer QT_fp16
     """
 
     def __init__(
@@ -762,6 +809,7 @@ class FassiVDB:
         *,
         create_empty: bool = True,
         index_type: str = 'hnsw',
+        index_quant: str = 'none',
         hnsw_M: int = 32,
         hnsw_efConstruction: int = 200,
         hnsw_efSearch: int = 64,
@@ -771,6 +819,7 @@ class FassiVDB:
         self.index_type = (index_type or 'hnsw').strip().lower()
         if self.index_type not in ('flat_l2', 'hnsw'):
             self.index_type = 'hnsw'
+        self.index_quant = normalize_index_quant(index_quant)
         self.hnsw_M = max(2, int(hnsw_M or 32))
         self.hnsw_efConstruction = max(1, int(hnsw_efConstruction or 200))
         self.hnsw_efSearch = max(1, int(hnsw_efSearch or 64))
@@ -806,13 +855,24 @@ class FassiVDB:
 
     def _create_empty_index(self):
         """Build an empty FAISS index for the configured backend."""
+        d = int(self.vdb_dim)
+        use_fp16 = self.index_quant == 'fp16'
         if self.index_type == 'hnsw':
-            base = faiss.IndexHNSWFlat(int(self.vdb_dim), int(self.hnsw_M))
+            if use_fp16:
+                base = faiss.IndexHNSWSQ(
+                    d, faiss.ScalarQuantizer.QT_fp16, int(self.hnsw_M)
+                )
+            else:
+                base = faiss.IndexHNSWFlat(d, int(self.hnsw_M))
             base.hnsw.efConstruction = int(self.hnsw_efConstruction)
             base.hnsw.efSearch = int(self.hnsw_efSearch)
             # IDMap2: supports reconstruct by id (recommend path).
             return faiss.IndexIDMap2(base)
-        return faiss.IndexIDMap(faiss.IndexFlatL2(int(self.vdb_dim)))
+        if use_fp16:
+            return faiss.IndexIDMap(
+                faiss.IndexScalarQuantizer(d, faiss.ScalarQuantizer.QT_fp16)
+            )
+        return faiss.IndexIDMap(faiss.IndexFlatL2(d))
 
     def load(self, *, create_empty: bool = True):
         if self.vdb_path.exists() and self.vdb_path.stat().st_size > 0:
