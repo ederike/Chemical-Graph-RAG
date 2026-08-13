@@ -199,9 +199,9 @@ class DHMF:
                    (0 in config = no limit). Function arg wins when not None.
             file_type: 1=TDS, 2=MSDS, 'all'=both; None → config.oss_download.file_type.
                       Ignored (download all) when the table has no `type` column.
-            skip_existing: skip when local {product_name}_{id}.pdf already exists
-            dedupe_local: after download, delete byte-identical local PDFs (same OSS
-                          object previously saved under many row ids)
+            skip_existing: skip when local file named after the OSS object already exists
+            dedupe_local: after download, delete byte-identical local PDFs (legacy
+                          {product}_{id}.pdf copies of the same object)
 
         Returns:
             summary dict from download_rows_from_oss (plus local_dedupe if run)

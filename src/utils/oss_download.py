@@ -40,13 +40,15 @@ def _file_md5(path: Path, chunk: int = 1024 * 1024) -> str:
 
 
 def _keep_key_for_dup_pdf(path: Path) -> tuple:
-    """Prefer the earliest numeric id suffix (碳酸钙粉末_3985.pdf)."""
+    """Prefer OSS-object basename (usually a hex hash) over legacy {name}_{id}.pdf."""
     stem = path.stem
+    if re.fullmatch(r'[0-9a-fA-F]{16,}', stem):
+        return (0, 0, path.name)
     if '_' in stem:
         tail = stem.rsplit('_', 1)[-1]
         if tail.isdigit():
-            return (0, int(tail), path.name)
-    return (1, 0, path.name)
+            return (1, int(tail), path.name)
+    return (2, 0, path.name)
 
 
 def dedupe_local_pdfs(
@@ -118,14 +120,29 @@ def dedupe_local_pdfs(
     return summary
 
 
+def filename_from_oss_key(object_key: str) -> Optional[str]:
+    """
+    Local filename = last path component of the OSS object key.
+
+    tds/8970b3dc0324473bdadfdf547c008ce4.pdf
+      → 8970b3dc0324473bdadfdf547c008ce4.pdf
+
+    Same key (or same basename) always maps to the same file, so skip_existing
+    and cross-table incremental download both work without {product}_{id}.
+    """
+    key = (object_key or '').strip()
+    if not key:
+        return None
+    key = key.split('?', 1)[0].split('#', 1)[0].rstrip('/')
+    name = Path(key).name
+    if not name or name in ('.', '..'):
+        return None
+    name = _ILLEGAL_FILENAME_RE.sub('_', name).strip(' .')
+    return name or None
+
+
 def sanitize_product_filename(product_name: str, row_id: Any) -> Optional[str]:
-    """
-    Build local filename: {sanitized_product_name}_{id}.pdf
-    - empty / None product_name → null_name_{id}.pdf（仍下载，不用产品名）
-    - illegal path chars → '_'
-    - trailing .pdf stripped before appending _{id}.pdf (no double suffix)
-    - row_id 为空时无法生成文件名 → None
-    """
+    """Legacy {product}_{id}.pdf name. Kept for callers; download no longer uses it."""
     if row_id is None or str(row_id).strip() == '':
         return None
     rid = str(row_id).strip()
@@ -301,12 +318,11 @@ def download_rows_from_oss(
     logger: logging.Logger = None,
 ) -> dict:
     """
-    Download each unique oss_url once into download_dir as {product_name}_{id}.pdf.
+    Download each unique OSS object once. Local name = basename of oss_url
+    (e.g. tds/8970b3dc….pdf → 8970b3dc….pdf).
 
-    Same object key appearing on many MySQL rows is downloaded only for the
-    first row (ORDER BY id ASC). Later rows are skipped as skipped_duplicate.
-    product_name 为空时用 null_name_{id}.pdf，不跳过。
-    Skip when id 无效、oss_url empty, or local file already exists.
+    Same object key / same basename → one file. Later rows skipped_duplicate.
+    skip_existing: dest already on disk (works across tables / reruns).
     Returns summary dict.
     """
     log = logger or logger_default
@@ -340,17 +356,16 @@ def download_rows_from_oss(
         'skipped_existing': 0,
         'skipped_duplicate': 0,
         'skipped_invalid': 0,
-        'null_name': 0,
         'failed': 0,
         'files': [],
     }
 
-    # object_key → first local filename (so later rows of the same file are skipped)
+    # object_key / dest name → first local filename (same file skipped later)
     seen_keys: Dict[str, str] = {}
+    seen_names: Dict[str, str] = {}
 
     for row in rows:
         row_id = row.get('id')
-        product_name = row.get('product_name')
         object_key = _oss_object_key(row.get('oss_url'))
 
         if not object_key:
@@ -368,20 +383,25 @@ def download_rows_from_oss(
             )
             continue
 
-        filename = sanitize_product_filename(product_name, row_id)
+        filename = filename_from_oss_key(object_key)
         if not filename:
             log.warning(
-                f"[oss_download] skip id={row_id!r}: missing id (cannot build filename)"
+                f"[oss_download] skip id={row_id}: cannot derive filename "
+                f"from key={object_key!r}"
             )
             summary['skipped_invalid'] += 1
             continue
-        if filename.startswith('null_name_'):
-            summary['null_name'] = summary.get('null_name', 0) + 1
+
+        if filename in seen_names:
+            summary['skipped_duplicate'] += 1
             log.info(
-                f"[oss_download] empty product_name id={row_id} -> {filename}"
+                f"[oss_download] skip duplicate name id={row_id} "
+                f"key={object_key!r} already={seen_names[filename]}"
             )
+            continue
 
         seen_keys[object_key] = filename
+        seen_names[filename] = filename
         dest = download_dir / filename
 
         if skip_existing and dest.exists():
@@ -407,7 +427,6 @@ def download_rows_from_oss(
         f"skipped_existing={summary['skipped_existing']} "
         f"skipped_duplicate={summary['skipped_duplicate']} "
         f"skipped_invalid={summary['skipped_invalid']} "
-        f"null_name={summary.get('null_name', 0)} "
         f"failed={summary['failed']} / total={summary['total']} "
         f"unique_keys={len(seen_keys)}"
     )
