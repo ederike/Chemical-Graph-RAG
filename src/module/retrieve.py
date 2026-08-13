@@ -41,8 +41,9 @@ def add_retrieve_timing(a, b) -> dict:
 
 class Retrieve:
     """
-    三路检索（查询改写可选）：
+    三路检索（查询改写 / query instruct 可选）：
       0) LLM 将用户查询改写得更具体（可选）
+      0.5) 仅查询向量加 Qwen3 Instruct 前缀（文档侧不加）
       1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k（0=跳过）
       2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k（0=跳过）→ 映射所属 chunk
       3) 关键词精确匹配（可选 enable_keyword_exact；candidate/top 任一为 0 则跳过）：
@@ -379,6 +380,30 @@ class Retrieve:
         except Exception as e:
             self.logger.warning(f"[retrieve] query rewrite error: {e}")
             return original
+
+    def _query_instruct_text(self) -> str:
+        raw = getattr(self.config.retrieve, 'query_instruct', None)
+        return (raw or '').strip()
+
+    def _query_instruct_enabled(self) -> bool:
+        if not bool(getattr(self.config.retrieve, 'enable_query_instruct', True)):
+            return False
+        return bool(self._query_instruct_text())
+
+    def _apply_query_instruct(self, query: str) -> str:
+        """
+        Wrap the search query for Qwen3-Embedding only.
+        Documents are stored without this prefix; do not apply to rewrite /
+        keyword extract / rerank / answer prompts.
+        """
+        q = (query or '').strip()
+        if not q or not self._query_instruct_enabled():
+            return q
+        # Already wrapped (manual call or cached rewritten text).
+        if q.startswith('Instruct:'):
+            return q
+        instruct = self._query_instruct_text()
+        return f'Instruct: {instruct}\nQuery:{q}'
 
     def _keyword_extract_model_args(self) -> dict:
         """Merge retrieve.model_args + keyword_extract_model_args; default thinking off."""
@@ -1706,9 +1731,10 @@ class Retrieve:
 
         t0 = time.perf_counter()
         query_embedding = None
+        embed_query = self._apply_query_instruct(search_query)
         if need_vector:
             emb_resp = self.embedding.generate(
-                search_query,
+                embed_query,
                 model_args=self.config.retrieve.embedding_model_args,
                 use_cache=use_cache,
             )
@@ -1840,6 +1866,7 @@ class Retrieve:
         self.logger.info(
             f"[retrieve] multi-path "
             f"rewrite={rewritten!r} "
+            f"query_instruct={self._query_instruct_enabled()} "
             f"chunk_k={chunk_cand} node_k={node_cand} "
             f"keyword={enable_kw} kw_cand={kw_cand} kw_top={kw_top} "
             f"kw_minority={self.last_keyword.get('minority')!r} "

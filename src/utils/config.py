@@ -478,6 +478,12 @@ class RetrieveConfig(BaseModel):
         'temperature': 0.0,
     })
     enable_query_rewrite: bool = True
+    # Qwen3-Embedding query-side instruction (documents stay bare).
+    # Official format: "Instruct: {query_instruct}\nQuery:{query}"
+    enable_query_instruct: bool = True
+    query_instruct: str = (
+        "Given a web search query, retrieve relevant passages that answer the query"
+    )
     enable_recommendation_expand: bool = False
     enable_full_body_context: bool = False
 
@@ -504,6 +510,7 @@ class RetrieveConfig(BaseModel):
         "api_key", "base_url",
         "embedding_api_key", "embedding_base_url",
         "rerank_api_key", "rerank_base_url",
+        "query_instruct",
         mode="before",
     )
     @classmethod
