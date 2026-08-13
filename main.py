@@ -14,6 +14,11 @@ if __name__ == '__main__':
     # graph.chunk()
     # graph.extract()
     # graph.build()
+
+    # Rebuild VDB as HNSW (old L2 kept at DB/vdb_L2).
+    # clear 必须先做：SQLite 里 embedding_status 仍是 done，只 vectorization() 会处理 0 行。
+    # embedding 走缓存；耗时主要在 HNSW add_with_ids（build_*.log 里 index_add / index_build_summary）。
+    # graph.vectorization_clear()   
     # graph.vectorization()
 
     # graph.recommend()

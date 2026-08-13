@@ -36,7 +36,7 @@ class DHMF:
         }
 
         # shard_max_vectors: split FAISS into on-disk batches so vectorization
-        # peak RAM ≈ one shard (not the full multi-GB IndexFlat).
+        # peak RAM ≈ one shard (not the full multi-GB index).
         try:
             _shard_max = getattr(self.config.vectorization, 'shard_max_vectors', None)
             if _shard_max is not None:
@@ -44,12 +44,19 @@ class DHMF:
         except (TypeError, ValueError):
             _shard_max = None
         _dim = self.config.vectorization.dim
+        _vcfg = self.config.vectorization
+        _index_kwargs = {
+            'index_type': getattr(_vcfg, 'index_type', 'hnsw') or 'hnsw',
+            'hnsw_M': int(getattr(_vcfg, 'hnsw_M', 32) or 32),
+            'hnsw_efConstruction': int(getattr(_vcfg, 'hnsw_efConstruction', 200) or 200),
+            'hnsw_efSearch': int(getattr(_vcfg, 'hnsw_efSearch', 64) or 64),
+        }
         self.vdb = {
-            'doc': DocVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
-            'chunk': ChunkVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
-            'hyperedge': HyperedgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
-            'node': NodeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
-            'edge': EdgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max),
+            'doc': DocVDB(vdb_path, _dim, shard_max_vectors=_shard_max, **_index_kwargs),
+            'chunk': ChunkVDB(vdb_path, _dim, shard_max_vectors=_shard_max, **_index_kwargs),
+            'hyperedge': HyperedgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max, **_index_kwargs),
+            'node': NodeVDB(vdb_path, _dim, shard_max_vectors=_shard_max, **_index_kwargs),
+            'edge': EdgeVDB(vdb_path, _dim, shard_max_vectors=_shard_max, **_index_kwargs),
         }
 
         metrics_path = Path(self.config.settings.working_path) / 'DB' / 'build_metrics.json'
@@ -528,9 +535,23 @@ class DHMF:
         if finalize_metrics:
             self.log_metrics_summary()
 
-    def vectorization_clear(self,db_name):
+    def vectorization_clear(self, db_name=None):
+        """
+        Reset embedding_status → undone and wipe FAISS for one table, or for
+        all vectorization.default_target when db_name is None.
+
+        Required before rebuilding an index under a new backend (e.g. L2→HNSW):
+        SQLite still marks rows done, so a bare vectorization() would no-op.
+        """
         self.begin_build()
-        self.vectorization_module.clear(self.db[db_name],self.vdb[db_name])
+        if db_name is None:
+            db_name_list = list(self.config.vectorization.default_target or [])
+        else:
+            db_name_list = [db_name]
+        for name in db_name_list:
+            self.logger.info(f"Start vectorization_clear {name}.")
+            self.vectorization_module.clear(self.db[name], self.vdb[name])
+            self.logger.info(f"Finish vectorization_clear {name}.")
 
     def recommend(self):
         """Offline similar-hyperedge recommendation (clears then recomputes)."""

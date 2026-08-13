@@ -52,11 +52,23 @@ class Vectorization:
         with self._flush_io_lock:
             n = len(vdb_buf) if vdb_buf else 0
             if vdb_buf:
-                self.task_vdb.add(vdb_buf)
+                add_info = self.task_vdb.add(vdb_buf) or {}
+                add_s = float(add_info.get('add_seconds') or 0.0)
+                self._index_add_seconds += add_s
+                self._index_add_count += int(add_info.get('n') or n)
                 if db_buf:
                     self._pending_status.extend(db_buf)
                 self._vectors_since_save += n
                 self._flushed_count += n
+                # Per-batch HNSW/FAISS graph-build cost (add_with_ids wall time).
+                if add_s > 0 or n > 0:
+                    idx_type = getattr(self.task_vdb, 'index_type', '?')
+                    self.logger.info(
+                        f"[vectorization] index_add table={getattr(self.task_db, 'table', '?')} "
+                        f"index_type={idx_type} n={n} add_time={add_s:.3f}s "
+                        f"cum_add_time={self._index_add_seconds:.3f}s "
+                        f"cum_n={self._index_add_count}"
+                    )
 
             if force_checkpoint or self._vectors_since_save >= self.index_save_every:
                 self._checkpoint_disk()
@@ -104,6 +116,7 @@ class Vectorization:
         self._vectors_since_save = 0
         dt = time.perf_counter() - t0
         stats = ''
+        idx_type = getattr(self.task_vdb, 'index_type', '?')
         if hasattr(self.task_vdb, 'shard_stats'):
             try:
                 s = self.task_vdb.shard_stats()
@@ -116,10 +129,11 @@ class Vectorization:
             except Exception:
                 pass
         self.logger.info(
-            f"[vectorization] checkpoint table={table} "
+            f"[vectorization] checkpoint table={table} index_type={idx_type} "
             f"vecs_since_save={n_vecs} status_rows={n_status} "
             f"disk_time={dt:.2f}s sealed={sealed} "
-            f"total_flushed={self._flushed_count}{stats}"
+            f"total_flushed={self._flushed_count} "
+            f"cum_index_add_time={self._index_add_seconds:.3f}s{stats}"
         )
         # Drop peak memory after seal (and any temp page-cache pressure).
         gc.collect()
@@ -138,6 +152,10 @@ class Vectorization:
         self._flushed_count = 0
         self._pending_status = []
         self._vectors_since_save = 0
+        self._index_add_seconds = 0.0
+        self._index_add_count = 0
+        if hasattr(vdb, 'reset_index_timing'):
+            vdb.reset_index_timing()
 
         # Enable FAISS sharding: each progress batch writes one shard, seals,
         # unloads — peak RAM ≈ one batch, not the full multi-GB index.
@@ -146,6 +164,14 @@ class Vectorization:
             vdb.enable_sharding(int(smv))
 
         self.total_undone = self.task_db.count_by('embedding_status', 'undone')
+        idx_type = getattr(vdb, 'index_type', getattr(self.config.vectorization, 'index_type', '?'))
+        hnsw_info = ''
+        if str(idx_type).lower() == 'hnsw':
+            hnsw_info = (
+                f" hnsw_M={getattr(vdb, 'hnsw_M', '?')}"
+                f" efConstruction={getattr(vdb, 'hnsw_efConstruction', '?')}"
+                f" efSearch={getattr(vdb, 'hnsw_efSearch', '?')}"
+            )
         shard_info = ''
         if hasattr(vdb, 'shard_stats'):
             try:
@@ -163,6 +189,7 @@ class Vectorization:
             self.logger.info(
                 f"vectorization prepare: table={getattr(db, 'table', '?')} "
                 f"undone={self.total_undone} "
+                f"index_type={idx_type}{hnsw_info} "
                 f"progress_batch={self.shard_max_vectors} "
                 f"(page=flush=save=seal) "
                 f"api_batch={self.batch_size}×{self.config.vectorization.num_thread}"
@@ -171,7 +198,9 @@ class Vectorization:
         else:
             self.logger.info(
                 f"vectorization prepare: table={getattr(db, 'table', '?')} "
-                f"undone={self.total_undone} flush_every={self.flush_every} "
+                f"undone={self.total_undone} "
+                f"index_type={idx_type}{hnsw_info} "
+                f"flush_every={self.flush_every} "
                 f"index_save_every={self.index_save_every} "
                 f"task_page_size={self.task_page_size} "
                 f"batch_size={self.batch_size} "
@@ -189,9 +218,21 @@ class Vectorization:
         self._flush_buffers(db_buf, vdb_buf, force_checkpoint=True)
 
     def clear(self, db: BaseDB, vdb: BaseVDB):
-        """Reset embedding flags and wipe the vector index; do not delete SQL rows."""
-        db.update_key('embedding_status', None)
+        """Reset embedding flags and wipe the vector index; do not delete SQL rows.
+
+        Must set status to 'undone' (not NULL) so the next vectorization pass
+        re-selects all rows. Embeddings themselves are re-fetched from cache.
+        """
+        table = getattr(db, 'table', '?')
+        idx_type = getattr(vdb, 'index_type', '?')
+        db.update_key('embedding_status', 'undone')
         vdb.clear()
+        if hasattr(vdb, 'reset_index_timing'):
+            vdb.reset_index_timing()
+        self.logger.info(
+            f"[vectorization] clear table={table} index_type={idx_type} "
+            f"embedding_status→undone, vdb wiped"
+        )
 
     def __init__(self, logger: logging.Logger, config: Config):
         self.config = config
@@ -253,6 +294,8 @@ class Vectorization:
         self._flushed_count = 0
         self._pending_status = []
         self._vectors_since_save = 0
+        self._index_add_seconds = 0.0
+        self._index_add_count = 0
         self.total_undone = 0
         self.tasks = []  # kept for compatibility; pages are ephemeral
 
@@ -503,8 +546,30 @@ class Vectorization:
         # Final residual + forced disk checkpoint (SQLite status + FAISS file).
         self.save()
 
-        if self.metrics is not None:
-            self.metrics.finalize_stage_wall_time(
-                stage, time.perf_counter() - t_wall
+        wall_s = time.perf_counter() - t_wall
+        idx_type = getattr(self.task_vdb, 'index_type', '?')
+        # Prefer VDB cumulative timing if available (same source of truth).
+        add_s = self._index_add_seconds
+        add_n = self._index_add_count
+        if hasattr(self.task_vdb, 'index_add_seconds'):
+            add_s = float(getattr(self.task_vdb, 'index_add_seconds', 0.0) or add_s)
+            add_n = int(getattr(self.task_vdb, 'index_add_count', 0) or add_n)
+        per_1k = (add_s / add_n * 1000.0) if add_n else 0.0
+        hnsw_extra = ''
+        if str(idx_type).lower() == 'hnsw':
+            hnsw_extra = (
+                f" hnsw_M={getattr(self.task_vdb, 'hnsw_M', '?')}"
+                f" efConstruction={getattr(self.task_vdb, 'hnsw_efConstruction', '?')}"
+                f" efSearch={getattr(self.task_vdb, 'hnsw_efSearch', '?')}"
             )
+        self.logger.info(
+            f"[vectorization] index_build_summary table={table} "
+            f"index_type={idx_type}{hnsw_extra} "
+            f"vectors={add_n} index_add_time={add_s:.3f}s "
+            f"per_1k_vectors={per_1k:.3f}s wall_time={wall_s:.3f}s "
+            f"(index_add_time = FAISS add_with_ids / HNSW graph build)"
+        )
+
+        if self.metrics is not None:
+            self.metrics.finalize_stage_wall_time(stage, wall_s)
             self.metrics.log_stage(stage)

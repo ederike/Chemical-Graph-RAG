@@ -297,6 +297,15 @@ class VectorizationConfig(BaseModel):
     # Peak RAM ≈ N × dim × 4B (N=10000, dim=4096 → ~160MB).
     # None/0 = mono single-file index (legacy; grows unboundedly in RAM).
     shard_max_vectors: Optional[int] = None
+    # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
+    # HNSW does not support in-place remove_ids; rebuild via vectorization_clear.
+    index_type: str = "hnsw"
+    # HNSW graph degree (M). Higher = better recall, more RAM / build time.
+    hnsw_M: int = 32
+    # HNSW build-time search depth. Higher = better graph, slower build.
+    hnsw_efConstruction: int = 200
+    # HNSW query-time search depth. Higher = better recall, slower search.
+    hnsw_efSearch: int = 64
     # Legacy fine-tuning (auto-aligned to shard_max_vectors when it is set):
     flush_every: int = 1000
     index_save_every: Optional[int] = None
@@ -331,6 +340,47 @@ class VectorizationConfig(BaseModel):
         except (TypeError, ValueError):
             return None
         return n if n > 0 else None
+
+    @field_validator("index_type", mode="before")
+    @classmethod
+    def _index_type(cls, v):
+        s = str(v or "hnsw").strip().lower().replace("-", "_")
+        aliases = {
+            "l2": "flat_l2",
+            "flat": "flat_l2",
+            "flatl2": "flat_l2",
+            "indexflatl2": "flat_l2",
+            "hnswflat": "hnsw",
+            "hnsw_l2": "hnsw",
+        }
+        s = aliases.get(s, s)
+        if s not in ("flat_l2", "hnsw"):
+            return "hnsw"
+        return s
+
+    @field_validator("hnsw_M", mode="before")
+    @classmethod
+    def _hnsw_M(cls, v):
+        try:
+            return max(2, int(v))
+        except (TypeError, ValueError):
+            return 32
+
+    @field_validator("hnsw_efConstruction", mode="before")
+    @classmethod
+    def _hnsw_efc(cls, v):
+        try:
+            return max(1, int(v))
+        except (TypeError, ValueError):
+            return 200
+
+    @field_validator("hnsw_efSearch", mode="before")
+    @classmethod
+    def _hnsw_efs(cls, v):
+        try:
+            return max(1, int(v))
+        except (TypeError, ValueError):
+            return 64
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod

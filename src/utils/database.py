@@ -1,6 +1,7 @@
 import faiss
 import os
 import sqlite3
+import time
 from pathlib import Path
 import threading
 import numpy as np
@@ -191,10 +192,24 @@ class BaseVDB:
     unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
     (shard_max_vectors × dim × 4B), not the full corpus.
     Search merges all sealed + active; sealed shards are loaded one-by-one.
+
+    index_type:
+      flat_l2 — IndexFlatL2 (exact, full scan)
+      hnsw    — IndexHNSWFlat (approx ANN; build cost is add_with_ids)
     """
 
-    def __init__(self, vdb_path: str, vdb_name: str, vdb_dim: int,
-                 shard_max_vectors: int = None):
+    def __init__(
+        self,
+        vdb_path: str,
+        vdb_name: str,
+        vdb_dim: int,
+        shard_max_vectors: int = None,
+        *,
+        index_type: str = 'hnsw',
+        hnsw_M: int = 32,
+        hnsw_efConstruction: int = 200,
+        hnsw_efSearch: int = 64,
+    ):
         self.vdb_path = Path(vdb_path)
         self.vdb_name = vdb_name
         self.vdb_dim = vdb_dim
@@ -209,10 +224,47 @@ class BaseVDB:
         # self.vdb: FassiVDB | None — active (or sole mono) index handle
         self.vdb = None
 
+        # Index backend (used when creating empty indexes)
+        self.index_type = (index_type or 'hnsw').strip().lower()
+        if self.index_type not in ('flat_l2', 'hnsw'):
+            self.index_type = 'hnsw'
+        self.hnsw_M = max(2, int(hnsw_M or 32))
+        self.hnsw_efConstruction = max(1, int(hnsw_efConstruction or 200))
+        self.hnsw_efSearch = max(1, int(hnsw_efSearch or 64))
+        # Cumulative FAISS add_with_ids wall time (HNSW graph build cost).
+        self.index_add_seconds = 0.0
+        self.index_add_count = 0
+
         if shard_max_vectors is not None and int(shard_max_vectors) > 0:
             self.enable_sharding(int(shard_max_vectors))
         else:
             self.load()
+
+    def _make_faiss(self, path, *, create_empty: bool = True) -> "FassiVDB":
+        """Construct a FassiVDB handle with this store's index settings."""
+        return FassiVDB(
+            path,
+            self.vdb_dim,
+            create_empty=create_empty,
+            index_type=self.index_type,
+            hnsw_M=self.hnsw_M,
+            hnsw_efConstruction=self.hnsw_efConstruction,
+            hnsw_efSearch=self.hnsw_efSearch,
+        )
+
+    def index_stats(self) -> dict:
+        return {
+            'index_type': self.index_type,
+            'hnsw_M': self.hnsw_M,
+            'hnsw_efConstruction': self.hnsw_efConstruction,
+            'hnsw_efSearch': self.hnsw_efSearch,
+            'index_add_seconds': float(self.index_add_seconds),
+            'index_add_count': int(self.index_add_count),
+        }
+
+    def reset_index_timing(self):
+        self.index_add_seconds = 0.0
+        self.index_add_count = 0
 
     # ------------------------------------------------------------------ load / meta
     def load(self):
@@ -229,7 +281,7 @@ class BaseVDB:
         self._sealed = []
         self._active_name = None
         self.vdb_file_path = self.vdb_path / f'{self.vdb_name}.vdb'
-        self.vdb = FassiVDB(self.vdb_file_path, self.vdb_dim)
+        self.vdb = self._make_faiss(self.vdb_file_path)
 
     def enable_sharding(self, shard_max_vectors: int):
         """
@@ -311,6 +363,10 @@ class BaseVDB:
             'next_id': self._next_id,
             'sealed': list(self._sealed),
             'active': self._active_name,
+            'index_type': self.index_type,
+            'hnsw_M': self.hnsw_M,
+            'hnsw_efConstruction': self.hnsw_efConstruction,
+            'hnsw_efSearch': self.hnsw_efSearch,
         }
         p = self.shards_dir / 'meta.json'
         tmp = p.with_suffix('.json.tmp')
@@ -324,7 +380,7 @@ class BaseVDB:
         if self._active_name:
             path = self.shards_dir / self._active_name
             if path.exists() or create_if_missing:
-                self.vdb = FassiVDB(path, self.vdb_dim)
+                self.vdb = self._make_faiss(path)
                 self.vdb_file_path = path
                 return
         # New empty active shard.
@@ -332,7 +388,7 @@ class BaseVDB:
         self._next_id += 1
         self._active_name = name
         path = self.shards_dir / name
-        self.vdb = FassiVDB(path, self.vdb_dim)
+        self.vdb = self._make_faiss(path)
         self.vdb_file_path = path
         self._write_meta()
 
@@ -342,7 +398,7 @@ class BaseVDB:
         if self._sharding:
             self._open_active(create_if_missing=True)
         else:
-            self.vdb = FassiVDB(self.vdb_file_path, self.vdb_dim)
+            self.vdb = self._make_faiss(self.vdb_file_path)
 
     # ------------------------------------------------------------------ persist / rotate
     def save(self):
@@ -437,7 +493,7 @@ class BaseVDB:
                 # Cheap: open header only via full load is heavy; use faiss read.
                 # For logging we accept loading sealed once — callers rarely use ntotal.
                 try:
-                    tmp = FassiVDB(path, self.vdb_dim)
+                    tmp = self._make_faiss(path, create_empty=False)
                     n += tmp.ntotal
                     tmp.unload()
                 except Exception:
@@ -450,17 +506,23 @@ class BaseVDB:
         return self.vdb.ntotal
 
     def shard_stats(self) -> dict:
-        return {
+        out = {
             'sharding': self._sharding,
             'shard_max_vectors': self.shard_max_vectors,
             'sealed_count': len(self._sealed) if self._sharding else 0,
             'active': self._active_name,
             'active_ntotal': self.active_ntotal(),
         }
+        out.update(self.index_stats())
+        return out
 
-    def add(self, data_list: list):
+    def add(self, data_list: list) -> dict:
+        """
+        Add vectors to the active (or mono) index.
+        Returns {'n': int, 'add_seconds': float} for build-log timing.
+        """
         if data_list == []:
-            return
+            return {'n': 0, 'add_seconds': 0.0}
         ids = [data['id'] for data in data_list]
         # 兼容：embedding 可为 list/ndarray，或历史 JSON 字符串
         vecs = []
@@ -470,13 +532,15 @@ class BaseVDB:
                 emb = json.loads(emb)
             vecs.append(emb)
         vectors = np.asarray(vecs, dtype=np.float32)
-        # 幂等：只在 active 写分片上先删再加（热路径不能扫全部 sealed，
-        # 否则每批都会把历史大分片重新 load 进内存）。
-        # sealed 上的删改走 remove()（删文档等冷路径）。
+        # 幂等：flat_l2 可在 active 上先删再加。
+        # HNSW 不支持 remove_ids，必须 vectorization_clear 后整库重建。
         self._ensure_active()
-        if self.vdb is not None:
+        if self.vdb is not None and self.index_type != 'hnsw':
             self.vdb.remove(ids)
-        self.vdb.add(ids, vectors)
+        add_s = float(self.vdb.add(ids, vectors) or 0.0)
+        self.index_add_seconds += add_s
+        self.index_add_count += len(ids)
+        return {'n': len(ids), 'add_seconds': add_s}
 
     def search(self, vector: list, topk: int = 10):
         vector = np.array(vector, dtype=np.float32).reshape(1, -1)
@@ -513,7 +577,7 @@ class BaseVDB:
             path = self.shards_dir / name
             if not path.exists():
                 continue
-            tmp = FassiVDB(path, self.vdb_dim)
+            tmp = self._make_faiss(path, create_empty=False)
             try:
                 distances, ids = tmp.search(vector, topk)
                 _consume(distances, ids)
@@ -528,8 +592,14 @@ class BaseVDB:
         return [{'distance': d, 'id': i} for d, i in pairs]
 
     def remove(self, ids, persist: bool = True):
-        """Remove vectors by id list from active + all sealed shards."""
+        """Remove vectors by id list from active + all sealed shards.
+
+        HNSW does not implement remove_ids; returns 0 and leaves vectors in place.
+        For HNSW deletion / rebuild use vectorization_clear + vectorization.
+        """
         if not ids:
+            return 0
+        if self.index_type == 'hnsw':
             return 0
         n = 0
         if not self._sharding:
@@ -551,7 +621,7 @@ class BaseVDB:
             path = self.shards_dir / name
             if not path.exists():
                 continue
-            tmp = FassiVDB(path, self.vdb_dim)
+            tmp = self._make_faiss(path, create_empty=False)
             try:
                 r = tmp.remove(ids)
                 if r:
@@ -576,7 +646,7 @@ class BaseVDB:
             path = self.shards_dir / name
             if not path.exists():
                 continue
-            tmp = FassiVDB(path, self.vdb_dim)
+            tmp = self._make_faiss(path, create_empty=False)
             try:
                 if tmp.vdb is not None:
                     yield name, tmp.vdb
@@ -677,11 +747,36 @@ class SQLiteDB:
 
 
 class FassiVDB:
-    def __init__(self, vdb_path, vdb_dim, *, create_empty: bool = True):
+    """
+    Single FAISS index file handle.
+
+    index_type:
+      flat_l2 — IndexIDMap(IndexFlatL2)
+      hnsw    — IndexIDMap2(IndexHNSWFlat); graph is built during add_with_ids
+    """
+
+    def __init__(
+        self,
+        vdb_path,
+        vdb_dim,
+        *,
+        create_empty: bool = True,
+        index_type: str = 'hnsw',
+        hnsw_M: int = 32,
+        hnsw_efConstruction: int = 200,
+        hnsw_efSearch: int = 64,
+    ):
         self.vdb_path = Path(vdb_path)
         self.vdb_dim = vdb_dim
+        self.index_type = (index_type or 'hnsw').strip().lower()
+        if self.index_type not in ('flat_l2', 'hnsw'):
+            self.index_type = 'hnsw'
+        self.hnsw_M = max(2, int(hnsw_M or 32))
+        self.hnsw_efConstruction = max(1, int(hnsw_efConstruction or 200))
+        self.hnsw_efSearch = max(1, int(hnsw_efSearch or 64))
         self._lock = faiss_lock_for(self.vdb_path)
         self.vdb = None
+        self.last_add_seconds = 0.0
         self.load(create_empty=create_empty)
 
     @property
@@ -693,12 +788,39 @@ class FassiVDB:
         except Exception:
             return 0
 
+    def _apply_hnsw_search_params(self):
+        """Set efSearch on HNSW (wrapped or bare) after load / create."""
+        if self.vdb is None:
+            return
+        inner = getattr(self.vdb, 'index', None)
+        hnsw = None
+        if inner is not None and hasattr(inner, 'hnsw'):
+            hnsw = inner.hnsw
+        elif hasattr(self.vdb, 'hnsw'):
+            hnsw = self.vdb.hnsw
+        if hnsw is not None:
+            try:
+                hnsw.efSearch = int(self.hnsw_efSearch)
+            except Exception:
+                pass
+
+    def _create_empty_index(self):
+        """Build an empty FAISS index for the configured backend."""
+        if self.index_type == 'hnsw':
+            base = faiss.IndexHNSWFlat(int(self.vdb_dim), int(self.hnsw_M))
+            base.hnsw.efConstruction = int(self.hnsw_efConstruction)
+            base.hnsw.efSearch = int(self.hnsw_efSearch)
+            # IDMap2: supports reconstruct by id (recommend path).
+            return faiss.IndexIDMap2(base)
+        return faiss.IndexIDMap(faiss.IndexFlatL2(int(self.vdb_dim)))
+
     def load(self, *, create_empty: bool = True):
         if self.vdb_path.exists() and self.vdb_path.stat().st_size > 0:
             with self._lock:
                 self.vdb = faiss.read_index(str(self.vdb_path))
+            self._apply_hnsw_search_params()
         elif self.vdb_dim is not None and create_empty:
-            self.vdb = faiss.IndexIDMap(faiss.IndexFlatL2(self.vdb_dim))
+            self.vdb = self._create_empty_index()
             self.save()
         else:
             self.vdb = None
@@ -742,25 +864,39 @@ class FassiVDB:
                     pass
         self.load(create_empty=True)
 
-    def add(self, ids, items):
+    def add(self, ids, items) -> float:
+        """
+        Add vectors with ids. For HNSW this is the graph-construction cost.
+        Returns wall seconds spent in add_with_ids.
+        """
         if self.vdb is None:
-            return
+            self.last_add_seconds = 0.0
+            return 0.0
+        id_array = np.array(ids, dtype=np.int64)
+        t0 = time.perf_counter()
         with self._lock:
-            self.vdb.add_with_ids(items, np.array(ids, dtype=np.int64))
+            self.vdb.add_with_ids(items, id_array)
+        self.last_add_seconds = time.perf_counter() - t0
+        return self.last_add_seconds
 
     def remove(self, ids):
-        """Remove vectors by ids. Returns number of vectors removed."""
+        """Remove vectors by ids. Returns number removed; 0 if unsupported (HNSW)."""
         if self.vdb is None or not ids:
             return 0
         id_array = np.array(list(ids), dtype=np.int64)
         with self._lock:
-            selector = faiss.IDSelectorBatch(id_array)
-            removed = self.vdb.remove_ids(selector)
-        return int(removed)
+            try:
+                selector = faiss.IDSelectorBatch(id_array)
+                removed = self.vdb.remove_ids(selector)
+                return int(removed)
+            except RuntimeError:
+                # IndexHNSWFlat does not implement remove_ids.
+                return 0
 
     def search(self, item, topk):
         if self.vdb is None:
             return None, None
         with self._lock:
+            self._apply_hnsw_search_params()
             distances, ids = self.vdb.search(item, topk)
         return distances, ids
