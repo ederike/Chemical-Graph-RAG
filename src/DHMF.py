@@ -158,7 +158,37 @@ class DHMF:
         self.ensure_build_logger()
         self.metrics.end_pipeline()
 
-    def download_from_oss(self, limit=None, file_type=None, skip_existing: bool = True):
+    def _oss_download_dir(self) -> Path:
+        oss_cfg = getattr(self.config, 'oss_download', None)
+        download_subdir = (
+            getattr(oss_cfg, 'download_dir', None)
+            or getattr(self.config.doc, 'doc_dir', 'doc')
+            or 'doc'
+        )
+        return Path(self.config.settings.working_path) / download_subdir
+
+    def dedupe_downloaded_docs(self, dry_run: bool = False):
+        """
+        Delete byte-identical PDFs under working_path/doc, keep one per content MD5.
+        Use after a previous download that named the same OSS object as many files.
+        """
+        from .utils.oss_download import dedupe_local_pdfs
+
+        download_dir = self._oss_download_dir()
+        self.logger.info(f"Start dedupe_downloaded_docs: dir={download_dir}")
+        summary = dedupe_local_pdfs(
+            download_dir, dry_run=dry_run, logger=self.logger
+        )
+        self.logger.info(f"Finish dedupe_downloaded_docs: {summary}")
+        return summary
+
+    def download_from_oss(
+        self,
+        limit=None,
+        file_type=None,
+        skip_existing: bool = True,
+        dedupe_local: bool = True,
+    ):
         """
         Query spider_product (dm_data_mysql) and download OSS objects into working_path/doc.
 
@@ -167,11 +197,14 @@ class DHMF:
         Args:
             limit: max rows; 0 or None uses config.oss_download.limit
                    (0 in config = no limit). Function arg wins when not None.
-            file_type: 1=TDS, 2=MSDS, 'all'=both; None → config.oss_download.file_type
+            file_type: 1=TDS, 2=MSDS, 'all'=both; None → config.oss_download.file_type.
+                      Ignored (download all) when the table has no `type` column.
             skip_existing: skip when local {product_name}_{id}.pdf already exists
+            dedupe_local: after download, delete byte-identical local PDFs (same OSS
+                          object previously saved under many row ids)
 
         Returns:
-            summary dict from download_rows_from_oss
+            summary dict from download_rows_from_oss (plus local_dedupe if run)
         """
         from .utils.oss_download import fetch_spider_products, download_rows_from_oss
 
@@ -189,16 +222,11 @@ class DHMF:
             file_type = getattr(oss_cfg, 'file_type', 'all') if oss_cfg else 'all'
 
         table = getattr(oss_cfg, 'table', 'spider_product') if oss_cfg else 'spider_product'
-        download_subdir = (
-            getattr(oss_cfg, 'download_dir', None)
-            or getattr(self.config.doc, 'doc_dir', 'doc')
-            or 'doc'
-        )
         bucket_key = (
             getattr(oss_cfg, 'bucket_key', 'ky-products-files')
             if oss_cfg else 'ky-products-files'
         )
-        download_dir = Path(self.config.settings.working_path) / download_subdir
+        download_dir = self._oss_download_dir()
 
         self.logger.info(
             f"Start download_from_oss: dir={download_dir}, "
@@ -220,6 +248,8 @@ class DHMF:
             skip_existing=skip_existing,
             logger=self.logger,
         )
+        if dedupe_local:
+            summary['local_dedupe'] = self.dedupe_downloaded_docs()
         self.logger.info(f"Finish download_from_oss: {summary}")
         return summary
 
@@ -254,6 +284,11 @@ class DHMF:
         """
         self.begin_build()
         self.logger.info("Start PDF recognition before insert (source: working_path/doc).")
+
+        # Same OSS object may already exist as 碳酸钙粉末_3985.pdf / _3986.pdf / ...
+        # Collapse them first so recognition does not send copies to the VLM.
+        if pdf_paths is None:
+            self.dedupe_downloaded_docs()
 
         if pdf_paths is None:
             all_pdfs = self.doc_module.list_pdf_files()

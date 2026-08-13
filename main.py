@@ -8,14 +8,14 @@ if __name__ == '__main__':
     config = Config.from_yaml('example/a/config_open.yaml')
     graph = DHMF(config)
 
-    # graph.download_from_oss()
-    # graph.insert_default()
-    # graph.summary()
-    # graph.chunk()
-    # graph.extract()
-    # graph.build()
+    graph.download_from_oss()
+    graph.insert_default()
+    graph.summary()
+    graph.chunk()
+    graph.extract()
+    graph.build()
 
-    graph.vectorization_clear()   
+    # graph.vectorization_clear()
     graph.vectorization()
 
     # graph.recommend()

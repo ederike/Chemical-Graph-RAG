@@ -22,4 +22,5 @@ benchmark_results_old/
 docs/
 .vscode/
 rules/
+benchmark_results_2k/
 cache_2k/

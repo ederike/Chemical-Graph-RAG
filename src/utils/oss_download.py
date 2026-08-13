@@ -4,6 +4,7 @@ Used by DHMF.download_from_oss(); does not run PDF recognition.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -13,6 +14,109 @@ logger_default = logging.getLogger(__name__)
 
 # Characters illegal in filenames on common OSes
 _ILLEGAL_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+def _oss_object_key(oss_url: Any) -> str:
+    """Normalize oss_url to an object key (strip scheme/host if a full URL)."""
+    raw = (str(oss_url) if oss_url is not None else '').strip()
+    if not raw:
+        return ''
+    # Full URL → path after host; otherwise treat as key.
+    if '://' in raw:
+        without_scheme = raw.split('://', 1)[1]
+        slash = without_scheme.find('/')
+        raw = without_scheme[slash + 1:] if slash >= 0 else ''
+    return raw.lstrip('/')
+
+
+def _file_md5(path: Path, chunk: int = 1024 * 1024) -> str:
+    h = hashlib.md5()
+    with open(path, 'rb') as f:
+        while True:
+            buf = f.read(chunk)
+            if not buf:
+                break
+            h.update(buf)
+    return h.hexdigest()
+
+
+def _keep_key_for_dup_pdf(path: Path) -> tuple:
+    """Prefer the earliest numeric id suffix (碳酸钙粉末_3985.pdf)."""
+    stem = path.stem
+    if '_' in stem:
+        tail = stem.rsplit('_', 1)[-1]
+        if tail.isdigit():
+            return (0, int(tail), path.name)
+    return (1, 0, path.name)
+
+
+def dedupe_local_pdfs(
+    download_dir: Path,
+    *,
+    dry_run: bool = False,
+    logger: logging.Logger = None,
+) -> dict:
+    """
+    Collapse already-downloaded PDFs that are byte-identical.
+
+    Keeps one file per content MD5 (smallest numeric name suffix), deletes the rest.
+    Safe to run before insert so recognition does not send copies to the VLM.
+    """
+    log = logger or logger_default
+    download_dir = Path(download_dir)
+    summary = {
+        'scanned': 0,
+        'unique': 0,
+        'deleted': 0,
+        'kept': [],
+        'removed': [],
+    }
+    if not download_dir.is_dir():
+        return summary
+
+    files = sorted(
+        [p for p in download_dir.iterdir() if p.is_file() and p.suffix.lower() == '.pdf'],
+        key=lambda p: p.name,
+    )
+    summary['scanned'] = len(files)
+    groups: Dict[str, List[Path]] = {}
+    for p in files:
+        try:
+            digest = _file_md5(p)
+        except OSError as e:
+            log.warning(f"[oss_download] skip hash {p.name}: {e}")
+            continue
+        groups.setdefault(digest, []).append(p)
+
+    summary['unique'] = len(groups)
+    for digest, paths in groups.items():
+        if len(paths) <= 1:
+            continue
+        keep = min(paths, key=_keep_key_for_dup_pdf)
+        for p in paths:
+            if p == keep:
+                continue
+            summary['removed'].append(p.name)
+            if not dry_run:
+                try:
+                    p.unlink()
+                    summary['deleted'] += 1
+                except OSError as e:
+                    log.warning(f"[oss_download] failed to delete dup {p.name}: {e}")
+            else:
+                summary['deleted'] += 1
+        summary['kept'].append(keep.name)
+        log.info(
+            f"[oss_download] local dup md5={digest[:10]}… keep={keep.name} "
+            f"drop={len(paths) - 1}"
+        )
+
+    log.info(
+        f"[oss_download] local dedupe: scanned={summary['scanned']} "
+        f"unique={summary['unique']} deleted={summary['deleted']}"
+        f"{' (dry_run)' if dry_run else ''}"
+    )
+    return summary
+
 
 def sanitize_product_filename(product_name: str, row_id: Any) -> Optional[str]:
     """
@@ -75,6 +179,18 @@ def _get_bucket_conf(ali_oss: dict, bucket_key: str) -> dict:
         )
     return conf
 
+def _mysql_table_columns(cur, table: str) -> set:
+    """Return lowercase column names for `table` (current database)."""
+    # SHOW COLUMNS is portable and does not require information_schema grants.
+    cur.execute(f"SHOW COLUMNS FROM `{table}`")
+    cols = set()
+    for row in cur.fetchall() or []:
+        name = row.get('Field') if isinstance(row, dict) else (row[0] if row else None)
+        if name:
+            cols.add(str(name).lower())
+    return cols
+
+
 def fetch_spider_products(
     mysql_conf: Any,
     *,
@@ -84,7 +200,12 @@ def fetch_spider_products(
     logger: logging.Logger = None,
 ) -> List[Dict[str, Any]]:
     """
-    SELECT from spider_product where is_delete=0, optional type filter,
+    SELECT downloadable rows from `table`.
+
+    Optional columns are used only when they exist:
+      - is_delete: WHERE is_delete = 0
+      - type: AND type = file_type (1/2). Missing column → no type filter, download all.
+    Required: id, product_name, oss_url.
     ORDER BY id ASC. limit<=0 means no LIMIT.
     """
     log = logger or logger_default
@@ -108,24 +229,6 @@ def fetch_spider_products(
     port = int(port or 3306)
     type_filter = _normalize_file_type(file_type)
 
-    sql = (
-        f"SELECT id, product_name, oss_url, type, is_delete "
-        f"FROM `{table}` WHERE is_delete = 0"
-    )
-    params: list = []
-    if type_filter is not None:
-        sql += " AND type = %s"
-        params.append(type_filter)
-    sql += " ORDER BY id ASC"
-    if limit is not None and int(limit) > 0:
-        sql += " LIMIT %s"
-        params.append(int(limit))
-
-    log.info(
-        f"[oss_download] query {table}: type={type_filter if type_filter is not None else 'all'}, "
-        f"limit={limit if limit and int(limit) > 0 else 'none'}, host={host}/{db}"
-    )
-
     conn = pymysql.connect(
         host=host,
         port=port,
@@ -139,6 +242,47 @@ def fetch_spider_products(
     )
     try:
         with conn.cursor() as cur:
+            columns = _mysql_table_columns(cur, table)
+            required = ('id', 'product_name', 'oss_url')
+            missing = [c for c in required if c not in columns]
+            if missing:
+                raise ValueError(
+                    f"table `{table}` missing required column(s) {missing}; "
+                    f"have {sorted(columns)}"
+                )
+
+            select_cols = list(required)
+            for extra in ('type', 'is_delete'):
+                if extra in columns:
+                    select_cols.append(extra)
+
+            sql = f"SELECT {', '.join(select_cols)} FROM `{table}`"
+            where: list = []
+            params: list = []
+            if 'is_delete' in columns:
+                where.append("is_delete = 0")
+            if type_filter is not None and 'type' in columns:
+                where.append("type = %s")
+                params.append(type_filter)
+            elif type_filter is not None and 'type' not in columns:
+                log.info(
+                    f"[oss_download] table `{table}` has no `type` column; "
+                    f"ignore file_type={file_type!r}, download all"
+                )
+                type_filter = None
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY id ASC"
+            if limit is not None and int(limit) > 0:
+                sql += " LIMIT %s"
+                params.append(int(limit))
+
+            log.info(
+                f"[oss_download] query {table}: type="
+                f"{type_filter if type_filter is not None else 'all'}, "
+                f"limit={limit if limit and int(limit) > 0 else 'none'}, "
+                f"host={host}/{db}"
+            )
             cur.execute(sql, params)
             rows = list(cur.fetchall() or [])
     finally:
@@ -157,7 +301,10 @@ def download_rows_from_oss(
     logger: logging.Logger = None,
 ) -> dict:
     """
-    Download each row's oss_url object key into download_dir as {product_name}_{id}.pdf.
+    Download each unique oss_url once into download_dir as {product_name}_{id}.pdf.
+
+    Same object key appearing on many MySQL rows is downloaded only for the
+    first row (ORDER BY id ASC). Later rows are skipped as skipped_duplicate.
     product_name 为空时用 null_name_{id}.pdf，不跳过。
     Skip when id 无效、oss_url empty, or local file already exists.
     Returns summary dict.
@@ -191,18 +338,37 @@ def download_rows_from_oss(
         'total': len(rows),
         'downloaded': 0,
         'skipped_existing': 0,
+        'skipped_duplicate': 0,
         'skipped_invalid': 0,
         'null_name': 0,
         'failed': 0,
         'files': [],
     }
 
+    # object_key → first local filename (so later rows of the same file are skipped)
+    seen_keys: Dict[str, str] = {}
+
     for row in rows:
         row_id = row.get('id')
         product_name = row.get('product_name')
-        oss_url = (row.get('oss_url') or '').strip()
-        filename = sanitize_product_filename(product_name, row_id)
+        object_key = _oss_object_key(row.get('oss_url'))
 
+        if not object_key:
+            log.warning(
+                f"[oss_download] skip id={row_id}: empty oss_url"
+            )
+            summary['skipped_invalid'] += 1
+            continue
+
+        if object_key in seen_keys:
+            summary['skipped_duplicate'] += 1
+            log.info(
+                f"[oss_download] skip duplicate key id={row_id} "
+                f"key={object_key!r} already={seen_keys[object_key]}"
+            )
+            continue
+
+        filename = sanitize_product_filename(product_name, row_id)
         if not filename:
             log.warning(
                 f"[oss_download] skip id={row_id!r}: missing id (cannot build filename)"
@@ -214,15 +380,8 @@ def download_rows_from_oss(
             log.info(
                 f"[oss_download] empty product_name id={row_id} -> {filename}"
             )
-        if not oss_url:
-            log.warning(
-                f"[oss_download] skip id={row_id}: empty oss_url"
-            )
-            summary['skipped_invalid'] += 1
-            continue
 
-        # oss_url is object key, e.g. tds/4e6495f1....pdf
-        object_key = oss_url.lstrip('/')
+        seen_keys[object_key] = filename
         dest = download_dir / filename
 
         if skip_existing and dest.exists():
@@ -246,8 +405,10 @@ def download_rows_from_oss(
     log.info(
         f"[oss_download] done: downloaded={summary['downloaded']} "
         f"skipped_existing={summary['skipped_existing']} "
+        f"skipped_duplicate={summary['skipped_duplicate']} "
         f"skipped_invalid={summary['skipped_invalid']} "
         f"null_name={summary.get('null_name', 0)} "
-        f"failed={summary['failed']} / total={summary['total']}"
+        f"failed={summary['failed']} / total={summary['total']} "
+        f"unique_keys={len(seen_keys)}"
     )
     return summary

@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | all
-  mode: generate
+  mode: report
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -18,21 +18,21 @@ paths:
   eval_questions_filename: questions_subject.json
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: evals_subject.json
+  eval_results_filename: evals_subject_768_fp16.json
   eval_results_path: null
 
   # report 读入
-  report_source_filename: evals_nosubject.json
+  report_source_filename: evals_subject_768_fp16.json
   report_source_path: null
   # report 写出
-  report_filename: report_nosubject.json
+  report_filename: report_subject_768_fp16.json
   report_path: null
 
 generate:
   hop_counts:
-    "1": 0
+    "1": 100
     "2": 0
-    '3': 1
+    '3': 0
   seed: 44
   max_chars_per_doc: -1
   max_retries: 3
