@@ -620,6 +620,17 @@ class OssDownloadConfig(BaseModel):
     limit: int = 0
     download_dir: str = 'doc'
     bucket_key: str = 'ky-products-files'
+    # Parallel GET workers. 1 = serial. OSS is latency-bound; 16–32 is typical.
+    num_thread: int = 16
+
+    @field_validator("num_thread", mode="before")
+    @classmethod
+    def _num_thread(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 16
+        return max(1, n)
 
 class Config(BaseModel):
     settings: SettingsConfig

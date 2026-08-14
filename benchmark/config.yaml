@@ -8,7 +8,7 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: benchmark_results_new-prompt
+  output_dir: benchmark_results_2k
 
   # generate 写出
   questions_filename: questions_1.json
@@ -18,14 +18,14 @@ paths:
   eval_questions_filename: questions_subject.json
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: evals_subject_768_fp16.json
+  eval_results_filename: evals_subject_768_fp32_hnsw.json
   eval_results_path: null
-
+  
   # report 读入
-  report_source_filename: evals_subject_768_fp16.json
+  report_source_filename: evals_subject_768_fp32_hnsw.json
   report_source_path: null
   # report 写出
-  report_filename: report_subject_768_fp16.json
+  report_filename: report_subject_768_fp32_hnsw.json
   report_path: null
 
 generate:

@@ -6,9 +6,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from tqdm import tqdm
+
+from .utils import TQDM_BAR_FORMAT
 
 logger_default = logging.getLogger(__name__)
 
@@ -315,6 +322,7 @@ def download_rows_from_oss(
     bucket_key: str = 'ky-products-files',
     download_dir: Path,
     skip_existing: bool = True,
+    num_thread: int = 16,
     logger: logging.Logger = None,
 ) -> dict:
     """
@@ -323,6 +331,7 @@ def download_rows_from_oss(
 
     Same object key / same basename → one file. Later rows skipped_duplicate.
     skip_existing: dest already on disk (works across tables / reruns).
+    num_thread: parallel GET workers (1 = serial).
     Returns summary dict.
     """
     log = logger or logger_default
@@ -344,8 +353,21 @@ def download_rows_from_oss(
             f"Incomplete OSS config for {bucket_key}: need ACCESS_KEY, SECRET_KEY, END_POINT, BUCKET_NAME"
         )
 
+    try:
+        workers = max(1, int(num_thread or 1))
+    except (TypeError, ValueError):
+        workers = 16
+
     auth = oss2.Auth(access_key, secret_key)
-    bucket = oss2.Bucket(auth, endpoint, bucket_name)
+    # oss2.Bucket is not documented as thread-safe; one client per worker thread.
+    tls = threading.local()
+
+    def _thread_bucket():
+        b = getattr(tls, 'bucket', None)
+        if b is None:
+            b = oss2.Bucket(auth, endpoint, bucket_name)
+            tls.bucket = b
+        return b
 
     download_dir = Path(download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
@@ -358,11 +380,12 @@ def download_rows_from_oss(
         'skipped_invalid': 0,
         'failed': 0,
         'files': [],
+        'num_thread': workers,
     }
 
-    # object_key / dest name → first local filename (same file skipped later)
     seen_keys: Dict[str, str] = {}
     seen_names: Dict[str, str] = {}
+    jobs: List[Tuple[Any, str, Path]] = []  # (row_id, object_key, dest)
 
     for row in rows:
         row_id = row.get('id')
@@ -377,7 +400,7 @@ def download_rows_from_oss(
 
         if object_key in seen_keys:
             summary['skipped_duplicate'] += 1
-            log.info(
+            log.debug(
                 f"[oss_download] skip duplicate key id={row_id} "
                 f"key={object_key!r} already={seen_keys[object_key]}"
             )
@@ -394,7 +417,7 @@ def download_rows_from_oss(
 
         if filename in seen_names:
             summary['skipped_duplicate'] += 1
-            log.info(
+            log.debug(
                 f"[oss_download] skip duplicate name id={row_id} "
                 f"key={object_key!r} already={seen_names[filename]}"
             )
@@ -405,21 +428,83 @@ def download_rows_from_oss(
         dest = download_dir / filename
 
         if skip_existing and dest.exists():
-            log.info(f"[oss_download] skip existing: {dest.name}")
+            log.debug(f"[oss_download] skip existing: {dest.name}")
             summary['skipped_existing'] += 1
             continue
 
+        jobs.append((row_id, object_key, dest))
+
+    def _download_one(job: Tuple[Any, str, Path]):
+        row_id, object_key, dest = job
+        # Recheck on the worker: another thread / previous run may have written dest.
+        if skip_existing and dest.exists():
+            return 'skip', dest, None
+        tmp = dest.with_name(dest.name + f'.{os.getpid()}.{threading.get_ident()}.tmp')
         try:
-            log.info(
-                f"[oss_download] download id={row_id} key={object_key!r} -> {dest.name}"
-            )
-            bucket.get_object_to_file(object_key, str(dest))
+            _thread_bucket().get_object_to_file(object_key, str(tmp))
+            os.replace(str(tmp), str(dest))
+            return 'ok', dest, None
+        except Exception as e:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            return 'fail', dest, (row_id, object_key, e)
+
+    log.info(
+        f"[oss_download] start downloads={len(jobs)} "
+        f"threads={workers} unique_keys={len(seen_keys)} "
+        f"already_on_disk={summary['skipped_existing']} "
+        f"dup_rows={summary['skipped_duplicate']}"
+    )
+
+    bar = tqdm(
+        total=len(jobs),
+        desc='oss_download',
+        unit='file',
+        bar_format=TQDM_BAR_FORMAT,
+    )
+    try:
+        results = []
+        n_ok = 0
+        n_fail = 0
+        n_skip = 0
+
+        def _note(r):
+            nonlocal n_ok, n_fail, n_skip
+            results.append(r)
+            if r[0] == 'ok':
+                n_ok += 1
+            elif r[0] == 'skip':
+                n_skip += 1
+            else:
+                n_fail += 1
+            bar.update(1)
+            bar.set_postfix(ok=n_ok, skip=n_skip, fail=n_fail)
+
+        if workers <= 1 or len(jobs) <= 1:
+            for j in jobs:
+                _note(_download_one(j))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_download_one, j) for j in jobs]
+                for fut in as_completed(futures):
+                    _note(fut.result())
+    finally:
+        bar.close()
+
+    for status, dest, err in results:
+        if status == 'ok':
             summary['downloaded'] += 1
             summary['files'].append(str(dest))
-        except Exception as e:
+        elif status == 'skip':
+            summary['skipped_existing'] += 1
+        else:
             summary['failed'] += 1
+            row_id, object_key, exc = err
             log.error(
-                f"[oss_download] failed id={row_id} key={object_key!r}: {e}"
+                f"[oss_download] failed id={row_id} key={object_key!r}: {exc}"
             )
 
     log.info(
@@ -428,6 +513,6 @@ def download_rows_from_oss(
         f"skipped_duplicate={summary['skipped_duplicate']} "
         f"skipped_invalid={summary['skipped_invalid']} "
         f"failed={summary['failed']} / total={summary['total']} "
-        f"unique_keys={len(seen_keys)}"
+        f"unique_keys={len(seen_keys)} threads={workers}"
     )
     return summary

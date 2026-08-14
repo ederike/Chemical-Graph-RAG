@@ -188,6 +188,7 @@ class DHMF:
         file_type=None,
         skip_existing: bool = True,
         dedupe_local: bool = True,
+        num_thread=None,
     ):
         """
         Query spider_product (dm_data_mysql) and download OSS objects into working_path/doc.
@@ -202,6 +203,7 @@ class DHMF:
             skip_existing: skip when local file named after the OSS object already exists
             dedupe_local: after download, delete byte-identical local PDFs (legacy
                           {product}_{id}.pdf copies of the same object)
+            num_thread: parallel OSS GET workers; None → config.oss_download.num_thread
 
         Returns:
             summary dict from download_rows_from_oss (plus local_dedupe if run)
@@ -227,10 +229,18 @@ class DHMF:
             if oss_cfg else 'ky-products-files'
         )
         download_dir = self._oss_download_dir()
+        if num_thread is None:
+            try:
+                num_thread = int(getattr(oss_cfg, 'num_thread', 16) or 16)
+            except (TypeError, ValueError):
+                num_thread = 16
+        else:
+            num_thread = max(1, int(num_thread))
 
         self.logger.info(
             f"Start download_from_oss: dir={download_dir}, "
-            f"file_type={file_type}, limit={limit if limit > 0 else 'none'}"
+            f"file_type={file_type}, limit={limit if limit > 0 else 'none'}, "
+            f"num_thread={num_thread}"
         )
 
         rows = fetch_spider_products(
@@ -246,6 +256,7 @@ class DHMF:
             bucket_key=bucket_key,
             download_dir=download_dir,
             skip_existing=skip_existing,
+            num_thread=num_thread,
             logger=self.logger,
         )
         if dedupe_local:
