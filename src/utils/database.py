@@ -216,6 +216,8 @@ class BaseVDB:
     Deletion: FAISS HNSW has no remove_ids. remove() records tombstone ids
     (sidecar deleted.json) and search() drops them. The HNSW graph is unchanged;
     no rebuild. Re-adding an id clears its tombstone. clear() wipes tombstones.
+    compact() is manual only: rewrite live vectors, then drop tombstones.
+    Skip when the store has no tombstones. Never runs from delete() / search().
     """
 
     def __init__(
@@ -825,6 +827,166 @@ class BaseVDB:
                 self._save_deleted()
         return added
 
+    def _index_tombstone_hits(self, index) -> dict:
+        ntot = 0
+        hits = 0
+        if index is None:
+            return {'ntotal': 0, 'tombstone_hits': 0}
+        try:
+            ntot = int(getattr(index, 'ntotal', 0) or 0)
+        except Exception:
+            ntot = 0
+        try:
+            id_map = faiss.vector_to_array(index.id_map)
+        except Exception:
+            return {'ntotal': ntot, 'tombstone_hits': 0}
+        deleted = self._deleted
+        for nid in id_map:
+            try:
+                i = int(nid)
+            except (TypeError, ValueError):
+                continue
+            if i >= 0 and i in deleted:
+                hits += 1
+        return {'ntotal': ntot, 'tombstone_hits': int(hits)}
+
+    def deleted_stats(self, *, per_shard: bool = True) -> dict:
+        """Tombstone count / ratio. per_shard opens each shard to count hits."""
+        ntot = int(self.ntotal or 0)
+        ndel = len(self._deleted)
+        if ntot > 0:
+            ratio = ndel / ntot
+        else:
+            ratio = 1.0 if ndel else 0.0
+        out = {
+            'name': self.vdb_name,
+            'sharding': bool(self._sharding),
+            'ntotal': ntot,
+            'deleted_count': ndel,
+            'deleted_ratio': float(ratio),
+            'has_tombstones': ndel > 0,
+            'shards': [],
+        }
+        if not per_shard:
+            return out
+
+        if not self._sharding:
+            idx = self.vdb.vdb if self.vdb is not None else None
+            one = self._index_tombstone_hits(idx)
+            out['shards'].append({'shard': 'mono', **one})
+            return out
+
+        if self.vdb is not None and self.vdb.vdb is not None:
+            one = self._index_tombstone_hits(self.vdb.vdb)
+            out['shards'].append({
+                'shard': self._active_name or 'active',
+                **one,
+            })
+        for name in list(self._sealed):
+            if self._active_name and name == self._active_name:
+                continue
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = self._make_faiss(path, create_empty=False)
+            try:
+                idx = tmp.vdb if tmp is not None else None
+                one = self._index_tombstone_hits(idx)
+            finally:
+                tmp.unload()
+            out['shards'].append({'shard': name, **one})
+        return out
+
+    def compact(self, *, batch_size: int = 8192) -> dict:
+        """
+        Manual rewrite from live vectors only, then clear tombstones.
+
+        Skip when this store has no tombstones. Shards with no tombstone
+        hits are left untouched. Does not re-embed. Not called automatically.
+        """
+        try:
+            batch_size = max(256, int(batch_size or 8192))
+        except (TypeError, ValueError):
+            batch_size = 8192
+
+        stats = self.deleted_stats(per_shard=False)
+        summary = {
+            'name': self.vdb_name,
+            'skipped': False,
+            'reason': '',
+            'ntotal_before': stats['ntotal'],
+            'deleted_before': stats['deleted_count'],
+            'deleted_ratio': stats['deleted_ratio'],
+            'shards': [],
+            'kept': 0,
+            'dropped': 0,
+            'rewritten': 0,
+        }
+        if stats['deleted_count'] <= 0:
+            summary['skipped'] = True
+            summary['reason'] = 'no_tombstones'
+            return summary
+
+        is_live = self._live_id
+
+        if not self._sharding:
+            self._ensure_active()
+            one = self.vdb.compact_live(is_live, batch_size=batch_size)
+            summary['shards'].append({'shard': 'mono', **one})
+            summary['kept'] += int(one.get('kept') or 0)
+            summary['dropped'] += int(one.get('dropped') or 0)
+            if one.get('rewritten'):
+                summary['rewritten'] += 1
+            self._clear_deleted()
+            summary['ntotal_after'] = int(self.vdb.ntotal if self.vdb else 0)
+            summary['deleted_after'] = 0
+            return summary
+
+        # Active
+        if self.vdb is not None and self.vdb.vdb is not None:
+            one = self.vdb.compact_live(is_live, batch_size=batch_size)
+            summary['shards'].append({
+                'shard': self._active_name or 'active',
+                **one,
+            })
+            summary['kept'] += int(one.get('kept') or 0)
+            summary['dropped'] += int(one.get('dropped') or 0)
+            if one.get('rewritten'):
+                summary['rewritten'] += 1
+
+        still_sealed = []
+        for name in list(self._sealed):
+            if self._active_name and name == self._active_name:
+                still_sealed.append(name)
+                continue
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = self._make_faiss(path, create_empty=False)
+            try:
+                one = tmp.compact_live(is_live, batch_size=batch_size)
+            finally:
+                tmp.unload()
+            summary['shards'].append({'shard': name, **one})
+            summary['kept'] += int(one.get('kept') or 0)
+            summary['dropped'] += int(one.get('dropped') or 0)
+            if one.get('rewritten'):
+                summary['rewritten'] += 1
+            if int(one.get('kept') or 0) == 0 and one.get('rewritten'):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+                continue
+            still_sealed.append(name)
+
+        self._sealed = still_sealed
+        self._write_meta()
+        self._clear_deleted()
+        summary['ntotal_after'] = int(self.ntotal or 0)
+        summary['deleted_after'] = 0
+        return summary
+
     def iter_faiss_indexes(self):
         """
         Yield (label, faiss.Index) for recommend/export. Caller must not
@@ -1111,3 +1273,77 @@ class FassiVDB:
             self._apply_hnsw_search_params()
             distances, ids = self.vdb.search(item, topk)
         return distances, ids
+
+    def _reconstruct_positions(self, inner, positions) -> np.ndarray:
+        """Reconstruct float32 vectors at internal positions."""
+        pos = np.asarray(positions, dtype=np.int64)
+        if pos.size == 0:
+            return np.zeros((0, int(self.vdb_dim)), dtype=np.float32)
+        if hasattr(inner, 'reconstruct_batch'):
+            try:
+                out = inner.reconstruct_batch(pos)
+                return np.asarray(out, dtype=np.float32)
+            except Exception:
+                pass
+        out = np.zeros((pos.size, int(self.vdb_dim)), dtype=np.float32)
+        for i, p in enumerate(pos):
+            out[i] = inner.reconstruct(int(p))
+        return out
+
+    def compact_live(self, is_live, batch_size: int = 8192) -> dict:
+        """
+        Rebuild this index file from ids for which is_live(id) is true.
+        Returns {kept, dropped, rewritten}. No-op if nothing is dead.
+        """
+        if self.vdb is None:
+            return {'kept': 0, 'dropped': 0, 'rewritten': False}
+        try:
+            id_map = faiss.vector_to_array(self.vdb.id_map)
+        except Exception:
+            return {'kept': 0, 'dropped': 0, 'rewritten': False}
+
+        live_pos = []
+        dropped = 0
+        for pos, nid in enumerate(id_map):
+            try:
+                ok = bool(is_live(nid))
+            except Exception:
+                ok = False
+            if ok:
+                live_pos.append(int(pos))
+            else:
+                dropped += 1
+
+        if dropped <= 0:
+            return {'kept': len(live_pos), 'dropped': 0, 'rewritten': False}
+
+        inner = getattr(self.vdb, 'index', None)
+        if inner is None:
+            return {'kept': len(live_pos), 'dropped': dropped, 'rewritten': False}
+
+        new_index = self._create_empty_index()
+        new_inner = getattr(new_index, 'index', new_index)
+        if live_pos and hasattr(new_inner, 'is_trained') and not new_inner.is_trained:
+            sample_n = min(len(live_pos), 65536)
+            sample = self._reconstruct_positions(inner, live_pos[:sample_n])
+            if sample.shape[0] > 0:
+                new_inner.train(sample)
+
+        bs = max(256, int(batch_size or 8192))
+        for start in range(0, len(live_pos), bs):
+            chunk = live_pos[start:start + bs]
+            vecs = self._reconstruct_positions(inner, chunk)
+            ids = np.asarray([int(id_map[p]) for p in chunk], dtype=np.int64)
+            if vecs.shape[0] == 0:
+                continue
+            new_index.add_with_ids(vecs, ids)
+
+        with self._lock:
+            self.vdb = new_index
+            self._apply_hnsw_search_params()
+        self.save()
+        return {
+            'kept': len(live_pos),
+            'dropped': dropped,
+            'rewritten': True,
+        }

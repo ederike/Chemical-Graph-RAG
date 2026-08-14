@@ -606,6 +606,91 @@ class DHMF:
             self.vectorization_module.clear(self.db[name], self.vdb[name])
             self.logger.info(f"Finish vectorization_clear {name}.")
 
+    def _vdb_names(self, db_name=None):
+        known = list(self.vdb.keys())
+        if db_name is None:
+            return known
+        if db_name not in self.vdb:
+            raise KeyError(
+                f"unknown vector store {db_name!r}; choose one of {known}"
+            )
+        return [db_name]
+
+    def vector_status(self, db_name=None):
+        """
+        Inspect tombstones. Does not compact.
+
+        db_name: one store ('doc'/'chunk'/'hyperedge'/'node'/'edge'),
+                 or None for every loaded store.
+        """
+        out = {}
+        for name in self._vdb_names(db_name):
+            vdb = self.vdb[name]
+            if hasattr(vdb, 'deleted_stats'):
+                stats = vdb.deleted_stats(per_shard=True)
+            else:
+                stats = {'name': name, 'deleted_count': 0, 'deleted_ratio': 0.0}
+            out[name] = stats
+            self.logger.info(
+                f"vector_status {name}: ntotal={stats.get('ntotal')} "
+                f"deleted={stats.get('deleted_count')} "
+                f"ratio={stats.get('deleted_ratio', 0):.4f} "
+                f"shards={len(stats.get('shards') or [])}"
+            )
+        return out
+
+    def compact_vectors(self, db_name):
+        """
+        Manually compact one vector store. Skip if it has no tombstones.
+        """
+        names = self._vdb_names(db_name)
+        return self._compact_stores(names)
+
+    def compact_all_vectors(self):
+        """
+        Manually compact every loaded vector store in turn.
+        A store with no tombstones is skipped.
+        """
+        return self._compact_stores(self._vdb_names(None))
+
+    def _compact_stores(self, names):
+        self.begin_build()
+        out = {}
+        for name in names:
+            vdb = self.vdb.get(name)
+            if vdb is None or not hasattr(vdb, 'compact'):
+                continue
+            stats = (
+                vdb.deleted_stats(per_shard=False)
+                if hasattr(vdb, 'deleted_stats')
+                else {}
+            )
+            if int(stats.get('deleted_count') or 0) <= 0:
+                summary = {
+                    'name': name,
+                    'skipped': True,
+                    'reason': 'no_tombstones',
+                    'ntotal_before': stats.get('ntotal', 0),
+                    'deleted_before': 0,
+                    'deleted_ratio': 0.0,
+                }
+                out[name] = summary
+                self.logger.info(f"compact_vectors skip {name}: no tombstones")
+                continue
+            self.logger.info(
+                f"Start compact_vectors {name}: "
+                f"deleted={stats.get('deleted_count', '?')} "
+                f"ntotal={stats.get('ntotal', '?')} "
+                f"ratio={stats.get('deleted_ratio', 0):.4f}"
+            )
+            summary = vdb.compact()
+            out[name] = summary
+            self.logger.info(f"Finish compact_vectors {name}: {summary}")
+
+        if hasattr(self.retrieve_module, '_precomputed'):
+            self.retrieve_module._precomputed = False
+        return out
+
     def recommend(self):
         """Offline similar-hyperedge recommendation (clears then recomputes)."""
         self.logger.info("Start recommend (similar hyperedges).")

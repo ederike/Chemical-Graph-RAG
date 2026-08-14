@@ -299,6 +299,7 @@ class VectorizationConfig(BaseModel):
     shard_max_vectors: Optional[int] = None
     # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
     # HNSW delete is a search-time tombstone (no graph rebuild).
+    # Compact is manual only: vector_status / compact_vectors / compact_all_vectors.
     index_type: str = "hnsw"
     # FAISS stored-vector encoding (not the embedding API dtype):
     #   none — float32 (IndexHNSWFlat / IndexFlatL2)
