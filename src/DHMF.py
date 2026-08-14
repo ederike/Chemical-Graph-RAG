@@ -420,19 +420,21 @@ class DHMF:
         Delete document(s) and all related table rows by file name(s).
 
         Removes from: doc, chunk, hyperedge, node (and edge by default).
-        Optionally removes corresponding vectors from VDB.
+        Optionally tombstones corresponding vectors so search no longer
+        returns them (HNSW graph is not rebuilt).
         Optionally clears PDF recognition cache for the file(s).
 
         Args:
             names: str or list/tuple of file names, e.g. 'TDS_48400.pdf'
                    or ['TDS_48400.pdf', 'a.txt']. Match is exact on doc.name.
             delete_edge: also delete edge rows linked by doc_id (default True).
-            delete_vectors: also remove embeddings from VDB (default True).
+            delete_vectors: tombstone embeddings in VDB (default True).
             clear_cache: if True, also delete PDF recognition cache entries
                          for this file name so next run will re-recognize (default False).
 
         Returns:
-            dict summary: {name: {doc_ids, doc, chunk, hyperedge, node, edge, cache, ...}}
+            dict summary: {name: {doc_ids, doc, chunk, hyperedge, node, edge,
+            cache, vectors, ...}}
         """
         if isinstance(names, str):
             name_list = [names]
@@ -451,6 +453,7 @@ class DHMF:
                 'node': 0,
                 'edge': 0,
                 'cache': 0,
+                'vectors': {},
             }
 
             if not docs:
@@ -479,15 +482,17 @@ class DHMF:
                 counts['doc'] += self.db['doc'].delete('id', doc_id)
 
             if delete_vectors:
+                vec_counts = {}
                 try:
-                    self.vdb['doc'].remove(doc_ids)
-                    self.vdb['chunk'].remove(chunk_ids)
-                    self.vdb['hyperedge'].remove(hyperedge_ids)
-                    self.vdb['node'].remove(node_ids)
+                    vec_counts['doc'] = self.vdb['doc'].remove(doc_ids)
+                    vec_counts['chunk'] = self.vdb['chunk'].remove(chunk_ids)
+                    vec_counts['hyperedge'] = self.vdb['hyperedge'].remove(hyperedge_ids)
+                    vec_counts['node'] = self.vdb['node'].remove(node_ids)
                     if delete_edge and edge_ids:
-                        self.vdb['edge'].remove(edge_ids)
+                        vec_counts['edge'] = self.vdb['edge'].remove(edge_ids)
                 except Exception as e:
-                    self.logger.warning(f"delete: VDB cleanup partial failure for {name!r}: {e}")
+                    self.logger.warning(f"delete: VDB tombstone partial failure for {name!r}: {e}")
+                counts['vectors'] = vec_counts
 
             if clear_cache:
                 counts['cache'] = self.doc_module.clear_recognition_cache(name)
@@ -496,7 +501,8 @@ class DHMF:
                 f"delete: removed {name!r} "
                 f"doc={counts['doc']} chunk={counts['chunk']} "
                 f"hyperedge={counts['hyperedge']} node={counts['node']} "
-                f"edge={counts['edge']} cache={counts['cache']}"
+                f"edge={counts['edge']} cache={counts['cache']} "
+                f"vectors={counts.get('vectors') or {}}"
             )
             summary[name] = counts
 

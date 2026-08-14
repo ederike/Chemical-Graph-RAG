@@ -212,6 +212,10 @@ class BaseVDB:
     index_quant:
       none — float32 vectors
       fp16 — FAISS ScalarQuantizer QT_fp16 (half-precision storage + search)
+
+    Deletion: FAISS HNSW has no remove_ids. remove() records tombstone ids
+    (sidecar deleted.json) and search() drops them. The HNSW graph is unchanged;
+    no rebuild. Re-adding an id clears its tombstone. clear() wipes tombstones.
     """
 
     def __init__(
@@ -253,11 +257,14 @@ class BaseVDB:
         # Cumulative FAISS add_with_ids wall time (HNSW graph build cost).
         self.index_add_seconds = 0.0
         self.index_add_count = 0
+        self._deleted = set()
+        self._deleted_lock = threading.Lock()
 
         if shard_max_vectors is not None and int(shard_max_vectors) > 0:
             self.enable_sharding(int(shard_max_vectors))
         else:
             self.load()
+        self._load_deleted()
 
     def _make_faiss(self, path, *, create_empty: bool = True) -> "FassiVDB":
         """Construct a FassiVDB handle with this store's index settings."""
@@ -272,6 +279,97 @@ class BaseVDB:
             hnsw_efSearch=self.hnsw_efSearch,
         )
 
+    def _deleted_path(self) -> Path:
+        if self._sharding and self.shards_dir is not None:
+            return self.shards_dir / 'deleted.json'
+        return self.vdb_path / f'{self.vdb_name}.deleted.json'
+
+    def _mono_deleted_path(self) -> Path:
+        return self.vdb_path / f'{self.vdb_name}.deleted.json'
+
+    @staticmethod
+    def _read_deleted_file(path: Path) -> set:
+        if not path.exists() or path.stat().st_size <= 0:
+            return set()
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return set()
+        raw = data.get('ids', data) if isinstance(data, dict) else data
+        if not isinstance(raw, (list, tuple, set)):
+            return set()
+        out = set()
+        for x in raw:
+            try:
+                i = int(x)
+            except (TypeError, ValueError):
+                continue
+            if i >= 0:
+                out.add(i)
+        return out
+
+    def _load_deleted(self):
+        ids = self._read_deleted_file(self._deleted_path())
+        if self._sharding:
+            ids |= self._read_deleted_file(self._mono_deleted_path())
+        self._deleted = ids
+
+    def _save_deleted(self):
+        path = self._deleted_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not self._deleted:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+            return
+        payload = {'ids': sorted(int(i) for i in self._deleted)}
+        tmp = path.with_suffix('.json.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(str(tmp), str(path))
+
+    def _clear_deleted(self):
+        self._deleted = set()
+        for path in {self._deleted_path(), self._mono_deleted_path()}:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+
+    def _live_id(self, i) -> bool:
+        try:
+            i = int(i)
+        except (TypeError, ValueError):
+            return False
+        if i < 0:
+            return False
+        return i not in self._deleted
+
+    def _search_fetch_k(self, topk: int) -> int:
+        """Over-fetch so tombstones in the ANN window do not starve topk."""
+        n_del = len(self._deleted)
+        if n_del <= 0:
+            return topk
+        extra = min(n_del, max(32, topk * 3))
+        return int(topk) + extra
+
+    @staticmethod
+    def _dedupe_hits(pairs, topk: int):
+        """Keep best (smallest L2) hit per id, then cut to topk."""
+        best = {}
+        order = []
+        for dist, vid in pairs:
+            if vid not in best:
+                best[vid] = dist
+                order.append(vid)
+            elif dist < best[vid]:
+                best[vid] = dist
+        ranked = sorted(order, key=lambda i: best[i])[:topk]
+        return [{'distance': best[i], 'id': i} for i in ranked]
+
     def index_stats(self) -> dict:
         return {
             'index_type': self.index_type,
@@ -281,6 +379,7 @@ class BaseVDB:
             'hnsw_efSearch': self.hnsw_efSearch,
             'index_add_seconds': float(self.index_add_seconds),
             'index_add_count': int(self.index_add_count),
+            'deleted_count': len(self._deleted),
         }
 
     def reset_index_timing(self):
@@ -343,6 +442,7 @@ class BaseVDB:
                 self.vdb = None
             self._open_active(create_if_missing=True)
             self._write_meta()
+            self._migrate_mono_deleted()
             return
 
         # Migrate monolithic file → sealed shard 0 (keep data, free RAM).
@@ -374,6 +474,23 @@ class BaseVDB:
         self._sharding = True
         self._open_active(create_if_missing=True)
         self._write_meta()
+        self._migrate_mono_deleted()
+
+    def _migrate_mono_deleted(self):
+        """Move leftover {name}.deleted.json into shards/deleted.json."""
+        if not self._sharding or self.shards_dir is None:
+            return
+        src = self._mono_deleted_path()
+        dst = self._deleted_path()
+        extra = self._read_deleted_file(src)
+        if extra:
+            self._deleted |= extra
+            self._save_deleted()
+        if src.exists() and src != dst:
+            try:
+                src.unlink()
+            except OSError:
+                pass
 
     def _read_meta(self, shards_dir: Path) -> dict:
         p = shards_dir / 'meta.json'
@@ -502,6 +619,7 @@ class BaseVDB:
             self.index_quant = getattr(
                 self, '_index_quant_requested', self.index_quant
             )
+            self._clear_deleted()
             self.enable_sharding(max_v)
             return
 
@@ -516,6 +634,7 @@ class BaseVDB:
                 self.vdb_file_path.unlink()
             except OSError:
                 pass
+        self._clear_deleted()
         self.load()
 
     def buffer_clear(self):
@@ -576,8 +695,19 @@ class BaseVDB:
                 emb = json.loads(emb)
             vecs.append(emb)
         vectors = np.asarray(vecs, dtype=np.float32)
-        # 幂等：flat_l2 可在 active 上先删再加。
-        # HNSW 不支持 remove_ids，必须 vectorization_clear 后整库重建。
+        # Re-adding an id makes it searchable again (clear tombstone).
+        # flat_l2 can also physically drop the old row before insert.
+        int_ids = []
+        for i in ids:
+            try:
+                int_ids.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        if int_ids:
+            with self._deleted_lock:
+                if self._deleted.intersection(int_ids):
+                    self._deleted.difference_update(int_ids)
+                    self._save_deleted()
         self._ensure_active()
         if self.vdb is not None and self.index_type != 'hnsw':
             self.vdb.remove(ids)
@@ -591,14 +721,20 @@ class BaseVDB:
         if topk <= 0:
             return []
 
+        fetch_k = self._search_fetch_k(topk)
+
         if not self._sharding:
             if self.vdb is None:
                 return []
-            distances, ids = self.vdb.search(vector, topk)
+            distances, ids = self.vdb.search(vector, fetch_k)
             if ids is None:
                 return []
-            pairs = [(float(d), int(i)) for d, i in zip(distances[0], ids[0]) if i != -1]
-            return [{'distance': p[0], 'id': p[1]} for p in pairs]
+            pairs = [
+                (float(d), int(i))
+                for d, i in zip(distances[0], ids[0])
+                if self._live_id(i)
+            ]
+            return self._dedupe_hits(pairs, topk)
 
         # Merge top-k across sealed (load one-by-one) + active.
         heap = []  # (distance, id) keep best topk (smallest L2)
@@ -608,9 +744,9 @@ class BaseVDB:
             if ids is None:
                 return
             for d, i in zip(distances[0], ids[0]):
-                i = int(i)
-                if i == -1:
+                if not self._live_id(i):
                     continue
+                i = int(i)
                 d = float(d)
                 if len(heap) < topk:
                     heapq.heappush(heap, (-d, i))  # max-heap via negation
@@ -623,57 +759,71 @@ class BaseVDB:
                 continue
             tmp = self._make_faiss(path, create_empty=False)
             try:
-                distances, ids = tmp.search(vector, topk)
+                distances, ids = tmp.search(vector, fetch_k)
                 _consume(distances, ids)
             finally:
                 tmp.unload()
 
         if self.vdb is not None and self.vdb.vdb is not None:
-            distances, ids = self.vdb.search(vector, topk)
+            distances, ids = self.vdb.search(vector, fetch_k)
             _consume(distances, ids)
 
-        pairs = sorted(((-neg_d, i) for neg_d, i in heap), key=lambda x: x[0])
-        return [{'distance': d, 'id': i} for d, i in pairs]
+        pairs = [(-neg_d, i) for neg_d, i in heap]
+        return self._dedupe_hits(pairs, topk)
 
     def remove(self, ids, persist: bool = True):
-        """Remove vectors by id list from active + all sealed shards.
+        """Tombstone vectors by id so search no longer returns them.
 
-        HNSW does not implement remove_ids; returns 0 and leaves vectors in place.
-        For HNSW deletion / rebuild use vectorization_clear + vectorization.
+        HNSW cannot drop graph nodes in-place; ids are recorded in deleted.json
+        and filtered at search. flat_l2 also tries FAISS remove_ids.
+        Returns the number of newly tombstoned ids.
         """
         if not ids:
             return 0
-        if self.index_type == 'hnsw':
-            return 0
-        n = 0
-        if not self._sharding:
-            if self.vdb is None:
-                return 0
-            n = self.vdb.remove(ids)
-            if persist and n:
-                self.save()
-            return n
-
-        # Active
-        if self.vdb is not None and self.vdb.vdb is not None:
-            n += self.vdb.remove(ids)
-            if persist and n:
-                self.vdb.save()
-
-        # Sealed: load → remove → save if hit → unload
-        for name in list(self._sealed):
-            path = self.shards_dir / name
-            if not path.exists():
-                continue
-            tmp = self._make_faiss(path, create_empty=False)
+        id_list = []
+        seen = set()
+        for i in ids:
             try:
-                r = tmp.remove(ids)
-                if r:
-                    tmp.save()
-                    n += r
-            finally:
-                tmp.unload()
-        return n
+                iv = int(i)
+            except (TypeError, ValueError):
+                continue
+            if iv < 0 or iv in seen:
+                continue
+            seen.add(iv)
+            id_list.append(iv)
+        if not id_list:
+            return 0
+
+        if self.index_type != 'hnsw':
+            if not self._sharding:
+                if self.vdb is not None:
+                    n_phys = self.vdb.remove(id_list)
+                    if persist and n_phys:
+                        self.save()
+            else:
+                if self.vdb is not None and self.vdb.vdb is not None:
+                    n_phys = self.vdb.remove(id_list)
+                    if persist and n_phys:
+                        self.vdb.save()
+                for name in list(self._sealed):
+                    path = self.shards_dir / name
+                    if not path.exists():
+                        continue
+                    tmp = self._make_faiss(path, create_empty=False)
+                    try:
+                        r = tmp.remove(id_list)
+                        if r:
+                            tmp.save()
+                    finally:
+                        tmp.unload()
+
+        with self._deleted_lock:
+            before = len(self._deleted)
+            self._deleted.update(id_list)
+            added = len(self._deleted) - before
+            if persist and added:
+                self._save_deleted()
+        return added
 
     def iter_faiss_indexes(self):
         """
@@ -711,6 +861,8 @@ class BaseVDB:
             if inner is None:
                 continue
             for pos, nid in enumerate(id_map):
+                if not self._live_id(nid):
+                    continue
                 try:
                     vec = inner.reconstruct(int(pos))
                 except Exception:
@@ -940,7 +1092,7 @@ class FassiVDB:
         return self.last_add_seconds
 
     def remove(self, ids):
-        """Remove vectors by ids. Returns number removed; 0 if unsupported (HNSW)."""
+        """Physical remove_ids. HNSW raises; caller should tombstone instead."""
         if self.vdb is None or not ids:
             return 0
         id_array = np.array(list(ids), dtype=np.int64)
@@ -950,7 +1102,6 @@ class FassiVDB:
                 removed = self.vdb.remove_ids(selector)
                 return int(removed)
             except RuntimeError:
-                # IndexHNSWFlat does not implement remove_ids.
                 return 0
 
     def search(self, item, topk):

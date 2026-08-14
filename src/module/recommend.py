@@ -149,10 +149,18 @@ class Recommend:
         out: Dict[int, np.ndarray] = {}
         for pos, nid in enumerate(id_map):
             try:
+                nid = int(nid)
+            except (TypeError, ValueError):
+                continue
+            if nid < 0:
+                continue
+            if hasattr(base_vdb, '_live_id') and not base_vdb._live_id(nid):
+                continue
+            try:
                 vec = inner.reconstruct(int(pos))
             except Exception:
                 continue
-            out[int(nid)] = np.asarray(vec, dtype=np.float64)
+            out[nid] = np.asarray(vec, dtype=np.float64)
         return out
 
     def _attach_vectors(

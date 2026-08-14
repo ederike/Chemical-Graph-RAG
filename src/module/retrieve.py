@@ -59,10 +59,12 @@ class Retrieve:
         vdb = self.vdb[db_name]
         db = self.db[db_name]
         vdb_res = vdb.search(vector, topk)
-        res = [
-            {'distance': item['distance'], 'result': db.search('id', item['id'])[0]}
-            for item in vdb_res
-        ]
+        res = []
+        for item in vdb_res:
+            rows = db.search('id', item['id']) or []
+            if not rows:
+                continue
+            res.append({'distance': item['distance'], 'result': rows[0]})
         return res
 
     def __init__(

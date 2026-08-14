@@ -298,7 +298,7 @@ class VectorizationConfig(BaseModel):
     # None/0 = mono single-file index (legacy; grows unboundedly in RAM).
     shard_max_vectors: Optional[int] = None
     # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
-    # HNSW does not support in-place remove_ids; rebuild via vectorization_clear.
+    # HNSW delete is a search-time tombstone (no graph rebuild).
     index_type: str = "hnsw"
     # FAISS stored-vector encoding (not the embedding API dtype):
     #   none — float32 (IndexHNSWFlat / IndexFlatL2)
