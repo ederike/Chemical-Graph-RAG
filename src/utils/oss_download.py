@@ -229,8 +229,9 @@ def fetch_spider_products(
     Optional columns are used only when they exist:
       - is_delete: WHERE is_delete = 0
       - type: AND type = file_type (1/2). Missing column → no type filter, download all.
-    Required: id, product_name, oss_url.
-    ORDER BY id ASC. limit<=0 means no LIMIT.
+      - id: ORDER BY and log labels only; not used for naming or dedup.
+    Required: oss_url. Local filename comes from the OSS object key.
+    ORDER BY id ASC when present, else oss_url. limit<=0 means no LIMIT.
     """
     log = logger or logger_default
     try:
@@ -267,7 +268,7 @@ def fetch_spider_products(
     try:
         with conn.cursor() as cur:
             columns = _mysql_table_columns(cur, table)
-            required = ('id', 'product_name', 'oss_url')
+            required = ('oss_url',)
             missing = [c for c in required if c not in columns]
             if missing:
                 raise ValueError(
@@ -276,7 +277,7 @@ def fetch_spider_products(
                 )
 
             select_cols = list(required)
-            for extra in ('type', 'is_delete'):
+            for extra in ('id', 'type', 'is_delete', 'product_name'):
                 if extra in columns:
                     select_cols.append(extra)
 
@@ -296,7 +297,7 @@ def fetch_spider_products(
                 type_filter = None
             if where:
                 sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY id ASC"
+            sql += " ORDER BY id ASC" if 'id' in columns else " ORDER BY oss_url ASC"
             if limit is not None and int(limit) > 0:
                 sql += " LIMIT %s"
                 params.append(int(limit))
