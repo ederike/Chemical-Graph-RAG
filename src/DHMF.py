@@ -166,7 +166,11 @@ class DHMF:
     def dedupe_downloaded_docs(self, dry_run: bool = False):
         """
         Delete byte-identical PDFs under working_path/doc, keep one per content MD5.
-        Use after a previous download that named the same OSS object as many files.
+
+        Standalone step — not invoked by insert / insert_default / insert_pdfs.
+        Call explicitly after download (or before a first insert) when legacy
+        copies like {product}_{id}.pdf of the same OSS object should be collapsed
+        so recognition does not send duplicates to the VLM.
         """
         from .utils.oss_download import dedupe_local_pdfs
 
@@ -291,11 +295,6 @@ class DHMF:
         """
         self.begin_build()
         self.logger.info("Start PDF recognition before insert (source: working_path/doc).")
-
-        # Same OSS object may already exist as 碳酸钙粉末_3985.pdf / _3986.pdf / ...
-        # Collapse them first so recognition does not send copies to the VLM.
-        if pdf_paths is None:
-            self.dedupe_downloaded_docs()
 
         if pdf_paths is None:
             all_pdfs = self.doc_module.list_pdf_files()
