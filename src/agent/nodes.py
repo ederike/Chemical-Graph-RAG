@@ -130,22 +130,20 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
             latency_s=time.perf_counter() - t0,
         )
 
-    return {'results': results}
-
-def route_after_execute(state: AgentState) -> str:
-    return 'synthesize' if plan_done(state.get('plan') or [], state.get('results') or {}) else 'execute'
-
-def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
-    query   = state.get('query') or ''
-    plan: List[PlanStep] = list(state.get('plan') or [])
-    results: Dict[str, StepResult] = dict(state.get('results') or {})
-
-    # 单步：直接采用 hop 答案，避免二次汇总丢细节
+    out: Dict[str, Any] = {'results': results}
+    # 单跳：execute 完成后直接作为最终回答，不再进 synthesize 复述
     if len(plan) == 1 and plan[0]['id'] in results:
-        r = results[plan[0]['id']]
-        answer = (r.get('answer') or '').strip()
-        respond = {
-            'status': int(r.get('status') or 0),
+        out.update(_final_from_single_step(results[plan[0]['id']]))
+    return out
+
+def _final_from_single_step(r: StepResult) -> dict:
+    answer = (r.get('answer') or '').strip()
+    status = int(r.get('status') or 0)
+    return {
+        'final_answer': answer,
+        'final_status': status,
+        'respond': {
+            'status': status,
             'answer': answer,
             'usage_prompt_tokens':     r.get('usage_prompt_tokens'),
             'usage_completion_tokens': r.get('usage_completion_tokens'),
@@ -153,8 +151,25 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
             'retrieve_latency_s':      r.get('retrieve_latency_s'),
             'retrieve_timing':         dict(r.get('retrieve_timing') or {}),
             'retrieval_sources':       list(r.get('sources') or []),
-        }
-        return {'final_answer': answer, 'final_status': respond['status'], 'respond': respond}
+        },
+    }
+
+def route_after_execute(state: AgentState) -> str:
+    plan = state.get('plan') or []
+    results = state.get('results') or {}
+    if not plan_done(plan, results):
+        return 'execute'
+    if len(plan) <= 1:
+        return 'end'
+    return 'synthesize'
+
+def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
+    query   = state.get('query') or ''
+    plan: List[PlanStep] = list(state.get('plan') or [])
+    results: Dict[str, StepResult] = dict(state.get('results') or {})
+
+    if len(plan) == 1 and plan[0]['id'] in results:
+        return _final_from_single_step(results[plan[0]['id']])
 
     resp = ctx.chat(
         Agent_PROMPT.get('SYNTH_SYSTEM', ''),

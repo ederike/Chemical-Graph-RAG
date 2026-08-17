@@ -2,6 +2,7 @@
 LangGraph 编排：
 
     START → plan → execute ⟲ → synthesize → END
+    单跳（规划仅 1 步）：execute 后直接 END，不进 synthesize
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ def build_agent_graph(ctx: AgentContext) -> Any:
     g.add_conditional_edges(
         'execute',
         route_after_execute,
-        {'execute': 'execute', 'synthesize': 'synthesize'},
+        {'execute': 'execute', 'synthesize': 'synthesize', 'end': END},
     )
     g.add_edge('synthesize', END)
     return g.compile()
