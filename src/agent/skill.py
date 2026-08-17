@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig, resolve_credentials
@@ -40,10 +40,19 @@ class QuerySkill:
         self.llm    = llm
         self.logger = logger or logging.getLogger(__name__)
 
-    def __call__(self, question: str) -> Dict[str, Any]:
-        return self.run(question)
+    def __call__(self, question: str, **kwargs) -> Dict[str, Any]:
+        return self.run(question, **kwargs)
 
-    def run(self, question: str) -> Dict[str, Any]:
+    def run(
+        self,
+        question: str,
+        *,
+        original_query: Optional[str] = None,
+        step_id: Optional[str] = None,
+        n_steps: Optional[int] = None,
+        planned_question: Optional[str] = None,
+        depends_on: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
         q = (question or '').strip()
         t_all = time.perf_counter()
         if not q:
@@ -60,7 +69,15 @@ class QuerySkill:
         retrieve_latency_s = time.perf_counter() - t0
         sources, doc_ids = self._collect_refs(items)
 
-        respond = self._answer(q, retrieval_text)
+        respond = self._answer(
+            q,
+            retrieval_text,
+            original_query=original_query,
+            step_id=step_id,
+            n_steps=n_steps,
+            planned_question=planned_question,
+            depends_on=depends_on,
+        )
         respond['retrieve_latency_s'] = retrieve_latency_s
         respond['retrieve_timing']    = retrieve_timing
         respond['latency_s']          = time.perf_counter() - t_all
@@ -122,12 +139,61 @@ class QuerySkill:
                 doc_ids.append(did)
         return sources, doc_ids
 
-    def _answer(self, query: str, retrieval_text: str) -> dict:
-        resp = self._chat(
-            Agent_PROMPT.get('QUERY_SKILL_ANSWER_SYSTEM', ''),
-            Agent_PROMPT['QUERY_SKILL_ANSWER_USER'].format(
-                retrieval_result=str(retrieval_text or ''),
-                query=query,
-            ),
+    @staticmethod
+    def _format_step_context(
+        *,
+        step_id: Optional[str],
+        n_steps: Optional[int],
+        depends_on: Optional[Sequence[str]],
+    ) -> str:
+        sid = str(step_id or '1').strip() or '1'
+        try:
+            n = max(1, int(n_steps or 1))
+        except (TypeError, ValueError):
+            n = 1
+        deps = [str(d).strip() for d in (depends_on or []) if str(d).strip()]
+        if n <= 1:
+            return (
+                f'步骤 {sid} / 共 1 步。这是针对原始总问题的唯一步骤，'
+                f'请完整回答当前单跳问题，并覆盖原始问题需要的信息。'
+            )
+        deps_s = '、'.join(deps) if deps else '无（可与其它步骤并行）'
+        return (
+            f'步骤 {sid} / 共 {n} 步。\n'
+            f'依赖步骤：{deps_s}\n'
+            f'你正在处理规划中的第 {sid} 步：只负责本步主体与约束，'
+            f'同时对照原始总问题，保留对后续步骤或最终汇总有用的细节。'
         )
-        return resp if isinstance(resp, dict) else {'status': 0, 'answer': str(resp)}
+
+    def _answer(
+        self,
+        query: str,
+        retrieval_text: str,
+        *,
+        original_query: Optional[str] = None,
+        step_id: Optional[str] = None,
+        n_steps: Optional[int] = None,
+        planned_question: Optional[str] = None,
+        depends_on: Optional[Sequence[str]] = None,
+    ) -> dict:
+        original = (original_query or query or "").strip()
+        planned = (planned_question or query or "").strip()
+        user = Agent_PROMPT["QUERY_SKILL_ANSWER_USER"]
+        for key, val in (
+            ("retrieval_result", str(retrieval_text or "")),
+            (
+                "step_context",
+                self._format_step_context(
+                    step_id=step_id, n_steps=n_steps, depends_on=depends_on
+                ),
+            ),
+            ("original_query", original),
+            ("planned_question", planned),
+            ("query", query or ""),
+        ):
+            user = user.replace("{" + key + "}", str(val))
+        resp = self._chat(
+            Agent_PROMPT.get("QUERY_SKILL_ANSWER_SYSTEM", ""),
+            user,
+        )
+        return resp if isinstance(resp, dict) else {"status": 0, "answer": str(resp)}

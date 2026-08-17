@@ -114,7 +114,14 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
         ctx.logger.info(f'[agent.execute] step={sid} q={resolved!r}')
 
         t0 = time.perf_counter()
-        resp = ctx.skill.run(resolved)
+        resp = ctx.skill.run(
+            resolved,
+            original_query=query,
+            step_id=sid,
+            n_steps=len(plan),
+            planned_question=step.get('question') or '',
+            depends_on=list(step.get('depends_on') or []),
+        )
         results[sid] = step_result_from_skill(
             sid=sid,
             planned=step.get('question') or '',
