@@ -299,7 +299,7 @@ class VectorizationConfig(BaseModel):
     shard_max_vectors: Optional[int] = None
     # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
     # HNSW delete is a search-time tombstone (no graph rebuild).
-    # Compact is manual only: vector_status / compact_vectors / compact_all_vectors.
+    # Compact is manual only and keeps ids still present in SQLite.
     index_type: str = "hnsw"
     # FAISS stored-vector encoding (not the embedding API dtype):
     #   none — float32 (IndexHNSWFlat / IndexFlatL2)
@@ -485,7 +485,6 @@ class RetrieveConfig(BaseModel):
     query_instruct: str = (
         "Given a web search query, retrieve relevant passages that answer the query"
     )
-    enable_recommendation_expand: bool = False
     enable_full_body_context: bool = False
 
     enable_keyword_exact: bool = True
@@ -566,17 +565,6 @@ class RetrieveConfig(BaseModel):
             self.embedding_model_args = ma
         return self
 
-class RecommendConfig(BaseModel):
-    """Offline similar-hyperedge recommendation (HDBSCAN on node embeddings)."""
-    keywords: List[str] = Field(default_factory=lambda: ['用途', '应用', '场景'])
-    max_cluster_size: int = 3
-    min_cluster_size: int = 2
-    min_samples: Optional[int] = None
-    metric: str = 'cosine'
-    random_seed: int = 42
-    skip_missing_embedding: bool = True
-    cluster_selection_method: str = 'eom'
-
 class AgentConfig(BaseModel):
     """Multi-hop agent LLM settings (independent of retrieve)."""
     api_key: str = ""
@@ -642,7 +630,6 @@ class Config(BaseModel):
     build: BuildConfig = Field(default_factory=BuildConfig)
     vectorization: VectorizationConfig = Field(default_factory=VectorizationConfig)
     retrieve: RetrieveConfig = Field(default_factory=RetrieveConfig)
-    recommend: RecommendConfig = Field(default_factory=RecommendConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     dm_data_mysql: MysqlConfig = Field(default_factory=MysqlConfig)
     ali_oss: dict = Field(default_factory=dict)
@@ -656,7 +643,7 @@ class Config(BaseModel):
 
         known = {
             'settings', 'doc', 'summary', 'chunk', 'extract', 'build',
-            'vectorization', 'retrieve', 'recommend', 'agent',
+            'vectorization', 'retrieve', 'agent',
             'dm_data_mysql', 'ali_oss', 'oss_download',
         }
         pipeline = {k: v for k, v in data.items() if k in known}

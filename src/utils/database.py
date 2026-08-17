@@ -172,6 +172,17 @@ class BaseDB:
         sql = f"SELECT * FROM {self.table}"
         return self.db.execute(sql)
 
+    def list_ids(self):
+        """Primary-key ids only (compact / reconcile)."""
+        rows = self.db.execute(f"SELECT id FROM {self.table}") or []
+        out = []
+        for row in rows:
+            try:
+                out.append(int(row['id']))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return out
+
     def delete(self, key: str, value):
         """Delete rows where key == value. Returns deleted row count (best-effort)."""
         before = self.search(key, value)
@@ -216,8 +227,9 @@ class BaseVDB:
     Deletion: FAISS HNSW has no remove_ids. remove() records tombstone ids
     (sidecar deleted.json) and search() drops them. The HNSW graph is unchanged;
     no rebuild. Re-adding an id clears its tombstone. clear() wipes tombstones.
-    compact() is manual only: rewrite live vectors, then drop tombstones.
-    Skip when the store has no tombstones. Never runs from delete() / search().
+    compact() is manual only: rewrite vectors whose ids still exist in SQL,
+    then drop tombstones. Callers pass live_ids from SQLite. Skip when every
+    indexed id is still in SQL. Never runs from delete() / search().
     """
 
     def __init__(
@@ -897,17 +909,76 @@ class BaseVDB:
             out['shards'].append({'shard': name, **one})
         return out
 
-    def compact(self, *, batch_size: int = 8192) -> dict:
-        """
-        Manual rewrite from live vectors only, then clear tombstones.
+    def _index_dead_hits(self, index, is_live) -> int:
+        if index is None:
+            return 0
+        try:
+            id_map = faiss.vector_to_array(index.id_map)
+        except Exception:
+            return 0
+        dead = 0
+        for nid in id_map:
+            try:
+                ok = bool(is_live(nid))
+            except Exception:
+                ok = False
+            if not ok:
+                dead += 1
+        return dead
 
-        Skip when this store has no tombstones. Shards with no tombstone
-        hits are left untouched. Does not re-embed. Not called automatically.
+    def _count_not_live(self, is_live) -> int:
+        if not self._sharding:
+            idx = self.vdb.vdb if self.vdb is not None else None
+            return self._index_dead_hits(idx, is_live)
+        dead = 0
+        if self.vdb is not None and self.vdb.vdb is not None:
+            dead += self._index_dead_hits(self.vdb.vdb, is_live)
+        for name in list(self._sealed):
+            if self._active_name and name == self._active_name:
+                continue
+            path = self.shards_dir / name
+            if not path.exists():
+                continue
+            tmp = self._make_faiss(path, create_empty=False)
+            try:
+                idx = tmp.vdb if tmp is not None else None
+                dead += self._index_dead_hits(idx, is_live)
+            finally:
+                tmp.unload()
+        return dead
+
+    def compact(self, *, live_ids=None, batch_size: int = 8192) -> dict:
+        """
+        Manual rewrite keeping only ids still present in SQL (live_ids).
+
+        live_ids is the source of truth. Tombstones alone are not enough:
+        a SQL-deleted id that missed tombstone is still dropped here.
+        Shards with no dead ids are left untouched. Does not re-embed.
         """
         try:
             batch_size = max(256, int(batch_size or 8192))
         except (TypeError, ValueError):
             batch_size = 8192
+
+        live_set = None
+        if live_ids is not None:
+            live_set = set()
+            for i in live_ids:
+                try:
+                    live_set.add(int(i))
+                except (TypeError, ValueError):
+                    continue
+
+        def is_live(i):
+            try:
+                i = int(i)
+            except (TypeError, ValueError):
+                return False
+            if i < 0:
+                return False
+            if live_set is not None:
+                return i in live_set
+            return i not in self._deleted
 
         stats = self.deleted_stats(per_shard=False)
         summary = {
@@ -917,17 +988,26 @@ class BaseVDB:
             'ntotal_before': stats['ntotal'],
             'deleted_before': stats['deleted_count'],
             'deleted_ratio': stats['deleted_ratio'],
+            'sql_live_ids': len(live_set) if live_set is not None else None,
             'shards': [],
             'kept': 0,
             'dropped': 0,
             'rewritten': 0,
         }
-        if stats['deleted_count'] <= 0:
-            summary['skipped'] = True
-            summary['reason'] = 'no_tombstones'
-            return summary
 
-        is_live = self._live_id
+        dead_in_index = self._count_not_live(is_live)
+        if dead_in_index <= 0:
+            summary['skipped'] = True
+            summary['reason'] = (
+                'all_ids_in_sql' if live_set is not None else 'no_tombstones'
+            )
+            if live_set is not None:
+                with self._deleted_lock:
+                    keep = self._deleted.intersection(live_set)
+                    if keep != self._deleted:
+                        self._deleted = keep
+                        self._save_deleted()
+            return summary
 
         if not self._sharding:
             self._ensure_active()
@@ -989,7 +1069,7 @@ class BaseVDB:
 
     def iter_faiss_indexes(self):
         """
-        Yield (label, faiss.Index) for recommend/export. Caller must not
+        Yield (label, faiss.Index) for export. Caller must not
         retain indexes after the generator advances when sharded (sealed
         are unloaded after each yield via context — actually we load sealed
         fully; use reconstruct_id_map for safer export).
@@ -1012,7 +1092,7 @@ class BaseVDB:
             yield self._active_name or 'active', self.vdb.vdb
 
     def id_to_vector_map(self) -> dict:
-        """Build id → vector across all shards (may be large; for recommend)."""
+        """Build id → vector across all shards (may be large; for export)."""
         out = {}
         for _label, index in self.iter_faiss_indexes():
             try:
@@ -1180,7 +1260,7 @@ class FassiVDB:
                 base = faiss.IndexHNSWFlat(d, int(self.hnsw_M))
             base.hnsw.efConstruction = int(self.hnsw_efConstruction)
             base.hnsw.efSearch = int(self.hnsw_efSearch)
-            # IDMap2: supports reconstruct by id (recommend path).
+            # IDMap2: supports reconstruct by id.
             return faiss.IndexIDMap2(base)
         if use_fp16:
             return faiss.IndexIDMap(

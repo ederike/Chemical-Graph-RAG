@@ -10,6 +10,7 @@ from tqdm import tqdm
 import base64
 import hashlib
 import json
+import re
 import threading
 import time
 
@@ -198,6 +199,92 @@ class Doc:
         if slice_index <= 0:
             return base_name
         return f"{base_name}_{int(slice_index)}"
+
+    @staticmethod
+    def slice_family_base(name: str) -> str:
+        """
+        foo.pdf_1 → foo.pdf；非切片名原样返回。
+        只剥「扩展名后的 _数字」，避免把 report_2024.pdf 误当成切片。
+        """
+        raw = Path(str(name or '')).name.strip()
+        if not raw:
+            return ''
+        m = re.match(r'^(.+\.[A-Za-z0-9]+)_(\d+)$', raw)
+        return m.group(1) if m else raw
+
+    @staticmethod
+    def _parse_doc_extra(raw):
+        if not raw:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        try:
+            obj = json.loads(raw)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+    def _source_keys_of_row(self, row) -> set:
+        keys = set()
+        extra = self._parse_doc_extra(row.get('extra'))
+        for field in ('source_name', 'source_pdf'):
+            v = extra.get(field)
+            if v:
+                keys.add(Path(str(v)).name)
+        return {k for k in keys if k}
+
+    def collect_docs_for_delete(self, name: str) -> list:
+        """
+        Resolve a file name to the full slice family.
+
+        A long PDF becomes foo.pdf, foo.pdf_1, foo.pdf_2. Deleting any
+        member (or the source file name) collects all of them via
+        extra.source_name / extra.source_pdf and the _N name pattern.
+        """
+        requested = Path(str(name or '')).name.strip()
+        if not requested:
+            return []
+
+        identity_rows = self.doc_db.db.execute(
+            f"SELECT id, name, extra FROM {self.doc_db.table}"
+        ) or []
+
+        bases = {requested, self.slice_family_base(requested)}
+        bases.discard('')
+
+        changed = True
+        while changed:
+            changed = False
+            for row in identity_rows:
+                n = (row.get('name') or '').strip()
+                src_keys = self._source_keys_of_row(row)
+                family_n = self.slice_family_base(n)
+                if n in bases or family_n in bases or (src_keys & bases):
+                    new_keys = set()
+                    if n:
+                        new_keys.add(n)
+                        new_keys.add(family_n)
+                    new_keys |= src_keys
+                    extra_keys = new_keys - bases
+                    extra_keys.discard('')
+                    if extra_keys:
+                        bases |= extra_keys
+                        changed = True
+
+        out = []
+        seen = set()
+        for row in identity_rows:
+            n = (row.get('name') or '').strip()
+            src_keys = self._source_keys_of_row(row)
+            family_n = self.slice_family_base(n)
+            if n in bases or family_n in bases or (src_keys & bases):
+                did = row.get('id')
+                if did is None or did in seen:
+                    continue
+                seen.add(did)
+                out.append(row)
+        out.sort(key=lambda r: (r.get('name') or '', r.get('id') or 0))
+        return out
 
     def max_pages_per_doc(self) -> int:
         try:

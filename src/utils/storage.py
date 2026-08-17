@@ -51,7 +51,6 @@ class HyperedgeDB(BaseDB):
                 chunk_id INTEGER,
                 name TEXT,
                 content TEXT,
-                recommendation TEXT,
                 extra TEXT,
                 tokens INT,
                 embedding_content TEXT,

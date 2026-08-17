@@ -1212,15 +1212,10 @@ class Retrieve:
                 )
             return '\n'.join(parts)
 
-        # 主资料组与推荐扩展（role=recommendation）分开排版
         main_groups = {}
-        rec_items = []
         for mid, items in by_mat.items():
-            recs = [it for it in items if it.get('role') == 'recommendation']
-            mains = [it for it in items if it.get('role') != 'recommendation']
-            rec_items.extend(recs)
-            if mains:
-                main_groups[mid if mid is not None else 0] = mains
+            if items:
+                main_groups[mid if mid is not None else 0] = items
 
         parts = []
         for mid in sorted(main_groups.keys(), key=lambda x: (x is None, x or 0)):
@@ -1264,21 +1259,6 @@ class Retrieve:
 
             parts.append('\n'.join(block_lines).rstrip() + '\n')
 
-        # 推荐扩展：仅超边 content，无分数
-        for i, item in enumerate(rec_items, start=1):
-            chunk = item.get('chunk') or {}
-            content = (chunk.get('content') or item.get('content') or '').strip()
-            source = item.get('source') or self._source_label(chunk)
-            hid = item.get('hyperedge_id')
-            meta_bits = ['recommendation']
-            if hid is not None:
-                meta_bits.append(f'hyperedge_id={hid}')
-            meta_str = ' | '.join(meta_bits)
-            parts.append(
-                f'----- Recommendation {i} | source: {source} | {meta_str} -----\n'
-                f'{content}\n'
-            )
-
         return '\n'.join(parts)
 
     def _enrich_passage_ids(self, items: list) -> list:
@@ -1296,134 +1276,6 @@ class Retrieve:
                 it['source'] = self._source_label(chunk if isinstance(chunk, dict) else {})
             out.append(it)
         return out
-
-    @staticmethod
-    def _parse_recommendation_ids(raw) -> list:
-        """Parse '1,2,3' / list → int ids（去空、去重、保序）。"""
-        if raw is None:
-            return []
-        if isinstance(raw, (list, tuple, set)):
-            parts = list(raw)
-        else:
-            text = str(raw).strip()
-            if not text:
-                return []
-            parts = re.split(r'[,，;\s]+', text)
-        out = []
-        seen = set()
-        for p in parts:
-            if p is None:
-                continue
-            s = str(p).strip()
-            if not s:
-                continue
-            try:
-                i = int(s)
-            except Exception:
-                continue
-            if i in seen:
-                continue
-            seen.add(i)
-            out.append(i)
-        return out
-
-    def _hyperedge_by_id(self, hid):
-        if hid is None:
-            return None
-        he = self.hyperedge_dict.get(hid)
-        if he is not None:
-            return he
-        rows = self.db['hyperedge'].search('id', hid) or []
-        if rows:
-            self.hyperedge_dict[hid] = rows[0]
-            return rows[0]
-        return None
-
-    def _expand_recommendations(self, passages: list) -> list:
-        """
-        主检索资料之后追加一层推荐扩展：
-          - 仅附加 hyperedge.content
-          - 与主检索按 hyperedge_id / doc_id 去重：重合保留主检索（head-body 顺序）
-          - 不对推荐再扩推荐
-          - 无分数；role=recommendation
-        """
-        enable = bool(
-            getattr(self.config.retrieve, 'enable_recommendation_expand', False)
-        )
-        if not enable or not passages:
-            return passages
-
-        main_he_ids = set()
-        main_doc_ids = set()
-        for p in passages:
-            hid = p.get('hyperedge_id')
-            if hid is not None:
-                main_he_ids.add(int(hid))
-            did = p.get('doc_id')
-            if did is not None:
-                main_doc_ids.add(int(did))
-
-        # 触发源：主检索中出现过的超边（直接命中或连带头块）
-        seed_he_ids = sorted(main_he_ids)
-        candidate_ids = []
-        seen_cand = set()
-        for hid in seed_he_ids:
-            he = self._hyperedge_by_id(hid)
-            if not he:
-                continue
-            for rid in self._parse_recommendation_ids(he.get('recommendation')):
-                if rid in main_he_ids or rid in seen_cand:
-                    continue
-                seen_cand.add(rid)
-                candidate_ids.append(rid)
-
-        if not candidate_ids:
-            return passages
-
-        extra = []
-        added_he = set()
-        for rid in candidate_ids:
-            if rid in main_he_ids or rid in added_he:
-                continue
-            he = self._hyperedge_by_id(rid)
-            if not he:
-                continue
-            doc_id = he.get('doc_id')
-            # 同一文档已在主检索中 → 只保留主检索（保证 head-body 顺序）
-            if doc_id is not None and int(doc_id) in main_doc_ids:
-                continue
-            content = (he.get('content') or '').strip()
-            if not content:
-                continue
-            source = self._source_label({'doc_id': doc_id, 'name': he.get('name')})
-            extra.append({
-                'chunk': {
-                    'id': None,
-                    'doc_id': doc_id,
-                    'name': he.get('name') or 'recommendation',
-                    'content': content,
-                },
-                'score': None,
-                'match_type': 'recommendation',
-                'hyperedge_id': rid,
-                'doc_id': doc_id,
-                'role': 'recommendation',
-                'material_id': None,
-                'material_score': None,
-                'source': source,
-                'recommendation_label': '推荐扩展',
-            })
-            added_he.add(rid)
-            if doc_id is not None:
-                main_doc_ids.add(int(doc_id))
-
-        if extra:
-            self.logger.info(
-                f"[retrieve] recommendation expand "
-                f"seeds={len(seed_he_ids)} candidates={len(candidate_ids)} "
-                f"added={len(extra)}"
-            )
-        return list(passages) + extra
 
     @staticmethod
     def _concat_doc_text(items: list, *, max_chars: int = -1) -> str:
@@ -1445,14 +1297,11 @@ class Retrieve:
     def _group_main_materials(self, passages: list) -> list:
         """
         主检索资料按 material_id（缺省 doc_id）分组，保留块原有顺序。
-        推荐扩展（role=recommendation）不参与文档级重排。
         返回 [{key, doc_id, source, items, score}, ...]，顺序 = 当前资料序。
         """
         groups = {}
         order = []
         for p in passages or []:
-            if p.get('role') == 'recommendation':
-                continue
             mid = p.get('material_id')
             did = p.get('doc_id')
             key = mid if mid is not None else (f'doc:{did}' if did is not None else id(p))
@@ -1488,7 +1337,6 @@ class Retrieve:
           1) 主资料按文档聚合成完整文本（块序拼接、无标注）
           2) Qwen3-Reranker 打分排序
           3) 只保留 top_k 文档；重排 material_id = 1..k
-          4) 推荐扩展不进入最终上下文（上下文仅 top_k 完整文档）
         失败时回退：按原 material 分截 top_k。
 
         top_k / enable: 覆盖配置（关键词路首轮 rerank 用）。
@@ -1533,7 +1381,7 @@ class Retrieve:
             return []
 
         if not enable:
-            # 关闭重排 / top_k=0：保留全部主资料 + 推荐（调用方已拼好）
+            # 关闭重排 / top_k=0：保留全部主资料
             if update_last:
                 self.last_rerank.update({
                     'n_out': len(groups),
@@ -1831,9 +1679,6 @@ class Retrieve:
         t0 = time.perf_counter()
         passages = self._build_materials(merged)
         passages = self._enrich_passage_ids(passages)
-
-        if not enable_rerank:
-            passages = self._expand_recommendations(passages)
         t_expand = time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -1861,7 +1706,6 @@ class Retrieve:
         self._set_last_timing(timing)
 
         n_mat = len({p.get('material_id') for p in passages if p.get('material_id') is not None})
-        n_rec = sum(1 for p in passages if p.get('role') == 'recommendation')
         n_head = sum(1 for p in passages if p.get('role') == 'head')
         n_index = sum(1 for p in passages if p.get('role') == 'index')
         n_merged_chunks = len(merged)
@@ -1879,7 +1723,7 @@ class Retrieve:
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "
-            f"rec_expand={n_rec} passages={len(passages)} "
+            f"passages={len(passages)} "
             f"timing precompute={t_precompute:.3f}s rewrite={t_rewrite:.3f}s "
             f"embed={t_emb:.3f}s chunk={t_chunk:.3f}s node={t_node:.3f}s "
             f"keyword={t_keyword:.3f}s expand={t_expand:.3f}s "

@@ -10,7 +10,6 @@ from .module.extract import Extract
 from .module.build import Build
 from .module.vectorization import Vectorization
 from .module.retrieve import Retrieve
-from .module.recommend import Recommend
 
 from .utils.OpenAIAPI import LLM
 from .utils.prompt import PROMPT
@@ -71,9 +70,6 @@ class DHMF:
         self.build_module = Build(db=self.db,logger=self.logger,config=self.config)
         self.vectorization_module = Vectorization(logger=self.logger,config=self.config)
         self.retrieve_module = Retrieve(db=self.db,vdb=self.vdb,logger=self.logger,config=self.config)
-        self.recommend_module = Recommend(
-            db=self.db, vdb=self.vdb, logger=self.logger, config=self.config
-        )
 
         self.doc_module.metrics = self.metrics
         self.summary_module.metrics = self.metrics
@@ -409,6 +405,23 @@ class DHMF:
         self.summary_module.clear()
         self.vectorization_clear('hyperedge')
 
+    def _ids_for_docs(self, table, doc_ids):
+        ids = []
+        for doc_id in doc_ids:
+            rows = self.db[table].search_by('doc_id', doc_id, columns=['id']) or []
+            ids.extend(r['id'] for r in rows if r.get('id') is not None)
+        return ids
+
+    def _tombstone_store(self, store, ids):
+        vdb = self.vdb.get(store)
+        if vdb is None:
+            return 0
+        try:
+            return vdb.remove(ids)
+        except Exception as e:
+            self.logger.warning(f"delete: VDB tombstone failed for {store}: {e}")
+            return f'error:{e}'
+
     def delete(
         self,
         names,
@@ -417,24 +430,13 @@ class DHMF:
         clear_cache: bool = False,
     ):
         """
-        Delete document(s) and all related table rows by file name(s).
+        Delete document(s) and the whole slice family, then related rows.
 
-        Removes from: doc, chunk, hyperedge, node (and edge by default).
-        Optionally tombstones corresponding vectors so search no longer
-        returns them (HNSW graph is not rebuilt).
-        Optionally clears PDF recognition cache for the file(s).
+        Order: collect IDs → tombstone vectors → delete SQL.
+        A long PDF (foo.pdf / foo.pdf_1 / foo.pdf_2) is collected as one
+        family from extra.source_name and the _N name pattern.
 
-        Args:
-            names: str or list/tuple of file names, e.g. 'TDS_48400.pdf'
-                   or ['TDS_48400.pdf', 'a.txt']. Match is exact on doc.name.
-            delete_edge: also delete edge rows linked by doc_id (default True).
-            delete_vectors: tombstone embeddings in VDB (default True).
-            clear_cache: if True, also delete PDF recognition cache entries
-                         for this file name so next run will re-recognize (default False).
-
-        Returns:
-            dict summary: {name: {doc_ids, doc, chunk, hyperedge, node, edge,
-            cache, vectors, ...}}
+        Compact later with compact_vectors(); it keeps only ids still in SQL.
         """
         if isinstance(names, str):
             name_list = [names]
@@ -442,11 +444,16 @@ class DHMF:
             name_list = list(names)
 
         summary = {}
+        processed_ids = set()
         for name in name_list:
-            docs = self.db['doc'].search('name', name)
+            family = self.doc_module.collect_docs_for_delete(name)
+            family_names = [d.get('name') for d in family if d.get('name')]
+            pending = [d for d in family if d.get('id') not in processed_ids]
             counts = {
-                'found': bool(docs),
-                'doc_ids': [d['id'] for d in docs] if docs else [],
+                'found': bool(family),
+                'already_deleted': bool(family) and not pending,
+                'names': family_names,
+                'doc_ids': [d['id'] for d in pending],
                 'doc': 0,
                 'chunk': 0,
                 'hyperedge': 0,
@@ -456,22 +463,39 @@ class DHMF:
                 'vectors': {},
             }
 
-            if not docs:
+            if not family:
                 self.logger.warning(f"delete: no document found with name={name!r}")
                 if clear_cache:
-                    counts['cache'] = self.doc_module.clear_recognition_cache(name)
+                    counts['cache'] = self.doc_module.clear_recognition_cache(
+                        Path(str(name)).name
+                    )
+                summary[name] = counts
+                continue
+
+            if not pending:
+                self.logger.info(
+                    f"delete: {name!r} already removed with slice family "
+                    f"{family_names}"
+                )
                 summary[name] = counts
                 continue
 
             doc_ids = counts['doc_ids']
+            chunk_ids = self._ids_for_docs('chunk', doc_ids)
+            hyperedge_ids = self._ids_for_docs('hyperedge', doc_ids)
+            node_ids = self._ids_for_docs('node', doc_ids)
+            edge_ids = self._ids_for_docs('edge', doc_ids) if delete_edge else []
 
-            chunk_ids, hyperedge_ids, node_ids, edge_ids = [], [], [], []
-            for doc_id in doc_ids:
-                chunk_ids.extend([r['id'] for r in self.db['chunk'].search('doc_id', doc_id)])
-                hyperedge_ids.extend([r['id'] for r in self.db['hyperedge'].search('doc_id', doc_id)])
-                node_ids.extend([r['id'] for r in self.db['node'].search('doc_id', doc_id)])
+            if delete_vectors:
+                vec_counts = {
+                    'doc': self._tombstone_store('doc', doc_ids),
+                    'chunk': self._tombstone_store('chunk', chunk_ids),
+                    'hyperedge': self._tombstone_store('hyperedge', hyperedge_ids),
+                    'node': self._tombstone_store('node', node_ids),
+                }
                 if delete_edge:
-                    edge_ids.extend([r['id'] for r in self.db['edge'].search('doc_id', doc_id)])
+                    vec_counts['edge'] = self._tombstone_store('edge', edge_ids)
+                counts['vectors'] = vec_counts
 
             for doc_id in doc_ids:
                 counts['node'] += self.db['node'].delete('doc_id', doc_id)
@@ -480,25 +504,17 @@ class DHMF:
                 if delete_edge:
                     counts['edge'] += self.db['edge'].delete('doc_id', doc_id)
                 counts['doc'] += self.db['doc'].delete('id', doc_id)
-
-            if delete_vectors:
-                vec_counts = {}
-                try:
-                    vec_counts['doc'] = self.vdb['doc'].remove(doc_ids)
-                    vec_counts['chunk'] = self.vdb['chunk'].remove(chunk_ids)
-                    vec_counts['hyperedge'] = self.vdb['hyperedge'].remove(hyperedge_ids)
-                    vec_counts['node'] = self.vdb['node'].remove(node_ids)
-                    if delete_edge and edge_ids:
-                        vec_counts['edge'] = self.vdb['edge'].remove(edge_ids)
-                except Exception as e:
-                    self.logger.warning(f"delete: VDB tombstone partial failure for {name!r}: {e}")
-                counts['vectors'] = vec_counts
+                processed_ids.add(doc_id)
 
             if clear_cache:
-                counts['cache'] = self.doc_module.clear_recognition_cache(name)
+                cache_names = {Path(str(name)).name, self.doc_module.slice_family_base(name)}
+                cache_names.update(family_names)
+                cache_names.discard('')
+                for cn in sorted(cache_names):
+                    counts['cache'] += self.doc_module.clear_recognition_cache(cn)
 
             self.logger.info(
-                f"delete: removed {name!r} "
+                f"delete: removed {name!r} family={family_names} "
                 f"doc={counts['doc']} chunk={counts['chunk']} "
                 f"hyperedge={counts['hyperedge']} node={counts['node']} "
                 f"edge={counts['edge']} cache={counts['cache']} "
@@ -641,7 +657,7 @@ class DHMF:
 
     def compact_vectors(self, db_name):
         """
-        Manually compact one vector store. Skip if it has no tombstones.
+        Manually compact one vector store. Keeps only ids still in SQL.
         """
         names = self._vdb_names(db_name)
         return self._compact_stores(names)
@@ -649,7 +665,7 @@ class DHMF:
     def compact_all_vectors(self):
         """
         Manually compact every loaded vector store in turn.
-        A store with no tombstones is skipped.
+        Each store keeps only ids still present in SQLite.
         """
         return self._compact_stores(self._vdb_names(None))
 
@@ -660,45 +676,22 @@ class DHMF:
             vdb = self.vdb.get(name)
             if vdb is None or not hasattr(vdb, 'compact'):
                 continue
-            stats = (
-                vdb.deleted_stats(per_shard=False)
-                if hasattr(vdb, 'deleted_stats')
-                else {}
-            )
-            if int(stats.get('deleted_count') or 0) <= 0:
-                summary = {
-                    'name': name,
-                    'skipped': True,
-                    'reason': 'no_tombstones',
-                    'ntotal_before': stats.get('ntotal', 0),
-                    'deleted_before': 0,
-                    'deleted_ratio': 0.0,
-                }
-                out[name] = summary
-                self.logger.info(f"compact_vectors skip {name}: no tombstones")
-                continue
+            live_ids = self.db[name].list_ids() if name in self.db else []
             self.logger.info(
-                f"Start compact_vectors {name}: "
-                f"deleted={stats.get('deleted_count', '?')} "
-                f"ntotal={stats.get('ntotal', '?')} "
-                f"ratio={stats.get('deleted_ratio', 0):.4f}"
+                f"Start compact_vectors {name}: sql_live_ids={len(live_ids)}"
             )
-            summary = vdb.compact()
+            summary = vdb.compact(live_ids=live_ids)
             out[name] = summary
-            self.logger.info(f"Finish compact_vectors {name}: {summary}")
+            if summary.get('skipped'):
+                self.logger.info(
+                    f"compact_vectors skip {name}: {summary.get('reason')}"
+                )
+            else:
+                self.logger.info(f"Finish compact_vectors {name}: {summary}")
 
         if hasattr(self.retrieve_module, '_precomputed'):
             self.retrieve_module._precomputed = False
         return out
-
-    def recommend(self):
-        """Offline similar-hyperedge recommendation (clears then recomputes)."""
-        self.logger.info("Start recommend (similar hyperedges).")
-        summary = self.recommend_module.run()
-        if hasattr(self.retrieve_module, '_precomputed'):
-            self.retrieve_module._precomputed = False
-        self.logger.info(f"Finish recommend. summary={summary}")
-        return summary
 
     @staticmethod
     def parse_query_answer(text: str) -> dict:
