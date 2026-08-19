@@ -1,6 +1,6 @@
 run:
   # stats | evaluate | report | all
-  mode: stats
+  mode: all
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -19,19 +19,19 @@ dataset:
 paths:
   output_dir: benchmark2_results
 
-  stats_filename: stats.json
+  stats_filename: stats_queation2.json
   stats_path: null
 
-  dataset_filename: dataset.json
+  dataset_filename: dataset_queation2.json
   dataset_path: null
 
-  eval_results_filename: evals.json
+  eval_results_filename: evals_queation2.json
   eval_results_path: null
 
-  report_source_filename: evals.json
+  report_source_filename: evals_queation2.json
   report_source_path: null
 
-  report_filename: report.json
+  report_filename: report_queation2.json
   report_path: null
 
 evaluate:

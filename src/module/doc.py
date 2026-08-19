@@ -233,7 +233,7 @@ class Doc:
                 keys.add(Path(str(v)).name)
         return {k for k in keys if k}
 
-    def collect_docs_for_delete(self, name: str) -> list:
+    def collect_docs_for_delete(self, name: str, identity_rows=None) -> list:
         """
         Resolve a file name to the full slice family.
 
@@ -245,9 +245,10 @@ class Doc:
         if not requested:
             return []
 
-        identity_rows = self.doc_db.db.execute(
-            f"SELECT id, name, extra FROM {self.doc_db.table}"
-        ) or []
+        if identity_rows is None:
+            identity_rows = self.doc_db.db.execute(
+                f"SELECT id, name, extra FROM {self.doc_db.table}"
+            ) or []
 
         bases = {requested, self.slice_family_base(requested)}
         bases.discard('')

@@ -10,6 +10,7 @@ if __name__ == '__main__':
 
     # graph.download_from_oss()
     # graph.dedupe_downloaded_docs()
+
     graph.insert_default()
     graph.summary()
     graph.chunk()

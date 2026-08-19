@@ -25,3 +25,7 @@ docs/
 rules/
 benchmark_results_2k/
 cache_2k/
+benchmark2_results/
+benchmark2_result/
+agent_try/
+self_agent/

@@ -405,11 +405,43 @@ class DHMF:
         self.vectorization_clear('hyperedge')
 
     def _ids_for_docs(self, table, doc_ids):
+        return self._select_ids_where_in(table, 'doc_id', doc_ids)
+
+    def _in_parts(self, values, size=400):
+        values = list(values)
+        for i in range(0, len(values), size):
+            yield values[i:i + size]
+
+    def _select_ids_where_in(self, table, column, values):
         ids = []
-        for doc_id in doc_ids:
-            rows = self.db[table].search_by('doc_id', doc_id, columns=['id']) or []
+        store = self.db[table]
+        for part in self._in_parts(values):
+            if not part:
+                continue
+            ph = ','.join('?' * len(part))
+            rows = store.db.execute(
+                f"SELECT id FROM {store.table} WHERE {column} IN ({ph})",
+                tuple(part),
+            ) or []
             ids.extend(r['id'] for r in rows if r.get('id') is not None)
         return ids
+
+    def _delete_where_in(self, table, column, values):
+        n = 0
+        store = self.db[table]
+        for part in self._in_parts(values):
+            if not part:
+                continue
+            ph = ','.join('?' * len(part))
+            rows = store.db.execute(
+                f"SELECT id FROM {store.table} WHERE {column} IN ({ph})",
+                tuple(part),
+            ) or []
+            ids = [r['id'] for r in rows if r.get('id') is not None]
+            if ids:
+                store.delete_by_ids(ids)
+                n += len(ids)
+        return n
 
     def _tombstone_store(self, store, ids):
         vdb = self.vdb.get(store)
@@ -442,89 +474,116 @@ class DHMF:
         else:
             name_list = list(names)
 
-        summary = {}
-        processed_ids = set()
-        for name in name_list:
-            family = self.doc_module.collect_docs_for_delete(name)
-            family_names = [d.get('name') for d in family if d.get('name')]
-            pending = [d for d in family if d.get('id') not in processed_ids]
-            counts = {
-                'found': bool(family),
-                'already_deleted': bool(family) and not pending,
-                'names': family_names,
-                'doc_ids': [d['id'] for d in pending],
-                'doc': 0,
-                'chunk': 0,
-                'hyperedge': 0,
-                'node': 0,
-                'edge': 0,
-                'cache': 0,
-                'vectors': {},
-            }
+        identity_rows = self.doc_module.doc_db.db.execute(
+            f"SELECT id, name, extra FROM {self.doc_module.doc_db.table}"
+        ) or []
 
-            if not family:
-                self.logger.warning(f"delete: no document found with name={name!r}")
-                if clear_cache:
-                    counts['cache'] = self.doc_module.clear_recognition_cache(
-                        Path(str(name)).name
-                    )
-                summary[name] = counts
-                continue
+        requested = set()
+        for raw in name_list:
+            n = Path(str(raw)).name.strip()
+            if n:
+                requested.add(n)
+                requested.add(self.doc_module.slice_family_base(n))
+        requested.discard('')
 
-            if not pending:
-                self.logger.info(
-                    f"delete: {name!r} already removed with slice family "
-                    f"{family_names}"
-                )
-                summary[name] = counts
-                continue
+        changed = True
+        while changed:
+            changed = False
+            for row in identity_rows:
+                n = (row.get('name') or '').strip()
+                src_keys = self.doc_module._source_keys_of_row(row)
+                family_n = self.doc_module.slice_family_base(n)
+                if n in requested or family_n in requested or (src_keys & requested):
+                    extra = {n, family_n} | src_keys
+                    extra.discard('')
+                    extra -= requested
+                    if extra:
+                        requested |= extra
+                        changed = True
 
-            doc_ids = counts['doc_ids']
-            chunk_ids = self._ids_for_docs('chunk', doc_ids)
-            hyperedge_ids = self._ids_for_docs('hyperedge', doc_ids)
-            node_ids = self._ids_for_docs('node', doc_ids)
-            edge_ids = self._ids_for_docs('edge', doc_ids) if delete_edge else []
+        pending = []
+        seen = set()
+        for row in identity_rows:
+            n = (row.get('name') or '').strip()
+            src_keys = self.doc_module._source_keys_of_row(row)
+            family_n = self.doc_module.slice_family_base(n)
+            if n in requested or family_n in requested or (src_keys & requested):
+                did = row.get('id')
+                if did is None or did in seen:
+                    continue
+                seen.add(did)
+                pending.append(row)
 
-            if delete_vectors:
-                vec_counts = {
-                    'doc': self._tombstone_store('doc', doc_ids),
-                    'chunk': self._tombstone_store('chunk', chunk_ids),
-                    'hyperedge': self._tombstone_store('hyperedge', hyperedge_ids),
-                    'node': self._tombstone_store('node', node_ids),
-                }
-                if delete_edge:
-                    vec_counts['edge'] = self._tombstone_store('edge', edge_ids)
-                counts['vectors'] = vec_counts
+        family_names = [d.get('name') for d in pending if d.get('name')]
+        doc_ids = [d['id'] for d in pending]
+        counts = {
+            'found': bool(pending),
+            'names': family_names,
+            'doc_ids': doc_ids,
+            'doc': 0,
+            'chunk': 0,
+            'hyperedge': 0,
+            'node': 0,
+            'edge': 0,
+            'cache': 0,
+            'vectors': {},
+        }
 
-            for doc_id in doc_ids:
-                counts['node'] += self.db['node'].delete('doc_id', doc_id)
-                counts['hyperedge'] += self.db['hyperedge'].delete('doc_id', doc_id)
-                counts['chunk'] += self.db['chunk'].delete('doc_id', doc_id)
-                if delete_edge:
-                    counts['edge'] += self.db['edge'].delete('doc_id', doc_id)
-                counts['doc'] += self.db['doc'].delete('id', doc_id)
-                processed_ids.add(doc_id)
-
-            if clear_cache:
-                cache_names = {Path(str(name)).name, self.doc_module.slice_family_base(name)}
-                cache_names.update(family_names)
-                cache_names.discard('')
-                for cn in sorted(cache_names):
-                    counts['cache'] += self.doc_module.clear_recognition_cache(cn)
-
-            self.logger.info(
-                f"delete: removed {name!r} family={family_names} "
-                f"doc={counts['doc']} chunk={counts['chunk']} "
-                f"hyperedge={counts['hyperedge']} node={counts['node']} "
-                f"edge={counts['edge']} cache={counts['cache']} "
-                f"vectors={counts.get('vectors') or {}}"
+        if not pending:
+            self.logger.warning(
+                f"delete: no document found for {len(name_list)} name(s)"
             )
-            summary[name] = counts
+            if clear_cache:
+                for raw in name_list:
+                    counts['cache'] += self.doc_module.clear_recognition_cache(
+                        Path(str(raw)).name
+                    )
+            return {'_batch': counts}
+
+        chunk_ids = self._ids_for_docs('chunk', doc_ids)
+        hyperedge_ids = self._ids_for_docs('hyperedge', doc_ids)
+        node_ids = self._ids_for_docs('node', doc_ids)
+        edge_ids = self._ids_for_docs('edge', doc_ids) if delete_edge else []
+
+        if delete_vectors:
+            vec_counts = {
+                'doc': self._tombstone_store('doc', doc_ids),
+                'chunk': self._tombstone_store('chunk', chunk_ids),
+                'hyperedge': self._tombstone_store('hyperedge', hyperedge_ids),
+                'node': self._tombstone_store('node', node_ids),
+            }
+            if delete_edge:
+                vec_counts['edge'] = self._tombstone_store('edge', edge_ids)
+            counts['vectors'] = vec_counts
+
+        counts['node'] = self._delete_where_in('node', 'doc_id', doc_ids)
+        counts['hyperedge'] = self._delete_where_in('hyperedge', 'doc_id', doc_ids)
+        counts['chunk'] = self._delete_where_in('chunk', 'doc_id', doc_ids)
+        if delete_edge:
+            counts['edge'] = self._delete_where_in('edge', 'doc_id', doc_ids)
+        counts['doc'] = self._delete_where_in('doc', 'id', doc_ids)
+
+        if clear_cache:
+            cache_names = {Path(str(n)).name for n in name_list}
+            cache_names.update(family_names)
+            cache_names.update(
+                self.doc_module.slice_family_base(n) for n in list(cache_names)
+            )
+            cache_names.discard('')
+            for cn in sorted(cache_names):
+                counts['cache'] += self.doc_module.clear_recognition_cache(cn)
+
+        self.logger.info(
+            f"delete: removed {counts['doc']} doc(s) from {len(name_list)} name(s) "
+            f"chunk={counts['chunk']} hyperedge={counts['hyperedge']} "
+            f"node={counts['node']} edge={counts['edge']} cache={counts['cache']} "
+            f"vectors={counts.get('vectors') or {}}"
+        )
 
         if hasattr(self.retrieve_module, '_precomputed'):
             self.retrieve_module._precomputed = False
 
-        return summary
+        return {'_batch': counts}
 
     def chunk(self):
         self.begin_build()
