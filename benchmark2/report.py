@@ -182,69 +182,6 @@ def _group_metrics(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _dimension_summary(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    by_name: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    n_items = 0
-    n_pass = 0
-    scores: List[float] = []
-    for r in results:
-        for d in r.get("dimension_scores") or []:
-            if not isinstance(d, dict):
-                continue
-            name = str(d.get("dimension") or "").strip()
-            if not name:
-                continue
-            n_items += 1
-            by_name[name].append(d)
-            if d.get("pass") is True:
-                n_pass += 1
-            elif d.get("pass") is None and d.get("score") is not None:
-                try:
-                    if float(d["score"]) >= 2:
-                        n_pass += 1
-                except (TypeError, ValueError):
-                    pass
-            if d.get("score") is not None:
-                try:
-                    scores.append(float(d["score"]))
-                except (TypeError, ValueError):
-                    pass
-
-    by_dimension: Dict[str, Any] = {}
-    for name, items in sorted(by_name.items(), key=lambda x: -len(x[1])):
-        dscores = []
-        n_ok = 0
-        for d in items:
-            if d.get("score") is not None:
-                try:
-                    dscores.append(float(d["score"]))
-                except (TypeError, ValueError):
-                    pass
-            passed = d.get("pass")
-            if passed is True:
-                n_ok += 1
-            elif passed is None and d.get("score") is not None:
-                try:
-                    if float(d["score"]) >= 2:
-                        n_ok += 1
-                except (TypeError, ValueError):
-                    pass
-        by_dimension[name] = {
-            "n": len(items),
-            "n_pass": n_ok,
-            "pass_rate": safe_div(n_ok, len(items)),
-            "mean_score": mean(dscores),
-        }
-
-    return {
-        "n_dimension_items": n_items,
-        "n_unique": len(by_name),
-        "mean_pass_rate": safe_div(n_pass, n_items) if n_items else None,
-        "mean_score": mean(scores),
-        "by_dimension": by_dimension,
-    }
-
-
 def _sheet_dist_map(stats: Optional[Dict[str, Any]], field: str) -> Dict[str, Any]:
     if not stats:
         return {}
@@ -377,7 +314,6 @@ def _build_one_summary(
         "pipeline": overall["pipeline"],
         "judgment": overall["judgment"],
         "score": overall["score"],
-        "dimensions": _dimension_summary(rows),
         "latency": overall["latency"],
         "tokens": overall["tokens"],
         "by_category": {
@@ -426,7 +362,7 @@ def _compare_systems(
     return {
         "n_paired": n_paired,
         "score_delta_mean": mean(deltas),
-        "score_delta_note": "正值表示超图+LLM 均分更高",
+        "score_delta_note": "正值表示超图 均分更高",
         "win": {
             "hypergraph": n_hg_win,
             "llm_only": n_lo_win,
@@ -518,13 +454,6 @@ def build_report_document(
             "eval_elapsed_s": src_meta.get("elapsed_s"),
             "eval_done": src_meta.get("done"),
         },
-        "dataset_stats": {
-            "meta": stats_meta,
-            "category_fields": (stats or {}).get("category_fields"),
-            "distributions": (stats or {}).get("distributions"),
-        }
-        if stats
-        else None,
         "summary": summary,
     }
 
@@ -564,7 +493,7 @@ def format_summary_text(summary: Dict[str, Any]) -> str:
     if not summary:
         return ""
     titles = {
-        SYSTEM_HYPERGRAPH: "超图+LLM",
+        SYSTEM_HYPERGRAPH: "超图",
         SYSTEM_LLM_ONLY: "纯LLM",
     }
     if SYSTEM_HYPERGRAPH in summary or SYSTEM_LLM_ONLY in summary:

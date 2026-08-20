@@ -912,6 +912,6 @@ class DHMF:
         return respond
 
     def agent_query(self, query, pretty=False):
-        """Multi-hop agent query (plan → single-hop skills → synthesize)."""
+        """Agent query: plan retrieve hops + parallel pure-LLM, then synthesize."""
         from .agent.runner import run_agent_query
         return run_agent_query(self, query, pretty=pretty)

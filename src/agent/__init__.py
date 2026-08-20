@@ -5,7 +5,7 @@
 
     dhmf.agent_query("……", pretty=True)
 
-内部：plan → query_skill × N → synthesize。
+内部：plan（检索步 + 并行纯 LLM）→ execute → synthesize。
 """
 
 from .prompts import Agent_PROMPT

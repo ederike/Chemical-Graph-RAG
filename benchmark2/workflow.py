@@ -275,7 +275,7 @@ class Benchmark2Workflow:
         dataset: Optional[Dict[str, Any]] = None,
         save: bool = True,
     ) -> Dict[str, Any]:
-        """步骤 2：逐题超图+LLM / 纯LLM 问答 + 从宽评判。"""
+        """步骤 2：逐题超图 / 纯LLM 问答 + 评判。"""
         if dataset is None:
             dataset = self._ensure_dataset()
 
@@ -357,6 +357,18 @@ class Benchmark2Workflow:
                 eval_data = self.load_eval_results(src_path)
         elif source_path is not None:
             src_path = self._resolve_path(source_path)
+
+        ev_meta = eval_data.get("meta") if isinstance(eval_data.get("meta"), dict) else {}
+        n_res = len(eval_data.get("results") or [])
+        planned = ev_meta.get("n_total_planned") or ev_meta.get("n_questions")
+        if ev_meta.get("done") is False:
+            print(
+                f"[report] 评测结果未完成：results={n_res} "
+                f"planned={planned}  "
+                f"（evals 是中断进度，report 只会汇总已写出的题；"
+                f"请先把 run.mode 改回 evaluate 跑完）",
+                file=sys.stderr,
+            )
 
         stats = None
         if isinstance(eval_data.get("stats"), dict):

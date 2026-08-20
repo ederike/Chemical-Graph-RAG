@@ -6,10 +6,16 @@ import json
 import re
 from typing import Any, Dict, List, Optional, TypedDict
 
+LLM_STEP_ID = 'llm'
+LLM_STEP_KIND = 'llm'
+RETRIEVE_STEP_KIND = 'retrieve'
+
+
 class PlanStep(TypedDict, total=False):
     id: str
     question: str
     depends_on: List[str]
+    kind: str  # retrieve | llm
 
 class StepResult(TypedDict, total=False):
     id: str
@@ -179,6 +185,49 @@ def parse_plan(raw: str) -> List[PlanStep]:
         steps.append(PlanStep(id=sid, question=q, depends_on=deps))
     return steps
 
+def is_llm_step(step: Optional[PlanStep]) -> bool:
+    if not step:
+        return False
+    return (step.get('kind') == LLM_STEP_KIND) or (str(step.get('id') or '') == LLM_STEP_ID)
+
+
+def retrieve_plan(plan: List[PlanStep]) -> List[PlanStep]:
+    return [s for s in (plan or []) if not is_llm_step(s)]
+
+
+def inject_llm_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
+    """在依赖图中并行加入纯 LLM 步（depends_on=[]，不计入 max_steps）。"""
+    q = (query or '').strip()
+    out: List[PlanStep] = []
+    renames: Dict[str, str] = {}
+    for s in plan or []:
+        if is_llm_step(s):
+            continue
+        sid = str(s.get('id') or '').strip() or str(len(out) + 1)
+        if sid == LLM_STEP_ID:
+            new_id = 'r-llm'
+            renames[sid] = new_id
+            sid = new_id
+        out.append(PlanStep(
+            id=sid,
+            question=(s.get('question') or '').strip(),
+            depends_on=list(s.get('depends_on') or []),
+            kind=RETRIEVE_STEP_KIND,
+        ))
+    if renames:
+        for s in out:
+            s['depends_on'] = [
+                renames.get(d, d) for d in (s.get('depends_on') or [])
+            ]
+    out.append(PlanStep(
+        id=LLM_STEP_ID,
+        question=q,
+        depends_on=[],
+        kind=LLM_STEP_KIND,
+    ))
+    return out
+
+
 def normalize_plan(steps: List[PlanStep], *, max_steps: int, fallback: str) -> List[PlanStep]:
     """去重 id、截断、清洗悬空依赖；空则回退单步。"""
     fb = [PlanStep(id='1', question=(fallback or '').strip(), depends_on=[])]
@@ -230,14 +279,24 @@ def format_prior(results: Dict[str, StepResult], dep_ids: List[str]) -> str:
 
 def format_step_blocks(plan: List[PlanStep], results: Dict[str, StepResult]) -> str:
     blocks = []
-    for s in plan:
+    for s in retrieve_plan(plan):
         sid = s['id']
         r = results.get(sid) or {}
         q = (r.get('resolved_question') or s.get('question') or '').strip()
         a = (r.get('answer') or '').strip() or '（无结论）'
         src = ' / '.join(r.get('sources') or []) or '（无）'
         blocks.append(f'### 步骤 {sid}\n问：{q}\n答：{a}\n来源：{src}')
-    return '\n\n'.join(blocks) if blocks else '（无子步骤结论）'
+    return '\n\n'.join(blocks) if blocks else '（无检索子步骤结论）'
+
+
+def format_llm_answer(plan: List[PlanStep], results: Dict[str, StepResult]) -> str:
+    for s in plan or []:
+        if not is_llm_step(s):
+            continue
+        r = results.get(s['id']) or {}
+        a = (r.get('answer') or '').strip()
+        return a or '（纯 LLM 无结论）'
+    return '（无纯 LLM 回答）'
 
 def step_result_from_skill(
     *,

@@ -2,7 +2,10 @@
 LangGraph 编排：
 
     START → plan → execute ⟲ → synthesize → END
-    单跳（规划仅 1 步）：execute 后直接 END，不进 synthesize
+
+依赖图在 plan 后自动并行加入纯 LLM 步（depends_on=[]）。
+单跳：1 次检索作答 + 纯 LLM 作答 → synthesize 对照两者。
+多跳：全部检索子步 + 纯 LLM → synthesize。
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ def build_agent_graph(ctx: AgentContext) -> Any:
     g.add_conditional_edges(
         'execute',
         route_after_execute,
-        {'execute': 'execute', 'synthesize': 'synthesize', 'end': END},
+        {'execute': 'execute', 'synthesize': 'synthesize'},
     )
     g.add_edge('synthesize', END)
     return g.compile()

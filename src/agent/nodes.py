@@ -1,7 +1,7 @@
 """
 LangGraph 节点：plan → execute ⟲ → synthesize。
 
-依赖经 AgentContext 注入；节点只做编排，状态在 LangGraph state 中传递。
+依赖图 = 规划检索步 + 自动并行的纯 LLM 步；单跳/多跳都进 synthesize。
 """
 
 from __future__ import annotations
@@ -21,14 +21,18 @@ from .state import (
     StepResult,
     answer_of,
     first_line,
+    format_llm_answer,
     format_prior,
     format_step_blocks,
+    inject_llm_step,
+    is_llm_step,
     merge_sources,
     normalize_plan,
     parse_plan,
     pending_steps,
     plan_done,
     ready_steps,
+    retrieve_plan,
     step_result_from_skill,
     sum_retrieve_latency,
     sum_retrieve_timing,
@@ -52,6 +56,14 @@ class AgentContext:
     def chat_text(self, system: str, user: str) -> str:
         return answer_of(self.chat(system, user))
 
+
+def _fill_prompt(template: str, **kwargs) -> str:
+    """按占位符替换，避免 .format 把正文里的 {braces} 当成字段。"""
+    text = template or ''
+    for key, val in kwargs.items():
+        text = text.replace('{' + key + '}', str(val if val is not None else ''))
+    return text
+
 def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     query = (state.get('query') or '').strip()
     ctx.logger.info(f'[agent.plan] query={query!r}')
@@ -61,9 +73,14 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
         Agent_PROMPT['PLAN_USER'].format(query=query, max_steps=int(ctx.cfg.max_steps)),
     )
     steps = normalize_plan(parse_plan(raw), max_steps=int(ctx.cfg.max_steps), fallback=query)
+    steps = inject_llm_step(steps, query)
+    n_ret = len(retrieve_plan(steps))
     ctx.logger.info(
-        f'[agent.plan] steps={len(steps)} '
-        + ' | '.join(f"{s['id']}:{s['question'][:40]}" for s in steps)
+        f'[agent.plan] retrieve={n_ret} + llm '
+        + ' | '.join(
+            f"{s['id']}:{s.get('kind', 'retrieve')}:{s['question'][:40]}"
+            for s in steps
+        )
     )
     return {'plan': steps, 'results': {}, 'error': ''}
 
@@ -83,8 +100,11 @@ def _resolve_question(
     try:
         resp = ctx.chat(
             Agent_PROMPT.get('RESOLVE_SYSTEM', ''),
-            Agent_PROMPT['RESOLVE_USER'].format(
-                query=query, prior_results=prior, step_question=planned,
+            _fill_prompt(
+                Agent_PROMPT['RESOLVE_USER'],
+                query=query,
+                prior_results=prior,
+                step_question=planned,
             ),
         )
         if isinstance(resp, dict) and resp.get('status') == 1:
@@ -108,20 +128,32 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
         ctx.logger.warning(f'[agent.execute] deadlock, force-run {[s["id"] for s in pending]}')
         ready = pending
 
+    n_retrieve = len(retrieve_plan(plan))
     for step in ready:
-        sid      = step['id']
-        resolved = _resolve_question(ctx, query=query, step=step, results=results)
-        ctx.logger.info(f'[agent.execute] step={sid} q={resolved!r}')
-
+        sid = step['id']
         t0 = time.perf_counter()
-        resp = ctx.skill.run(
-            resolved,
-            original_query=query,
-            step_id=sid,
-            n_steps=len(plan),
-            planned_question=step.get('question') or '',
-            depends_on=list(step.get('depends_on') or []),
-        )
+        if is_llm_step(step):
+            ctx.logger.info(f'[agent.execute] step={sid} kind=llm q={query!r}')
+            resp = ctx.chat(
+                Agent_PROMPT.get('LLM_DIRECT_SYSTEM', ''),
+                _fill_prompt(
+                    Agent_PROMPT.get('LLM_DIRECT_USER', ''),
+                    question=query,
+                    query=query,
+                ),
+            )
+            resolved = query
+        else:
+            resolved = _resolve_question(ctx, query=query, step=step, results=results)
+            ctx.logger.info(f'[agent.execute] step={sid} q={resolved!r}')
+            resp = ctx.skill.run(
+                resolved,
+                original_query=query,
+                step_id=sid,
+                n_steps=n_retrieve,
+                planned_question=step.get('question') or '',
+                depends_on=list(step.get('depends_on') or []),
+            )
         results[sid] = step_result_from_skill(
             sid=sid,
             planned=step.get('question') or '',
@@ -130,37 +162,13 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
             latency_s=time.perf_counter() - t0,
         )
 
-    out: Dict[str, Any] = {'results': results}
-    # 单跳：execute 完成后直接作为最终回答，不再进 synthesize 复述
-    if len(plan) == 1 and plan[0]['id'] in results:
-        out.update(_final_from_single_step(results[plan[0]['id']]))
-    return out
-
-def _final_from_single_step(r: StepResult) -> dict:
-    answer = (r.get('answer') or '').strip()
-    status = int(r.get('status') or 0)
-    return {
-        'final_answer': answer,
-        'final_status': status,
-        'respond': {
-            'status': status,
-            'answer': answer,
-            'usage_prompt_tokens':     r.get('usage_prompt_tokens'),
-            'usage_completion_tokens': r.get('usage_completion_tokens'),
-            'usage_total_tokens':      r.get('usage_total_tokens'),
-            'retrieve_latency_s':      r.get('retrieve_latency_s'),
-            'retrieve_timing':         dict(r.get('retrieve_timing') or {}),
-            'retrieval_sources':       list(r.get('sources') or []),
-        },
-    }
+    return {'results': results}
 
 def route_after_execute(state: AgentState) -> str:
     plan = state.get('plan') or []
     results = state.get('results') or {}
     if not plan_done(plan, results):
         return 'execute'
-    if len(plan) <= 1:
-        return 'end'
     return 'synthesize'
 
 def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
@@ -168,13 +176,13 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
     plan: List[PlanStep] = list(state.get('plan') or [])
     results: Dict[str, StepResult] = dict(state.get('results') or {})
 
-    if len(plan) == 1 and plan[0]['id'] in results:
-        return _final_from_single_step(results[plan[0]['id']])
-
     resp = ctx.chat(
         Agent_PROMPT.get('SYNTH_SYSTEM', ''),
-        Agent_PROMPT['SYNTH_USER'].format(
-            query=query, step_results=format_step_blocks(plan, results),
+        _fill_prompt(
+            Agent_PROMPT.get('SYNTH_USER', ''),
+            query=query,
+            step_results=format_step_blocks(plan, results),
+            llm_answer=format_llm_answer(plan, results),
         ),
     )
     if not isinstance(resp, dict):

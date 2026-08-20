@@ -1,4 +1,4 @@
-"""Excel 测试集：DHMF RAG 回答 + LLM 从宽评判。"""
+"""Excel 测试集：DHMF RAG 回答 + LLM 评判。"""
 
 from __future__ import annotations
 
@@ -94,6 +94,24 @@ def format_score_dimensions(dims: Sequence[str], raw: str = "") -> str:
 SYSTEM_HYPERGRAPH = "hypergraph"
 SYSTEM_LLM_ONLY = "llm_only"
 
+# 已写入 hypergraph / llm_only 后不再在顶层重复的字段
+_MIRRORED_TOP_KEYS = (
+    "rag_answer",
+    "rag_raw_answer",
+    "query_status",
+    "query_error",
+    "retrieval_sources",
+    "retrieval_doc_ids",
+    "llm_acc",
+    "score",
+    "judge_reason",
+    "dimension_scores",
+    "judge_status",
+    "judge_error",
+    "metrics",
+    "llm_only_answer",
+)
+
 
 def _empty_system_block() -> Dict[str, Any]:
     return {
@@ -133,7 +151,7 @@ def _answer_model_args_from_dhmf(dhmf, override: Optional[dict] = None) -> dict:
 class ExcelQueryEvaluator:
     """
     对 Excel 测试集逐题：
-      1) 超图+LLM：按 query_mode 调用 DHMF.query / agent_query
+      1) 超图：按 query_mode 调用 DHMF.query / agent_query
       2) 纯 LLM：同一模型、不检索，直接根据问题作答
       3) 两路回答各自用同一套从宽标准打分
     """
@@ -220,24 +238,14 @@ class ExcelQueryEvaluator:
         metrics["judge_completion_tokens"] = ju.get("completion_tokens")
         metrics["judge_total_tokens"] = ju.get("total_tokens")
 
-    def _mirror_hypergraph(self, result: Dict[str, Any]) -> None:
-        """顶层字段与 hypergraph 同步，便于浏览 / 兼容旧 summary。"""
-        hg = result.get(SYSTEM_HYPERGRAPH) or {}
-        result["rag_answer"] = hg.get("answer") or ""
-        result["rag_raw_answer"] = hg.get("raw_answer") or ""
-        result["query_status"] = hg.get("query_status", 0)
-        result["query_error"] = hg.get("query_error")
-        result["retrieval_sources"] = list(hg.get("retrieval_sources") or [])
-        result["retrieval_doc_ids"] = list(hg.get("retrieval_doc_ids") or [])
-        result["llm_acc"] = hg.get("llm_acc")
-        result["score"] = hg.get("score")
-        result["judge_reason"] = hg.get("judge_reason") or ""
-        result["dimension_scores"] = list(hg.get("dimension_scores") or [])
-        result["judge_status"] = hg.get("judge_status")
-        result["judge_error"] = hg.get("judge_error")
-        result["metrics"] = dict(hg.get("metrics") or {})
-        lo = result.get(SYSTEM_LLM_ONLY) or {}
-        result["llm_only_answer"] = lo.get("answer") or ""
+    @staticmethod
+    def _drop_mirrored_system_fields(result: Dict[str, Any]) -> Dict[str, Any]:
+        """两路回答只留在 hypergraph / llm_only，去掉顶层副本。"""
+        hg = result.get(SYSTEM_HYPERGRAPH)
+        if isinstance(hg, dict) and hg:
+            for k in _MIRRORED_TOP_KEYS:
+                result.pop(k, None)
+        return result
 
     def _extract_answer_text(self, respond: Any) -> str:
         return QueryEvaluator._extract_answer_text(self, respond)
@@ -492,8 +500,7 @@ class ExcelQueryEvaluator:
             if not str(question).strip():
                 result[SYSTEM_HYPERGRAPH]["query_error"] = "empty question"
                 result[SYSTEM_LLM_ONLY]["query_error"] = "empty question"
-                self._mirror_hypergraph(result)
-                return result
+                return self._drop_mirrored_system_fields(result)
 
             result[SYSTEM_HYPERGRAPH] = self._fill_hypergraph(question)
             hg = result[SYSTEM_HYPERGRAPH]
@@ -532,8 +539,7 @@ class ExcelQueryEvaluator:
                     lo["judge_status"] = 0
                     lo["judge_error"] = "skip judge: query failed"
 
-            self._mirror_hypergraph(result)
-            return result
+            return self._drop_mirrored_system_fields(result)
         finally:
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
@@ -698,7 +704,7 @@ class ExcelQueryEvaluator:
         for idx, item in enumerate(items):
             qid = str(item.get("id") or f"idx_{idx}")
             if qid in by_id:
-                results[idx] = by_id[qid]
+                results[idx] = self._drop_mirrored_system_fields(dict(by_id[qid]))
 
         fail_n = sum(
             1
@@ -790,20 +796,14 @@ class ExcelQueryEvaluator:
                         hg["query_error"] = f"worker exception: {e}"
                         lo = _empty_system_block()
                         lo["query_error"] = f"worker exception: {e}"
-                        r = {
+                        r = self._drop_mirrored_system_fields({
                             "id": item.get("id") or f"idx_{idx}",
                             "question": item.get("question") or "",
                             "expected_answer": item.get("expected_answer") or "",
                             "categories": dict(item.get("categories") or {}),
                             SYSTEM_HYPERGRAPH: hg,
                             SYSTEM_LLM_ONLY: lo,
-                            "rag_answer": "",
-                            "query_status": 0,
-                            "query_error": f"worker exception: {e}",
-                            "llm_acc": None,
-                            "score": None,
-                            "metrics": {},
-                        }
+                        })
                     results[idx] = r
                     _on_item(r)
                     if pbar is not None:
