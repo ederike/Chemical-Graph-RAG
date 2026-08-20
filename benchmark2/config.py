@@ -39,6 +39,10 @@ _RUN_MODE_ALIASES = {
     "summary": "report",
     "summarize": "report",
     "r": "report",
+    "excel": "excel",
+    "xlsx": "excel",
+    "export": "excel",
+    "export_excel": "excel",
     "all": "all",
     "both": "all",
     "full": "all",
@@ -51,7 +55,7 @@ def _normalize_run_mode(mode: Any) -> str:
     if key is None:
         raise ValueError(
             f"Unknown run.mode={mode!r}. "
-            "Supported: 'stats' | 'evaluate' | 'report' | 'all'"
+            "Supported: 'stats' | 'evaluate' | 'report' | 'excel' | 'all'"
         )
     return key
 
@@ -109,6 +113,9 @@ class Benchmark2Config:
 
     report_filename: str = "report.json"
     report_path: Optional[str] = None
+
+    report_excel_filename: Optional[str] = None
+    report_excel_path: Optional[str] = None
 
     eval_resume: bool = True
     enable_llm_only: bool = True
@@ -187,6 +194,8 @@ class Benchmark2Config:
             report_source_path=_opt_str(paths.get("report_source_path")),
             report_filename=_opt_str(paths.get("report_filename")) or "report.json",
             report_path=_opt_str(paths.get("report_path")),
+            report_excel_filename=_opt_str(paths.get("report_excel_filename")),
+            report_excel_path=_opt_str(paths.get("report_excel_path")),
             eval_resume=_as_bool(ev.get("resume", True), default=True),
             enable_llm_only=_as_bool(ev.get("enable_llm_only", True), default=True),
             eval_max_retries=int(ev.get("max_retries", 3)),
@@ -214,6 +223,7 @@ class Benchmark2Config:
             "eval_results_path",
             "report_source_path",
             "report_path",
+            "report_excel_path",
         ):
             val = getattr(self, attr, None)
             if val:
@@ -257,6 +267,15 @@ class Benchmark2Config:
             self.report_filename or "report.json",
             self.report_path,
         )
+
+    def report_excel_file(self) -> Path:
+        if self.report_excel_path:
+            return resolve_file_path(self.output_dir, "", self.report_excel_path)
+        fname = _opt_str(self.report_excel_filename)
+        if not fname:
+            json_name = self.report_filename or "report.json"
+            fname = str(Path(json_name).with_suffix(".xlsx"))
+        return resolve_file_path(self.output_dir, fname, None)
 
     def to_meta_snapshot(self) -> dict:
         return {

@@ -5,7 +5,7 @@ benchmark2 入口（无 CLI 传参）。
 全部选项写在 benchmark2/config.yaml::
 
     run:
-      mode: all          # stats | evaluate | report | all
+      mode: all          # stats | evaluate | report | excel | all
 
 运行::
 

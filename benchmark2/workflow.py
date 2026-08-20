@@ -6,7 +6,7 @@ Excel 统计 JSON + RAG 评测 + 分类汇总。
     python benchmark2.py
     python -m benchmark2.run
 
-run.mode: stats | evaluate | report | all
+run.mode: stats | evaluate | report | excel | all
 """
 
 from __future__ import annotations
@@ -399,8 +399,71 @@ class Benchmark2Workflow:
             out = self.cfg.report_file()
             self.save_json(report_doc, out)
             print(format_summary_text(report_doc.get("summary") or {}), file=sys.stderr)
+            self.export_excel(
+                report_doc=report_doc,
+                eval_data=eval_data,
+                save=True,
+            )
 
         return report_doc
+
+    def export_excel(
+        self,
+        report_doc: Optional[Dict[str, Any]] = None,
+        eval_data: Optional[Dict[str, Any]] = None,
+        *,
+        save: bool = True,
+    ) -> Path:
+        """把 report / evals 摊成多 sheet 的 xlsx。"""
+        if report_doc is None:
+            if self._report is not None:
+                report_doc = self._report
+            else:
+                rp = self.cfg.report_file()
+                if rp.is_file():
+                    report_doc = self.load_json(rp)
+                    self._report = report_doc
+                    print(f"[loaded] report <- {rp}", file=sys.stderr)
+                elif eval_data is None:
+                    eval_data = self._eval_data
+                    if eval_data is None:
+                        ev = self.cfg.eval_results_file()
+                        if ev.is_file():
+                            eval_data = self.load_eval_results(ev)
+                    if eval_data is not None:
+                        stats = None
+                        if isinstance(eval_data.get("stats"), dict):
+                            stats = eval_data["stats"]
+                        else:
+                            stats = self._ensure_stats()
+                        report_doc = build_report_document(eval_data, stats=stats)
+                        self._report = report_doc
+        if report_doc is None:
+            raise FileNotFoundError(
+                "未找到 report / evals JSON，无法导出 Excel。\n"
+                f"  report: {self.cfg.report_file()}\n"
+                f"  evals:  {self.cfg.eval_results_file()}\n"
+                "  请先 run.mode=report，或 python -m benchmark2.export_excel。"
+            )
+
+        if eval_data is None:
+            eval_data = self._eval_data
+        if eval_data is None:
+            ev = self.cfg.eval_results_file()
+            if ev.is_file():
+                try:
+                    eval_data = self.load_json(ev)
+                except Exception as e:
+                    print(f"[excel] 无法读取 evals {ev}: {e}", file=sys.stderr)
+                    eval_data = None
+
+        out = self.cfg.report_excel_file()
+        if save:
+            from .export_excel import write_report_workbook
+
+            write_report_workbook(report_doc, out, eval_data=eval_data)
+            print(f"[saved] {out}", file=sys.stderr)
+        return out
 
     def run_all(self) -> Dict[str, Any]:
         self.build_stats(save=True)
@@ -416,10 +479,12 @@ class Benchmark2Workflow:
             return self.evaluate(save=True)
         if mode == "report":
             return self.report(save=True)
+        if mode == "excel":
+            return self.export_excel(save=True)
         if mode == "all":
             return self.run_all()
         raise ValueError(
             f"Unknown run.mode={self.cfg.run_mode!r}. "
             "Set run.mode in benchmark2/config.yaml: "
-            "stats | evaluate | report | all"
+            "stats | evaluate | report | excel | all"
         )

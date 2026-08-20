@@ -1,5 +1,5 @@
 run:
-  # stats | evaluate | report | all
+  # stats | evaluate | report | excel | all
   mode: all
 
 dhmf:
@@ -13,7 +13,7 @@ dataset:
   questions_sheet: null   # 空则自动识别
   stats_sheet: null       # 空则自动识别
   design_sheet: null      # 空则自动识别（仅测试集2有「设计说明」）
-  n_limit: 100           # 只跑前 N 题；null = 全部
+  n_limit: null           # 只跑前 N 题；null = 全部
   id_list: null           # 指定题号列表，如 [1, 2, 10]；null = 不限制
 
 paths:
@@ -33,6 +33,10 @@ paths:
 
   report_filename: report_queation1.json
   report_path: null
+
+  # 空则按 report_filename 把 .json 换成 .xlsx
+  report_excel_filename: report_queation1.xlsx
+  report_excel_path: null
 
 evaluate:
   resume: true
