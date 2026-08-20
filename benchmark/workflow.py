@@ -278,7 +278,7 @@ class TestQueryWorkflow:
         save: bool = True,
     ) -> Dict[str, Any]:
         """
-        步骤 2：读问题集 → DHMF.query / agent_query → 评判。
+        步骤 2：读问题集 → DHMF.query / agent_query（+ 可选纯 LLM）→ 评判。
 
         写出 eval_results（逐题明细，每题增量落盘）；
         不写汇总 report（由 report 步骤独立完成）。
@@ -310,6 +310,7 @@ class TestQueryWorkflow:
             max_source_chars=self.cfg.max_source_chars,
             sleep_between=self.cfg.eval_sleep_between,
             enable_doc_recall=self.cfg.enable_doc_recall,
+            enable_llm_only=self.cfg.enable_llm_only,
             num_thread=self.cfg.eval_num_thread,
         )
 
@@ -397,6 +398,7 @@ class TestQueryWorkflow:
             "judge_model",
             "config_file",
             "dhmf_config_path",
+            "enable_llm_only",
         ):
             if meta.get(k) is None and snap.get(k) is not None:
                 meta[k] = snap[k]

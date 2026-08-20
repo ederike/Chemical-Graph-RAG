@@ -153,7 +153,7 @@ class ExcelQueryEvaluator:
     对 Excel 测试集逐题：
       1) 超图：按 query_mode 调用 DHMF.query / agent_query
       2) 纯 LLM：同一模型、不检索，直接根据问题作答
-      3) 两路回答各自用同一套从宽标准打分
+      3) 两路回答各自用同一套验收标准打分
     """
 
     def __init__(
@@ -171,10 +171,14 @@ class ExcelQueryEvaluator:
         enable_llm_only: bool = True,
     ):
         self.dhmf = dhmf
-        self.judge_llm = judge_llm or getattr(dhmf, "llmmodel", None)
+        self.judge_llm = judge_llm or (
+            getattr(dhmf, "llmmodel", None) if dhmf is not None else None
+        )
         if self.judge_llm is None:
             raise ValueError("judge_llm 未提供且 DHMF 无 llmmodel")
-        self.answer_llm = getattr(dhmf, "llmmodel", None) or self.judge_llm
+        self.answer_llm = (
+            getattr(dhmf, "llmmodel", None) if dhmf is not None else None
+        ) or self.judge_llm
 
         self.judge_model_args = dict(judge_model_args or {})
         self.judge_model_args.setdefault("temperature", 0.0)
@@ -543,6 +547,142 @@ class ExcelQueryEvaluator:
         finally:
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
+
+    def rejudge_one(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """只重跑裁判，不重新检索/生成。"""
+        r = self._drop_mirrored_system_fields(dict(result))
+        question = r.get("question") or ""
+        expected = r.get("expected_answer") or ""
+        dims = list(r.get("score_dimensions") or [])
+        dims_raw = r.get("score_dimensions_raw") or ""
+
+        for system in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY):
+            block = r.get(system)
+            if not isinstance(block, dict) or not block:
+                continue
+            ans = (block.get("answer") or block.get("raw_answer") or "").strip()
+            if not ans:
+                continue
+            self._apply_judge(
+                block,
+                self._judge_one(
+                    question=question,
+                    expected_answer=expected,
+                    score_dimensions=dims,
+                    score_dimensions_raw=dims_raw,
+                    rag_answer=ans,
+                ),
+            )
+        return r
+
+    def rejudge_all(
+        self,
+        eval_data: Dict[str, Any],
+        *,
+        on_progress: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        results_in = list(eval_data.get("results") or [])
+        total = len(results_in)
+        if total == 0:
+            raise ValueError("evals 没有 results，无法重判")
+
+        dataset = {
+            "meta": (eval_data.get("meta") or {}).get("dataset_meta"),
+            "stats": eval_data.get("stats"),
+            "questions": results_in,
+        }
+        workers = min(self.num_thread, max(1, total))
+        t0 = time.perf_counter()
+        created_at = datetime.now().isoformat(timespec="seconds")
+        out: List[Optional[Dict[str, Any]]] = [None] * total
+        done_n = 0
+
+        def _emit(done: bool) -> None:
+            if on_progress is None:
+                return
+            done_results = [x for x in out if x is not None]
+            mid = self._make_report(
+                dataset=dataset,
+                results=done_results,
+                t0=t0,
+                created_at=created_at,
+                done=done,
+            )
+            mid["meta"]["n_total_planned"] = total
+            mid["meta"]["num_thread"] = workers
+            mid["meta"]["rejudge"] = True
+            src_meta = eval_data.get("meta") if isinstance(eval_data.get("meta"), dict) else {}
+            for k in ("dataset_meta", "query_mode", "judge_model", "answer_model", "enable_llm_only"):
+                if src_meta.get(k) is not None:
+                    mid["meta"].setdefault(k, src_meta[k])
+            try:
+                on_progress(mid, len(done_results), total)
+            except Exception as e:
+                fail_print(f"on_progress 保存失败: {e}")
+
+        if workers <= 1:
+            pbar = progress_iter(list(enumerate(results_in)), total=total, desc="重判", unit="题")
+            for idx, row in pbar:
+                out[idx] = self.rejudge_one(row)
+                done_n += 1
+                _emit(False)
+        else:
+            if _tqdm is not None:
+                pbar = _tqdm(
+                    total=total,
+                    desc=f"重判×{workers}",
+                    unit="题",
+                    file=sys.stderr,
+                    dynamic_ncols=True,
+                    leave=True,
+                    mininterval=0.2,
+                )
+            else:
+                pbar = None
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                fut_to_idx = {
+                    pool.submit(self.rejudge_one, row): idx
+                    for idx, row in enumerate(results_in)
+                }
+                for fut in as_completed(fut_to_idx):
+                    idx = fut_to_idx[fut]
+                    try:
+                        out[idx] = fut.result()
+                    except Exception as e:
+                        row = dict(results_in[idx])
+                        fail_print(f"重判 {row.get('id')}: {e}")
+                        out[idx] = row
+                    done_n += 1
+                    if pbar is not None:
+                        pbar.update(1)
+                    _emit(False)
+            if pbar is not None:
+                pbar.close()
+
+        final_rows = [x for x in out if x is not None]
+        report = self._make_report(
+            dataset=dataset,
+            results=final_rows,
+            t0=t0,
+            created_at=created_at,
+            done=True,
+        )
+        src_meta = eval_data.get("meta") if isinstance(eval_data.get("meta"), dict) else {}
+        report["meta"].update(
+            {
+                "n_total_planned": total,
+                "num_thread": workers,
+                "rejudge": True,
+                "dataset_meta": src_meta.get("dataset_meta") or report["meta"].get("dataset_meta"),
+                "query_mode": src_meta.get("query_mode") or report["meta"].get("query_mode"),
+                "enable_llm_only": src_meta.get("enable_llm_only")
+                if src_meta.get("enable_llm_only") is not None
+                else report["meta"].get("enable_llm_only"),
+            }
+        )
+        if eval_data.get("stats"):
+            report["stats"] = eval_data["stats"]
+        return report
 
     @staticmethod
     def _system_failed(block: Optional[Dict[str, Any]]) -> bool:

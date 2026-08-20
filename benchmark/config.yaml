@@ -51,6 +51,7 @@ generate:
       type: json_object
 
 evaluate:
+  enable_llm_only: true   # 每题额外跑一路纯 LLM 对照
   enable_doc_recall: True
   max_source_chars: -1
   max_retries: 10

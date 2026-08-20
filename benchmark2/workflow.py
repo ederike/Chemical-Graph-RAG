@@ -6,7 +6,7 @@ Excel 统计 JSON + RAG 评测 + 分类汇总。
     python benchmark2.py
     python -m benchmark2.run
 
-run.mode: stats | evaluate | report | excel | all
+run.mode: stats | evaluate | rejudge | report | excel | all
 """
 
 from __future__ import annotations
@@ -329,6 +329,54 @@ class Benchmark2Workflow:
 
         return eval_data
 
+    def rejudge(self, save: bool = True) -> Dict[str, Any]:
+        """只按现有答案重跑裁判，不重新检索/生成。"""
+        src = self.cfg.eval_results_file()
+        if not src.is_file():
+            raise FileNotFoundError(
+                "未找到评测结果 JSON，无法 rejudge。\n"
+                f"  期望路径: {src}\n"
+                "  请先 run.mode=evaluate。"
+            )
+        eval_data = self.load_eval_results(src)
+        self.setup_judge_llm()
+        evaluator = ExcelQueryEvaluator(
+            None,
+            judge_llm=self.judge_llm,
+            judge_model_args=self.cfg.judge_model_args,
+            query_mode=self.cfg.query_mode,
+            use_cache=self.cfg.eval_use_cache,
+            max_judge_retries=self.cfg.eval_max_retries,
+            sleep_between=self.cfg.eval_sleep_between,
+            num_thread=self.cfg.eval_num_thread,
+            enable_llm_only=self.cfg.enable_llm_only,
+        )
+
+        out = src if save else None
+
+        def _on_progress(mid_report: dict, index: int, total: int) -> None:
+            if out is None:
+                return
+            mid_report.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
+            mid_report.setdefault("meta", {})["progress"] = {
+                "done": index,
+                "total": total,
+                "pct": round(100.0 * index / total, 1) if total else None,
+            }
+            self.save_json(mid_report, out, quiet=True)
+
+        eval_data = evaluator.rejudge_all(
+            eval_data,
+            on_progress=_on_progress if save else None,
+        )
+        eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
+        self._eval_data = eval_data
+        if save and out is not None:
+            eval_data.setdefault("meta", {})["done"] = True
+            eval_data.get("meta", {}).pop("progress", None)
+            self.save_json(eval_data, out)
+        return eval_data
+
     def report(
         self,
         eval_data: Optional[Dict[str, Any]] = None,
@@ -477,6 +525,8 @@ class Benchmark2Workflow:
             return self.build_stats(save=True)
         if mode == "evaluate":
             return self.evaluate(save=True)
+        if mode == "rejudge":
+            return self.rejudge(save=True)
         if mode == "report":
             return self.report(save=True)
         if mode == "excel":
@@ -486,5 +536,5 @@ class Benchmark2Workflow:
         raise ValueError(
             f"Unknown run.mode={self.cfg.run_mode!r}. "
             "Set run.mode in benchmark2/config.yaml: "
-            "stats | evaluate | report | excel | all"
+            "stats | evaluate | rejudge | report | excel | all"
         )

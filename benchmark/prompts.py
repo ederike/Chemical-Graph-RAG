@@ -107,13 +107,25 @@ Benchmark_PROMPT['QUESTION_GEN_Fuzzy_Matching'] = """
 Output:
 """
 
+Benchmark_PROMPT['PURE_LLM_SYSTEM'] = (
+    '你是化工/材料产品领域的技术助手。'
+    '请仅根据自身已有知识直接回答问题，不要检索、不要假装引用了某份文档。'
+)
+
+Benchmark_PROMPT['PURE_LLM_USER'] = """
+问题：
+{question}
+
+请直接作答。
+"""
+
 Benchmark_PROMPT['JUDGE_SYSTEM'] = (
-    '你是严谨的 RAG 评测裁判。根据问题、标准答案、完整参考文档与系统回答，'
+    '你是严谨的问答评测裁判。根据问题、标准答案、完整参考文档与系统回答，'
     '判断系统是否答到了要点。只输出合法 JSON，不要 Markdown 代码块。'
 )
 
 Benchmark_PROMPT['JUDGE_USER'] = """
-请评判「系统回答（RAG）」是否正确回答了「问题」。
+请评判「系统回答」是否正确回答了「问题」。
 
 你将得到：
 1. 问题
@@ -155,7 +167,7 @@ Output：
 ----- 全部相关参考文档（完整原文） -----
 {source_block}
 
------ 系统回答（RAG） -----
+----- 系统回答 -----
 {rag_answer}
 
 Output：

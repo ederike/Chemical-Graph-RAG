@@ -35,6 +35,9 @@ _RUN_MODE_ALIASES = {
     "evaluate": "evaluate",
     "eval": "evaluate",
     "e": "evaluate",
+    "rejudge": "rejudge",
+    "judge": "rejudge",
+    "re-judge": "rejudge",
     "report": "report",
     "summary": "report",
     "summarize": "report",
@@ -55,7 +58,7 @@ def _normalize_run_mode(mode: Any) -> str:
     if key is None:
         raise ValueError(
             f"Unknown run.mode={mode!r}. "
-            "Supported: 'stats' | 'evaluate' | 'report' | 'excel' | 'all'"
+            "Supported: 'stats' | 'evaluate' | 'rejudge' | 'report' | 'excel' | 'all'"
         )
     return key
 

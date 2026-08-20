@@ -31,6 +31,88 @@ except ImportError:  # pragma: no cover
 # llm-acc 仅二分类
 JUDGMENT_LABELS = ("正确", "错误")
 
+SYSTEM_HYPERGRAPH = "hypergraph"
+SYSTEM_LLM_ONLY = "llm_only"
+
+RETRIEVE_STAGE_KEYS = (
+    ("precompute_latency_s", "mean_precompute_s", "sum_precompute_s"),
+    ("rewrite_latency_s", "mean_rewrite_s", "sum_rewrite_s"),
+    ("embed_latency_s", "mean_embed_s", "sum_embed_s"),
+    ("chunk_latency_s", "mean_chunk_s", "sum_chunk_s"),
+    ("node_latency_s", "mean_node_s", "sum_node_s"),
+    ("keyword_latency_s", "mean_keyword_s", "sum_keyword_s"),
+    ("expand_latency_s", "mean_expand_s", "sum_expand_s"),
+    ("rerank_latency_s", "mean_rerank_s", "sum_rerank_s"),
+)
+
+
+def _empty_system_block() -> Dict[str, Any]:
+    return {
+        "answer": "",
+        "raw_answer": "",
+        "query_status": 0,
+        "query_error": None,
+        "retrieval_sources": [],
+        "retrieval_doc_ids": [],
+        "llm_acc": None,
+        "judge_reason": "",
+        "judge_status": None,
+        "judge_error": None,
+        "metrics": {},
+    }
+
+
+def _answer_model_args_from_dhmf(dhmf, override: Optional[dict] = None) -> dict:
+    """纯 LLM 生成参数：继承 retrieve.model_args，去掉 json_object。"""
+    base: Dict[str, Any] = {}
+    try:
+        base = dict(getattr(dhmf.config.retrieve, "model_args", None) or {})
+    except Exception:
+        pass
+    over = dict(override or {})
+    if not over.get("model"):
+        over.pop("model", None)
+    merged = {**base, **over}
+    merged.pop("response_format", None)
+    merged.setdefault("temperature", 0.2)
+    merged.setdefault("enable_thinking", False)
+    return merged
+
+
+def project_system_row(result: Dict[str, Any], system: str) -> Dict[str, Any]:
+    """把某一路抽成与旧 summary 兼容的扁平行。"""
+    if system == SYSTEM_HYPERGRAPH:
+        block = result.get(SYSTEM_HYPERGRAPH)
+        if not isinstance(block, dict) or not block:
+            block = {
+                "answer": result.get("rag_answer"),
+                "raw_answer": result.get("rag_raw_answer"),
+                "query_status": result.get("query_status"),
+                "query_error": result.get("query_error"),
+                "llm_acc": result.get("llm_acc"),
+                "judge_reason": result.get("judge_reason"),
+                "judge_status": result.get("judge_status"),
+                "judge_error": result.get("judge_error"),
+                "metrics": result.get("metrics") or {},
+                "retrieval_sources": result.get("retrieval_sources") or [],
+            }
+    else:
+        block = result.get(SYSTEM_LLM_ONLY)
+        if not isinstance(block, dict):
+            block = {}
+    return {
+        "id": result.get("id"),
+        "hop": result.get("hop"),
+        "question": result.get("question"),
+        "llm_acc": block.get("llm_acc"),
+        "query_status": block.get("query_status"),
+        "query_error": block.get("query_error"),
+        "judge_status": block.get("judge_status"),
+        "judge_error": block.get("judge_error"),
+        "metrics": block.get("metrics") or {},
+        "recall": result.get("recall") if system == SYSTEM_HYPERGRAPH else None,
+    }
+
 def normalize_judgment(raw: str) -> Optional[str]:
     """将模型输出归一为 正确 / 错误。"""
     if raw is None:
@@ -62,9 +144,10 @@ class QueryEvaluator:
     """
     对测试集 JSON 中的问题：
       1) 按 query_mode 调用 DHMF.query（dual_path）或 DHMF.agent_query（agent）
-      2) 用 LLM 二分类评判 llm-acc（正确/错误）
-      3) 文档召回率 = 命中 gold 文档数 / gold 文档数
-      4) 汇总时延、token 等综合统计
+      2) 可选：同一模型不检索的纯 LLM 对照
+      3) 两路各自用 LLM 二分类评判 llm-acc（正确/错误）
+      4) 文档召回率 = 命中 gold 文档数 / gold 文档数（仅超图）
+      5) 汇总时延、token 等综合统计
     """
 
     def __init__(
@@ -73,18 +156,21 @@ class QueryEvaluator:
         judge_llm=None,
         *,
         judge_model_args: Optional[dict] = None,
+        answer_model_args: Optional[dict] = None,
         query_mode: str = "dual_path",
         use_cache: bool = False,
         max_judge_retries: int = 3,
         max_source_chars: int = -1,
         sleep_between: float = 0.0,
         enable_doc_recall: bool = True,
+        enable_llm_only: bool = True,
         num_thread: int = 1,
     ):
         self.dhmf = dhmf
         self.judge_llm = judge_llm or getattr(dhmf, "llmmodel", None)
         if self.judge_llm is None:
             raise ValueError("judge_llm 未提供且 DHMF 无 llmmodel")
+        self.answer_llm = getattr(dhmf, "llmmodel", None) or self.judge_llm
 
         self.judge_model_args = dict(judge_model_args or {})
         self.judge_model_args.setdefault("temperature", 0.0)
@@ -99,6 +185,11 @@ class QueryEvaluator:
                     self.judge_model_args["model"] = ma["model"]
             except Exception:
                 pass
+
+        self.answer_model_args = _answer_model_args_from_dhmf(
+            dhmf, answer_model_args
+        )
+        self.enable_llm_only = bool(enable_llm_only)
 
         self.query_mode = self._normalize_query_mode(query_mode)
         self.use_cache = bool(use_cache)
@@ -135,6 +226,32 @@ class QueryEvaluator:
         if self.query_mode == "agent":
             return self.dhmf.agent_query(question, pretty=False)
         return self.dhmf.query(question, mode="dual_path", pretty=False)
+
+    def _run_llm_only(self, question: str) -> Dict[str, Any]:
+        """不检索，直接用同一套生成模型回答。"""
+        user = Benchmark_PROMPT["PURE_LLM_USER"].replace(
+            "{question}", question or ""
+        )
+        return call_llm(
+            self.answer_llm,
+            system=Benchmark_PROMPT.get("PURE_LLM_SYSTEM", ""),
+            user=user,
+            model_args=self.answer_model_args,
+            use_cache=self.use_cache,
+        )
+
+    @staticmethod
+    def _apply_judge(block: Dict[str, Any], judge: Dict[str, Any]) -> None:
+        block["llm_acc"] = judge.get("llm_acc")
+        block["judge_reason"] = judge.get("judge_reason")
+        block["judge_status"] = judge.get("judge_status")
+        block["judge_error"] = judge.get("judge_error")
+        metrics = block.setdefault("metrics", {})
+        metrics["judge_latency_s"] = judge.get("judge_latency_s")
+        ju = judge.get("judge_usage") or {}
+        metrics["judge_prompt_tokens"] = ju.get("prompt_tokens")
+        metrics["judge_completion_tokens"] = ju.get("completion_tokens")
+        metrics["judge_total_tokens"] = ju.get("total_tokens")
 
     def _extract_answer_text(self, respond: Any) -> str:
         if not isinstance(respond, dict):
@@ -313,6 +430,120 @@ class QueryEvaluator:
             "judge_usage": {},
         }
 
+    def _fill_hypergraph(self, question: str) -> Dict[str, Any]:
+        block = _empty_system_block()
+        t0 = time.perf_counter()
+        quiet_names = ["DHMF"]
+        try:
+            if getattr(self.dhmf, "logger", None) is not None:
+                quiet_names.append(self.dhmf.logger.name)
+        except Exception:
+            pass
+        try:
+            with quiet_loggers(*quiet_names, level=40):
+                respond = self._run_query(question)
+        except Exception as e:
+            block["query_error"] = str(e)
+            block["metrics"]["query_latency_s"] = time.perf_counter() - t0
+            block["metrics"]["wall_latency_s"] = time.perf_counter() - t0
+            return block
+
+        if not isinstance(respond, dict):
+            block["query_error"] = f"unexpected respond type: {type(respond)}"
+            block["answer"] = str(respond)
+            block["raw_answer"] = str(respond)
+            block["metrics"]["wall_latency_s"] = time.perf_counter() - t0
+            return block
+
+        block["query_status"] = respond.get("status", 0)
+        block["answer"] = self._extract_answer_text(respond)
+        if self.query_mode == "agent" or respond.get("plan") or respond.get("steps"):
+            block["raw_answer"] = self._format_agent_process(respond)
+        else:
+            block["raw_answer"] = respond.get("answer") or ""
+        block["retrieval_sources"] = list(respond.get("retrieval_sources") or [])
+        block["retrieval_doc_ids"] = list(respond.get("retrieval_doc_ids") or [])
+
+        if block["query_status"] != 1:
+            block["query_error"] = (
+                f"query status={block['query_status']}: "
+                f"{str(block['raw_answer'])[:200]}"
+            )
+
+        pt = respond.get("usage_prompt_tokens")
+        ct = respond.get("usage_completion_tokens")
+        tt = respond.get("usage_total_tokens")
+        if tt is None and pt is not None and ct is not None:
+            try:
+                tt = int(pt) + int(ct)
+            except Exception:
+                tt = None
+        retrieve_timing = respond.get("retrieve_timing") or {}
+        if not isinstance(retrieve_timing, dict):
+            retrieve_timing = {}
+        block["metrics"] = {
+            "query_latency_s": respond.get("latency_s"),
+            "retrieve_latency_s": respond.get("retrieve_latency_s"),
+            "retrieve_timing": dict(retrieve_timing),
+            "precompute_latency_s": retrieve_timing.get("precompute_s"),
+            "rewrite_latency_s": retrieve_timing.get("rewrite_s"),
+            "embed_latency_s": retrieve_timing.get("embed_s"),
+            "chunk_latency_s": retrieve_timing.get("chunk_s"),
+            "node_latency_s": retrieve_timing.get("node_s"),
+            "keyword_latency_s": retrieve_timing.get("keyword_s"),
+            "expand_latency_s": retrieve_timing.get("expand_s"),
+            "rerank_latency_s": retrieve_timing.get("rerank_s"),
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": tt,
+            "wall_latency_s": time.perf_counter() - t0,
+        }
+        return block
+
+    def _fill_llm_only(self, question: str) -> Dict[str, Any]:
+        block = _empty_system_block()
+        t0 = time.perf_counter()
+        try:
+            respond = self._run_llm_only(question)
+        except Exception as e:
+            block["query_error"] = str(e)
+            block["metrics"]["query_latency_s"] = time.perf_counter() - t0
+            block["metrics"]["wall_latency_s"] = time.perf_counter() - t0
+            return block
+
+        if not isinstance(respond, dict):
+            block["query_error"] = f"unexpected respond type: {type(respond)}"
+            block["answer"] = str(respond)
+            block["raw_answer"] = str(respond)
+            block["metrics"]["wall_latency_s"] = time.perf_counter() - t0
+            return block
+
+        block["query_status"] = respond.get("status", 0)
+        block["answer"] = self._extract_answer_text(respond)
+        block["raw_answer"] = respond.get("answer") or block["answer"]
+        if block["query_status"] != 1:
+            block["query_error"] = (
+                f"llm_only status={block['query_status']}: "
+                f"{str(block['raw_answer'])[:200]}"
+            )
+        pt = respond.get("usage_prompt_tokens")
+        ct = respond.get("usage_completion_tokens")
+        tt = respond.get("usage_total_tokens")
+        if tt is None and pt is not None and ct is not None:
+            try:
+                tt = int(pt) + int(ct)
+            except Exception:
+                tt = None
+        block["metrics"] = {
+            "query_latency_s": respond.get("latency_s"),
+            "retrieve_latency_s": None,
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": tt,
+            "wall_latency_s": time.perf_counter() - t0,
+        }
+        return block
+
     def evaluate_one(self, item: Dict[str, Any]) -> Dict[str, Any]:
         qid = item.get("id") or "unknown"
         question = item.get("question") or ""
@@ -329,124 +560,87 @@ class QueryEvaluator:
             "ground_truth_answer": item.get("ground_truth_answer") or "",
             "explanation": item.get("explanation") or "",
             "source_names": expected_names,
-            "rag_answer": "",
-            # agent 模式：多跳规划 + 各子问题回答；dual_path：模型原始 answer
-            "rag_raw_answer": "",
-            "query_status": 0,
-            "query_error": None,
-            "retrieval_sources": [],
-            "retrieval_doc_ids": [],
-            "recall": None,  # enable_doc_recall=False 时保持 None
-            "llm_acc": None,
-            "judge_reason": "",
-            "metrics": {},
+            "recall": None,
+            SYSTEM_HYPERGRAPH: _empty_system_block(),
+            SYSTEM_LLM_ONLY: _empty_system_block(),
         }
 
         try:
             if not question.strip():
-                result["query_error"] = "empty question"
+                result[SYSTEM_HYPERGRAPH]["query_error"] = "empty question"
+                result[SYSTEM_LLM_ONLY]["query_error"] = "empty question"
                 return result
 
-            t0 = time.perf_counter()
-            quiet_names = ["DHMF"]
-            try:
-                if getattr(self.dhmf, "logger", None) is not None:
-                    quiet_names.append(self.dhmf.logger.name)
-            except Exception:
-                pass
-            try:
-                with quiet_loggers(*quiet_names, level=40):
-                    respond = self._run_query(question)
-            except Exception as e:
-                result["query_error"] = str(e)
-                result["metrics"]["total_latency_s"] = time.perf_counter() - t0
-                return result
-
-            if not isinstance(respond, dict):
-                result["query_error"] = f"unexpected respond type: {type(respond)}"
-                result["rag_answer"] = str(respond)
-                return result
-
-            result["query_status"] = respond.get("status", 0)
-            result["rag_answer"] = self._extract_answer_text(respond)
-            # agent：完整多步过程；dual_path：原始 answer（与 rag_answer 可能相同）
-            if self.query_mode == "agent" or respond.get("plan") or respond.get("steps"):
-                result["rag_raw_answer"] = self._format_agent_process(respond)
-            else:
-                result["rag_raw_answer"] = respond.get("answer") or ""
-            result["retrieval_sources"] = list(respond.get("retrieval_sources") or [])
-            result["retrieval_doc_ids"] = list(respond.get("retrieval_doc_ids") or [])
-
-            if result["query_status"] != 1:
-                result["query_error"] = (
-                    result["query_error"]
-                    or f"query status={result['query_status']}: "
-                    f"{str(result['rag_raw_answer'])[:200]}"
-                )
-
-            pt = respond.get("usage_prompt_tokens")
-            ct = respond.get("usage_completion_tokens")
-            tt = respond.get("usage_total_tokens")
-            if tt is None and pt is not None and ct is not None:
-                try:
-                    tt = int(pt) + int(ct)
-                except Exception:
-                    tt = None
-
-            retrieve_timing = respond.get("retrieve_timing") or {}
-            if not isinstance(retrieve_timing, dict):
-                retrieve_timing = {}
-            # 扁平字段便于汇总；与 retrieve_timing 同源
-            result["metrics"] = {
-                "query_latency_s": respond.get("latency_s"),
-                "retrieve_latency_s": respond.get("retrieve_latency_s"),
-                "retrieve_timing": dict(retrieve_timing),
-                "precompute_latency_s": retrieve_timing.get("precompute_s"),
-                "rewrite_latency_s": retrieve_timing.get("rewrite_s"),
-                "embed_latency_s": retrieve_timing.get("embed_s"),
-                "chunk_latency_s": retrieve_timing.get("chunk_s"),
-                "node_latency_s": retrieve_timing.get("node_s"),
-                "keyword_latency_s": retrieve_timing.get("keyword_s"),
-                "expand_latency_s": retrieve_timing.get("expand_s"),
-                "rerank_latency_s": retrieve_timing.get("rerank_s"),
-                "prompt_tokens": pt,
-                "completion_tokens": ct,
-                "total_tokens": tt,
-                "wall_latency_s": time.perf_counter() - t0,
-            }
-
-            # 文档召回：命中 gold 数 / gold 总数（可关闭）
+            result[SYSTEM_HYPERGRAPH] = self._fill_hypergraph(question)
+            hg = result[SYSTEM_HYPERGRAPH]
             if self.enable_doc_recall:
                 result["recall"] = self._compute_recall(
-                    expected_names, result["retrieval_sources"]
+                    expected_names, hg.get("retrieval_sources") or []
                 )
-            else:
-                result["recall"] = None
 
-            # LLM 评判：问题 + 标准答案 + 全部完整文档 + RAG 回答
-            judge = self._judge_one(
-                question=question,
-                ground_truth_answer=result["ground_truth_answer"],
-                source_docs=item.get("source_docs") or [],
-                rag_answer=result["rag_answer"] or result["rag_raw_answer"],
-            )
-            result["llm_acc"] = judge.get("llm_acc")
-            result["judge_reason"] = judge.get("judge_reason")
-            result["judge_status"] = judge.get("judge_status")
-            result["judge_error"] = judge.get("judge_error")
-            result["metrics"]["judge_latency_s"] = judge.get("judge_latency_s")
-            ju = judge.get("judge_usage") or {}
-            result["metrics"]["judge_prompt_tokens"] = ju.get("prompt_tokens")
-            result["metrics"]["judge_completion_tokens"] = ju.get("completion_tokens")
-            result["metrics"]["judge_total_tokens"] = ju.get("total_tokens")
+            hg_ans = (hg.get("answer") or hg.get("raw_answer") or "").strip()
+            if hg_ans:
+                self._apply_judge(
+                    hg,
+                    self._judge_one(
+                        question=question,
+                        ground_truth_answer=result["ground_truth_answer"],
+                        source_docs=item.get("source_docs") or [],
+                        rag_answer=hg_ans,
+                    ),
+                )
+            elif hg.get("query_error"):
+                hg["judge_status"] = 0
+                hg["judge_error"] = "skip judge: query failed"
+
+            if self.enable_llm_only:
+                result[SYSTEM_LLM_ONLY] = self._fill_llm_only(question)
+                lo = result[SYSTEM_LLM_ONLY]
+                lo_ans = (lo.get("answer") or lo.get("raw_answer") or "").strip()
+                if lo_ans:
+                    self._apply_judge(
+                        lo,
+                        self._judge_one(
+                            question=question,
+                            ground_truth_answer=result["ground_truth_answer"],
+                            source_docs=item.get("source_docs") or [],
+                            rag_answer=lo_ans,
+                        ),
+                    )
+                elif lo.get("query_error"):
+                    lo["judge_status"] = 0
+                    lo["judge_error"] = "skip judge: query failed"
+
             return result
         finally:
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
 
     @staticmethod
-    def _is_eval_failure(r: Dict[str, Any]) -> bool:
-        """流水线失败（非「答案判错」）。"""
+    def _system_failed(block: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(block, dict) or not block:
+            return True
+        if block.get("query_error"):
+            return True
+        if block.get("query_status") == 0:
+            return True
+        if block.get("judge_status") == 0 or block.get("judge_error"):
+            return True
+        return False
+
+    @classmethod
+    def _is_eval_failure(cls, r: Dict[str, Any]) -> bool:
+        """流水线失败（非「答案判错」）。嵌套格式看超图一路，旧扁平行看顶层。"""
+        hg = r.get(SYSTEM_HYPERGRAPH)
+        if isinstance(hg, dict) and (
+            hg.get("query_status") is not None
+            or hg.get("query_error")
+            or hg.get("llm_acc") is not None
+            or hg.get("answer")
+        ):
+            if not r.get("question"):
+                return True
+            return cls._system_failed(hg)
         if r.get("query_error"):
             return True
         if r.get("query_status") == 0:
@@ -500,6 +694,7 @@ class QueryEvaluator:
                 "query_mode": self.query_mode,
                 "judge_model": (self.judge_model_args or {}).get("model"),
                 "enable_doc_recall": self.enable_doc_recall,
+                "enable_llm_only": self.enable_llm_only,
                 "n_questions": len(results),
                 "n_total_planned": None,  # evaluate_all 写入
                 "n_skipped_gen_fail": skipped,
@@ -511,13 +706,38 @@ class QueryEvaluator:
 
     def _log_eval_failure(self, r: Dict[str, Any]) -> None:
         parts = [f"评测 {r.get('id')}"]
-        if r.get("query_error"):
-            parts.append(f"query={r['query_error'][:160]}")
-        if r.get("judge_error"):
-            parts.append(f"judge={r['judge_error'][:160]}")
-        if r.get("query_status") == 0 and not r.get("query_error"):
+        hg = r.get(SYSTEM_HYPERGRAPH) or {}
+        lo = r.get(SYSTEM_LLM_ONLY) or {}
+        qerr = hg.get("query_error") or r.get("query_error")
+        jerr = hg.get("judge_error") or r.get("judge_error")
+        if qerr:
+            parts.append(f"hypergraph_query={str(qerr)[:120]}")
+        if jerr:
+            parts.append(f"hypergraph_judge={str(jerr)[:120]}")
+        if lo.get("query_error"):
+            parts.append(f"llm_only_query={str(lo['query_error'])[:120]}")
+        if lo.get("judge_error"):
+            parts.append(f"llm_only_judge={str(lo['judge_error'])[:120]}")
+        if r.get("query_status") == 0 and not qerr:
             parts.append("query_status=0")
         fail_print(" | ".join(parts))
+
+    def _count_ok(
+        self, results: Sequence[Optional[Dict[str, Any]]], system: str
+    ) -> int:
+        n = 0
+        for x in results:
+            if not isinstance(x, dict):
+                continue
+            if system == SYSTEM_HYPERGRAPH:
+                block = x.get(SYSTEM_HYPERGRAPH)
+                if not isinstance(block, dict) or not block:
+                    block = x
+            else:
+                block = x.get(SYSTEM_LLM_ONLY) or {}
+            if isinstance(block, dict) and block.get("llm_acc") == "正确":
+                n += 1
+        return n
 
     def evaluate_all(
         self,
@@ -582,10 +802,13 @@ class QueryEvaluator:
                 results[idx] = r
                 _on_item(r)
                 if hasattr(pbar, "set_postfix"):
-                    ok_n = sum(
-                        1 for x in results if x is not None and x.get("llm_acc") == "正确"
+                    pbar.set_postfix(
+                        fail=fail_n,
+                        hg=self._count_ok(results, SYSTEM_HYPERGRAPH),
+                        llm=self._count_ok(results, SYSTEM_LLM_ONLY),
+                        thr=1,
+                        refresh=False,
                     )
-                    pbar.set_postfix(fail=fail_n, ok=ok_n, thr=1, refresh=False)
                 _emit_progress()
         else:
             if _tqdm is not None:
@@ -612,6 +835,10 @@ class QueryEvaluator:
                         r = fut.result()
                     except Exception as e:
                         item = items[idx]
+                        hg = _empty_system_block()
+                        hg["query_error"] = f"worker exception: {e}"
+                        lo = _empty_system_block()
+                        lo["query_error"] = f"worker exception: {e}"
                         r = {
                             "id": item.get("id") or f"idx_{idx}",
                             "hop": item.get("hop"),
@@ -619,28 +846,20 @@ class QueryEvaluator:
                             "ground_truth_answer": item.get("ground_truth_answer") or "",
                             "explanation": item.get("explanation") or "",
                             "source_names": list(item.get("source_names") or []),
-                            "rag_answer": "",
-                            "rag_raw_answer": "",
-                            "query_status": 0,
-                            "query_error": f"worker exception: {e}",
-                            "retrieval_sources": [],
-                            "retrieval_doc_ids": [],
                             "recall": None,
-                            "llm_acc": None,
-                            "judge_reason": "",
-                            "metrics": {},
+                            SYSTEM_HYPERGRAPH: hg,
+                            SYSTEM_LLM_ONLY: lo,
                         }
                     results[idx] = r
                     _on_item(r)
                     if pbar is not None:
-                        ok_n = sum(
-                            1
-                            for x in results
-                            if x is not None and x.get("llm_acc") == "正确"
-                        )
                         pbar.update(1)
                         pbar.set_postfix(
-                            fail=fail_n, ok=ok_n, thr=workers, refresh=False
+                            fail=fail_n,
+                            hg=self._count_ok(results, SYSTEM_HYPERGRAPH),
+                            llm=self._count_ok(results, SYSTEM_LLM_ONLY),
+                            thr=workers,
+                            refresh=False,
                         )
                     else:
                         print(
@@ -737,6 +956,9 @@ class QueryEvaluator:
                 "query_mode": src_meta.get("query_mode") or cfg_src.get("query_mode"),
                 "judge_model": src_meta.get("judge_model") or cfg_src.get("judge_model"),
                 "enable_doc_recall": enable_doc_recall,
+                "enable_llm_only": src_meta.get("enable_llm_only")
+                if src_meta.get("enable_llm_only") is not None
+                else cfg_src.get("enable_llm_only"),
                 "db_path": slim_ds.get("db_path") or cfg_src.get("db_path"),
                 "hop_counts": slim_ds.get("hop_counts") or cfg_src.get("hop_counts"),
                 "seed": slim_ds.get("seed", cfg_src.get("seed")),
@@ -755,11 +977,82 @@ class QueryEvaluator:
         results: Sequence[Dict[str, Any]],
         *,
         enable_doc_recall: Optional[bool] = None,
+        enable_llm_only: Optional[bool] = None,
     ) -> Dict[str, Any]:
         if enable_doc_recall is None:
-            enable_doc_recall = self.enable_doc_recall
+            enable_doc_recall = getattr(self, "enable_doc_recall", True)
         enable_doc_recall = bool(enable_doc_recall)
+        if enable_llm_only is None:
+            enable_llm_only = any(
+                isinstance(r.get(SYSTEM_LLM_ONLY), dict)
+                and (
+                    r[SYSTEM_LLM_ONLY].get("query_status") is not None
+                    or r[SYSTEM_LLM_ONLY].get("answer")
+                    or r[SYSTEM_LLM_ONLY].get("llm_acc")
+                )
+                for r in results
+            )
 
+        hg_rows = [project_system_row(r, SYSTEM_HYPERGRAPH) for r in results]
+        hg_sum = self._summarize_one(hg_rows, enable_doc_recall=enable_doc_recall)
+        out: Dict[str, Any] = dict(hg_sum)
+        out["systems"] = [SYSTEM_HYPERGRAPH] + (
+            [SYSTEM_LLM_ONLY] if enable_llm_only else []
+        )
+        out[SYSTEM_HYPERGRAPH] = hg_sum
+        if enable_llm_only:
+            lo_rows = [project_system_row(r, SYSTEM_LLM_ONLY) for r in results]
+            out[SYSTEM_LLM_ONLY] = self._summarize_one(
+                lo_rows, enable_doc_recall=False
+            )
+            out["comparison"] = self._compare_systems(hg_rows, lo_rows)
+        return out
+
+    @staticmethod
+    def _compare_systems(
+        hg_rows: Sequence[Dict[str, Any]],
+        lo_rows: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        by_id_lo = {r.get("id"): r for r in lo_rows}
+        n_paired = 0
+        n_both = 0
+        n_hg_only = 0
+        n_lo_only = 0
+        n_neither = 0
+        crosstab: Dict[str, int] = defaultdict(int)
+        for hg in hg_rows:
+            lo = by_id_lo.get(hg.get("id"))
+            if lo is None:
+                continue
+            hj = hg.get("llm_acc") if hg.get("llm_acc") in JUDGMENT_LABELS else None
+            lj = lo.get("llm_acc") if lo.get("llm_acc") in JUDGMENT_LABELS else None
+            if hj is None or lj is None:
+                continue
+            n_paired += 1
+            crosstab[f"超图{hj}_纯LLM{lj}"] += 1
+            if hj == "正确" and lj == "正确":
+                n_both += 1
+            elif hj == "正确":
+                n_hg_only += 1
+            elif lj == "正确":
+                n_lo_only += 1
+            else:
+                n_neither += 1
+        return {
+            "n_paired": n_paired,
+            "both_correct": n_both,
+            "hypergraph_only": n_hg_only,
+            "llm_only_only": n_lo_only,
+            "both_wrong": n_neither,
+            "judgment_crosstab": dict(crosstab),
+        }
+
+    def _summarize_one(
+        self,
+        results: Sequence[Dict[str, Any]],
+        *,
+        enable_doc_recall: bool,
+    ) -> Dict[str, Any]:
         n = len(results)
         acc_counts = {lab: 0 for lab in JUDGMENT_LABELS}
         acc_counts["未知"] = 0
@@ -793,22 +1086,10 @@ class QueryEvaluator:
                         pass
             return out
 
-        # 检索分阶段字段：metrics 扁平键 → latency 汇总键
-        retrieve_stage_keys = (
-            ("precompute_latency_s", "mean_precompute_s", "sum_precompute_s"),
-            ("rewrite_latency_s", "mean_rewrite_s", "sum_rewrite_s"),
-            ("embed_latency_s", "mean_embed_s", "sum_embed_s"),
-            ("chunk_latency_s", "mean_chunk_s", "sum_chunk_s"),
-            ("node_latency_s", "mean_node_s", "sum_node_s"),
-            ("keyword_latency_s", "mean_keyword_s", "sum_keyword_s"),
-            ("expand_latency_s", "mean_expand_s", "sum_expand_s"),
-            ("rerank_latency_s", "mean_rerank_s", "sum_rerank_s"),
-        )
-
         q_lats = _metric_lats("query_latency_s")
         r_lats = _metric_lats("retrieve_latency_s")
         w_lats = _metric_lats("wall_latency_s")
-        stage_lats = {mk: _metric_lats(src) for src, mk, _sk in retrieve_stage_keys}
+        stage_lats = {mk: _metric_lats(src) for src, mk, _sk in RETRIEVE_STAGE_KEYS}
 
         by_hop: Dict[str, Any] = {}
         hop_groups: Dict[Any, list] = defaultdict(list)
@@ -830,7 +1111,7 @@ class QueryEvaluator:
                 "mean_query_latency_s": mean(_metric_lats("query_latency_s", group)),
                 "mean_retrieve_latency_s": mean(_metric_lats("retrieve_latency_s", group)),
             }
-            for src, mk, _sk in retrieve_stage_keys:
+            for src, mk, _sk in RETRIEVE_STAGE_KEYS:
                 hop_item[mk] = mean(_metric_lats(src, group))
             if enable_doc_recall:
                 g_recalls = [
@@ -858,7 +1139,7 @@ class QueryEvaluator:
             "sum_retrieve_s": sum(r_lats) if r_lats else None,
             "sum_wall_s": sum(w_lats) if w_lats else None,
         }
-        for src, mk, sk in retrieve_stage_keys:
+        for src, mk, sk in RETRIEVE_STAGE_KEYS:
             vals = stage_lats[mk]
             latency_summary[mk] = mean(vals)
             latency_summary[sk] = sum(vals) if vals else None

@@ -229,6 +229,7 @@ class BenchmarkConfig:
     gen_model_args: Dict[str, Any] = field(default_factory=dict)
 
     # evaluate
+    enable_llm_only: bool = True
     enable_doc_recall: bool = True
     max_source_chars: int = -1
     eval_max_retries: int = 3
@@ -321,6 +322,7 @@ class BenchmarkConfig:
             gen_base_url=_opt_str(gen.get("base_url")),
             gen_timeout=float(gen.get("timeout", 180)),
             gen_model_args=_clean_model_args(gen.get("model_args")),
+            enable_llm_only=_as_bool(ev.get("enable_llm_only", True), default=True),
             enable_doc_recall=_as_bool(ev.get("enable_doc_recall", True), default=True),
             max_source_chars=int(
                 ev.get("max_source_chars", gen.get("max_chars_per_doc", -1))
@@ -418,6 +420,7 @@ class BenchmarkConfig:
             "seed": self.seed,
             "question_gen_prompt": self.question_gen_prompt,
             "enable_doc_recall": self.enable_doc_recall,
+            "enable_llm_only": self.enable_llm_only,
             "eval_num_thread": self.eval_num_thread,
             "gen_model": (self.gen_model_args or {}).get("model"),
             "judge_model": (self.judge_model_args or {}).get("model"),

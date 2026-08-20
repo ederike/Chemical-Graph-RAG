@@ -1,5 +1,5 @@
 run:
-  # stats | evaluate | report | excel | all
+  # stats | evaluate | rejudge | report | excel | all
   mode: all
 
 dhmf:
@@ -17,25 +17,25 @@ dataset:
   id_list: null           # 指定题号列表，如 [1, 2, 10]；null = 不限制
 
 paths:
-  output_dir: benchmark2_results
+  output_dir: benchmark2_question2_results
 
-  stats_filename: stats_queation1.json
+  stats_filename: stats_question2.json
   stats_path: null
 
-  dataset_filename: dataset_queation1.json
+  dataset_filename: dataset_question2.json
   dataset_path: null
 
-  eval_results_filename: evals_queation1.json
+  eval_results_filename: evals_question2.json
   eval_results_path: null
 
-  report_source_filename: evals_queation1.json
+  report_source_filename: evals_question2.json
   report_source_path: null
 
-  report_filename: report_queation1.json
+  report_filename: report_question2.json
   report_path: null
 
   # 空则按 report_filename 把 .json 换成 .xlsx
-  report_excel_filename: report_queation1.xlsx
+  report_excel_filename: report_question2.xlsx
   report_excel_path: null
 
 evaluate:
