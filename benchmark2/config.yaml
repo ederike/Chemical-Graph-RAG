@@ -7,8 +7,6 @@ dhmf:
   query_mode: agent  # dual_path | agent
 
 dataset:
-  # 测试集 Excel（含问题表 + 统计表）。可换成测试问题集1：
-  #   benchmark2/建筑涂料Graph-RAG测试问题集1.xlsx
   excel_path: benchmark2/建筑涂料测试问题集1.xlsx
   questions_sheet: null   # 空则自动识别
   stats_sheet: null       # 空则自动识别
@@ -17,34 +15,33 @@ dataset:
   id_list: null           # 指定题号列表，如 [1, 2, 10]；null = 不限制
 
 paths:
-  output_dir: benchmark2_question2_results
+  output_dir: benchmark2_question1_results 
 
-  stats_filename: stats_question2.json
+  stats_filename: stats_question.json
   stats_path: null
 
-  dataset_filename: dataset_question2.json
+  dataset_filename: dataset_question.json
   dataset_path: null
 
-  eval_results_filename: evals_question2.json
+  eval_results_filename: evals_question.json
   eval_results_path: null
 
-  report_source_filename: evals_question2.json
+  report_source_filename: evals_question.json
   report_source_path: null
 
-  report_filename: report_question2.json
+  report_filename: report_question.json
   report_path: null
 
-  # 空则按 report_filename 把 .json 换成 .xlsx
-  report_excel_filename: report_question2.xlsx
+  report_excel_filename: report_question.xlsx
   report_excel_path: null
 
 evaluate:
   resume: true
-  enable_llm_only: true   # 每题额外跑一路纯 LLM 对照
+  enable_llm_only: true   # 每题额外跑一路纯 LLM；与超图回答一次对比打分，不再分开评判
   max_retries: 10
   sleep_between: 0.0
   num_thread: 5
-  use_cache: true
+  use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
@@ -52,7 +49,7 @@ evaluate:
   model_args:
     model: null
     temperature: 0.0
-    enable_thinking: false
+    enable_thinking: True
     response_format:
       type: json_object
 

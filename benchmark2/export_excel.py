@@ -559,6 +559,8 @@ def _add_comparison(wb: Workbook, summary: Dict[str, Any]) -> Optional[str]:
         ["配对题数", n_paired],
         ["均分差（超图 − 纯LLM）", _num(cmp_.get("score_delta_mean"))],
         ["说明", cmp_.get("score_delta_note") or "正值表示超图均分更高"],
+        ["胜负来源", cmp_.get("win_note") or "裁判一次对比两路回答"],
+        ["对比打分题数", _int(cmp_.get("n_pairwise_judged"))],
         ["超图胜", n_hg],
         ["纯LLM胜", n_lo],
         ["平局", n_tie],
@@ -604,7 +606,7 @@ def _add_comparison(wb: Workbook, summary: Dict[str, Any]) -> Optional[str]:
     )
     chart = BarChart()
     chart.type = "col"
-    chart.title = "分数胜负"
+    chart.title = "对比胜负"
     chart.y_axis.title = "题数"
     data_ref = Reference(ws, min_col=2, min_row=bar_row + 1, max_row=bar_row + 4)
     cats = Reference(ws, min_col=1, min_row=bar_row + 2, max_row=bar_row + 4)
@@ -1027,6 +1029,21 @@ def _winner(hs: Optional[float], ls: Optional[float]) -> str:
     return "平"
 
 
+def _pair_winner_label(
+    result: Dict[str, Any],
+    hs: Optional[float],
+    ls: Optional[float],
+) -> str:
+    w = (result.get("comparison") or {}).get("winner")
+    if w == SYSTEM_HYPERGRAPH:
+        return "超图"
+    if w == SYSTEM_LLM_ONLY:
+        return "纯LLM"
+    if w == "tie":
+        return "平"
+    return _winner(hs, ls)
+
+
 def _category_fields_from_results(results: Sequence[Dict[str, Any]]) -> List[str]:
     seen: List[str] = []
     bag = set()
@@ -1070,9 +1087,10 @@ def _detail_headers(cat_fields: Sequence[str], has_lo: bool) -> Tuple[List[str],
             "纯LLM错误",
             "分差",
             "胜者",
+            "对比理由",
             "评判是否一致",
         ]
-        fmts += [None, "int", "int", "float3", "int", None, None, None, "int", None, None]
+        fmts += [None, "int", "int", "float3", "int", None, None, None, "int", None, None, None]
     return headers, fmts
 
 
@@ -1127,7 +1145,8 @@ def _detail_row(
             lo.get("answer") or lo.get("raw_answer"),
             lo_err,
             delta,
-            _winner(hs, ls),
+            _pair_winner_label(r, hs, ls),
+            (r.get("comparison") or {}).get("reason") or "",
             same,
         ]
     return row

@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | all
-  mode: report
+  mode: evaluate
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -8,38 +8,38 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: benchmark_results_2k
+  output_dir: benchmark_results
 
   # generate 写出
-  questions_filename: questions_1.json
+  questions_filename: questions_complex.json
   questions_path: null
 
   # evaluate 读入
-  eval_questions_filename: questions_subject.json
+  eval_questions_filename: questions_complex.json
   eval_questions_path: null
   # evaluate 写出
-  eval_results_filename: evals_subject_768_fp32_hnsw.json
+  eval_results_filename: evals_complex.json
   eval_results_path: null
   
   # report 读入
-  report_source_filename: evals_subject_768_fp32_hnsw.json
+  report_source_filename: evals_complex.json
   report_source_path: null
   # report 写出
-  report_filename: report_subject_768_fp32_hnsw.json
+  report_filename: report_complex.json
   report_path: null
 
 generate:
   hop_counts:
     "1": 100
-    "2": 0
-    '3': 0
+    "2": 50
+    '3': 50
   seed: 44
   max_chars_per_doc: -1
   max_retries: 3
   sleep_between: 20
-  num_thread: 20          #
+  num_thread: 10          #
   use_cache: True
-  question_gen_prompt: QUESTION_GEN_Fuzzy_Matching
+  question_gen_prompt: QUESTION_GEN_USER
   api_key: null
   base_url: null
   timeout: 600
@@ -51,13 +51,13 @@ generate:
       type: json_object
 
 evaluate:
-  enable_llm_only: true   # 每题额外跑一路纯 LLM 对照
+  enable_llm_only: true   # 每题额外跑一路纯 LLM；与超图回答一次对比打分，不再分开评判
   enable_doc_recall: True
   max_source_chars: -1
   max_retries: 10
   sleep_between: 0.0
-  num_thread: 5
-  use_cache: True
+  num_thread: 3
+  use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
@@ -65,7 +65,7 @@ evaluate:
   model_args:
     model: null
     temperature: 0.0
-    enable_thinking: false
+    enable_thinking: True
     response_format:
       type: json_object
 

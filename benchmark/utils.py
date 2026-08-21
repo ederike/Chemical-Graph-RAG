@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -187,6 +188,224 @@ def extract_json_object(text: str) -> Optional[dict]:
         except Exception:
             pass
     return None
+
+
+EMPTY_ANSWER_PLACEHOLDER = "（无回答）"
+
+
+def fill_prompt(template: str, mapping: Dict[str, Any]) -> str:
+    """替换 {key}，并把模板里为 .format 转义的 {{ / }} 还原成单括号。
+
+    回答正文可能含花括号，所以不用 str.format。
+    """
+    text = str(template or "")
+    sentinels: Dict[str, str] = {}
+    for i, key in enumerate(sorted(mapping, key=len, reverse=True)):
+        token = f"@@PROMPT_SLOT_{i}@@"
+        val = mapping[key]
+        sentinels[token] = "" if val is None else str(val)
+        text = text.replace("{" + key + "}", token)
+    text = text.replace("{{", "{").replace("}}", "}")
+    for token, val in sentinels.items():
+        text = text.replace(token, val)
+    return text
+
+
+def pairwise_system_order(
+    qid: Any,
+    first: str = "hypergraph",
+    second: str = "llm_only",
+) -> Tuple[str, str]:
+    """按题号确定性打乱 A/B 顺序，减轻位置偏差。"""
+    raw = str(qid if qid is not None else "")
+    bit = hashlib.md5(raw.encode("utf-8")).digest()[0] & 1
+    if bit:
+        return second, first
+    return first, second
+
+
+def extract_pair_side(obj: dict, side: str) -> dict:
+    """从对比裁判 JSON 中抽出回答 A 或 B 的字段（可能为空 dict）。"""
+    if not isinstance(obj, dict):
+        return {}
+    side = str(side).strip().upper()
+    if side not in ("A", "B"):
+        return {}
+    low = side.lower()
+    nested_keys = (
+        f"answer_{low}",
+        f"answer{low}",
+        f"Answer_{side}",
+        f"回答{side}",
+        f"回答{low}",
+        side,
+        low,
+    )
+    for k in nested_keys:
+        v = obj.get(k)
+        if isinstance(v, dict):
+            return v
+    answers = obj.get("answers")
+    if isinstance(answers, dict):
+        for k in nested_keys:
+            v = answers.get(k)
+            if isinstance(v, dict):
+                return v
+    if isinstance(answers, list):
+        for item in answers:
+            if not isinstance(item, dict):
+                continue
+            lab = str(
+                item.get("id") or item.get("label") or item.get("name") or ""
+            ).strip()
+            if lab.upper() in (side, f"ANSWER_{side}", f"ANSWER{side}", f"回答{side}"):
+                return item
+    flat: Dict[str, Any] = {}
+    mapping = {
+        "judgment": ("judgment", "llm_acc"),
+        "score": ("score",),
+        "reason": ("reason", "comment"),
+        "dimension_scores": ("dimension_scores", "dimensions"),
+    }
+    for out_key, names in mapping.items():
+        found = False
+        for name in names:
+            for k in (
+                f"{name}_{low}",
+                f"{low}_{name}",
+                f"{name}{side}",
+                f"{name}_{side}",
+            ):
+                if k in obj and obj[k] is not None:
+                    flat[out_key] = obj[k]
+                    found = True
+                    break
+            if found:
+                break
+    return flat
+
+
+def extract_named_system_sides(obj: dict) -> Optional[Dict[str, dict]]:
+    """若模型直接用 hypergraph / llm_only 作键，则按系统名取出。"""
+    if not isinstance(obj, dict):
+        return None
+    hg = obj.get("hypergraph") or obj.get("超图") or obj.get("rag")
+    lo = (
+        obj.get("llm_only")
+        or obj.get("纯LLM")
+        or obj.get("llm")
+        or obj.get("baseline")
+    )
+    if isinstance(hg, dict) and isinstance(lo, dict):
+        return {"hypergraph": hg, "llm_only": lo}
+    return None
+
+
+def normalize_pairwise_better(raw: Any) -> Optional[str]:
+    """把 better/winner 归一为 A / B / tie。"""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        raw = (
+            raw.get("better")
+            or raw.get("winner")
+            or raw.get("prefer")
+            or raw.get("choice")
+        )
+        if raw is None:
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    compact = (
+        s.lower()
+        .replace(" ", "")
+        .replace("_", "")
+        .replace("-", "")
+        .replace("回答", "")
+        .replace("answer", "")
+    )
+    tie_keys = (
+        "tie",
+        "equal",
+        "same",
+        "neither",
+        "both",
+        "平",
+        "平局",
+        "相同",
+        "一样",
+        "并列",
+        "都不",
+        "都好",
+        "相当",
+    )
+    if compact in tie_keys or s in ("平", "平局"):
+        return "tie"
+    if compact in ("a", "甲") or s.upper() == "A":
+        return "A"
+    if compact in ("b", "乙") or s.upper() == "B":
+        return "B"
+    if any(k in s for k in ("平局", "相同", "一样", "并列", "相当")):
+        return "tie"
+    has_a = bool(re.search(r"(回答\s*A|\bA\b|甲)", s, re.I))
+    has_b = bool(re.search(r"(回答\s*B|\bB\b|乙)", s, re.I))
+    if has_a and not has_b:
+        return "A"
+    if has_b and not has_a:
+        return "B"
+    return None
+
+
+def resolve_pairwise_winner(
+    raw: Any,
+    *,
+    a_system: str,
+    b_system: str,
+) -> Optional[str]:
+    """把裁判的 better 映射为 hypergraph / llm_only / tie。"""
+    ab = normalize_pairwise_better(raw)
+    if ab == "A":
+        return a_system
+    if ab == "B":
+        return b_system
+    if ab == "tie":
+        return "tie"
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        raw = raw.get("better") or raw.get("winner") or raw.get("prefer")
+        if raw is None:
+            return None
+    s = str(raw).strip()
+    compact = s.lower().replace(" ", "").replace("_", "")
+    if compact in ("hypergraph", "rag", "graph") or s in ("超图",):
+        return "hypergraph"
+    if compact in ("llmonly", "llm", "baseline") or s in ("纯LLM", "纯llm"):
+        return "llm_only"
+    return None
+
+
+def pairwise_better_raw(obj: dict) -> Any:
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("better") is not None:
+        return obj.get("better")
+    if obj.get("winner") is not None:
+        return obj.get("winner")
+    if obj.get("prefer") is not None:
+        return obj.get("prefer")
+    cmp_ = obj.get("comparison")
+    if isinstance(cmp_, dict):
+        return (
+            cmp_.get("better")
+            or cmp_.get("winner")
+            or cmp_.get("prefer")
+        )
+    if isinstance(cmp_, str):
+        return cmp_
+    return None
+
 
 def call_llm(
     llm,

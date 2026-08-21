@@ -10,11 +10,18 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from benchmark.evaluator import QueryEvaluator
 from benchmark.utils import (
+    EMPTY_ANSWER_PLACEHOLDER,
     call_llm,
     extract_json_object,
+    extract_named_system_sides,
+    extract_pair_side,
     fail_print,
+    fill_prompt,
+    pairwise_better_raw,
+    pairwise_system_order,
     progress_iter,
     quiet_loggers,
+    resolve_pairwise_winner,
 )
 
 from .prompts import Benchmark2_PROMPT
@@ -153,7 +160,7 @@ class ExcelQueryEvaluator:
     对 Excel 测试集逐题：
       1) 超图：按 query_mode 调用 DHMF.query / agent_query
       2) 纯 LLM：同一模型、不检索，直接根据问题作答
-      3) 两路回答各自用同一套验收标准打分
+      3) 两路回答一次送入裁判，按同一套验收标准对比打分
     """
 
     def __init__(
@@ -257,6 +264,106 @@ class ExcelQueryEvaluator:
     def _format_agent_process(self, respond: Dict[str, Any]) -> str:
         return QueryEvaluator._format_agent_process(respond)
 
+    @staticmethod
+    def _block_answer(block: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(block, dict):
+            return ""
+        return (block.get("answer") or block.get("raw_answer") or "").strip()
+
+    @classmethod
+    def _system_attempted(cls, block: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(block, dict) or not block:
+            return False
+        if cls._block_answer(block):
+            return True
+        if block.get("query_error"):
+            return True
+        if block.get("query_status") == 1:
+            return True
+        metrics = block.get("metrics") or {}
+        return any(
+            metrics.get(k) is not None
+            for k in ("query_latency_s", "wall_latency_s")
+        )
+
+    def _parse_side_judgment(
+        self,
+        obj: dict,
+        *,
+        score_dimensions: Sequence[str],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(obj, dict) or not obj:
+            return None
+        score = normalize_score(obj.get("score"))
+        judgment = normalize_judgment(
+            obj.get("judgment") or obj.get("llm_acc"),
+            score=score,
+        )
+        if judgment not in JUDGMENT_LABELS:
+            return None
+        if score is None:
+            score = {"正确": 2, "部分正确": 1, "错误": 0}[judgment]
+
+        dim_scores = []
+        raw_dims = obj.get("dimension_scores") or obj.get("dimensions") or []
+        if isinstance(raw_dims, list):
+            for d in raw_dims:
+                if not isinstance(d, dict):
+                    continue
+                name = str(d.get("dimension") or d.get("name") or "").strip()
+                if not name:
+                    continue
+                ds = normalize_score(d.get("score"))
+                passed = d.get("pass")
+                if passed is None and ds is not None:
+                    passed = ds >= 2
+                dim_scores.append(
+                    {
+                        "dimension": name,
+                        "score": ds,
+                        "pass": bool(passed) if passed is not None else None,
+                        "comment": str(d.get("comment") or "").strip(),
+                    }
+                )
+        if not dim_scores:
+            for name in score_dimensions or []:
+                dim_scores.append(
+                    {
+                        "dimension": name,
+                        "score": score,
+                        "pass": score >= 2 if score is not None else None,
+                        "comment": "",
+                    }
+                )
+        return {
+            "llm_acc": judgment,
+            "score": score,
+            "judge_reason": (obj.get("reason") or "").strip(),
+            "dimension_scores": dim_scores,
+            "judge_status": 1,
+            "judge_error": None,
+        }
+
+    @staticmethod
+    def _infer_winner(
+        sides: Dict[str, Dict[str, Any]],
+        a_sys: str,
+        b_sys: str,
+    ) -> Optional[str]:
+        sa = (sides.get(a_sys) or {}).get("score")
+        sb = (sides.get(b_sys) or {}).get("score")
+        if sa is None or sb is None:
+            return None
+        try:
+            fa, fb = float(sa), float(sb)
+        except (TypeError, ValueError):
+            return None
+        if fa > fb:
+            return a_sys
+        if fb > fa:
+            return b_sys
+        return "tie"
+
     def _judge_one(
         self,
         *,
@@ -266,17 +373,19 @@ class ExcelQueryEvaluator:
         score_dimensions_raw: str,
         rag_answer: str,
     ) -> Dict[str, Any]:
+        """单路 0-3 打分（仅 enable_llm_only=false 时使用）。"""
         dims_block = format_score_dimensions(
             score_dimensions, raw=score_dimensions_raw or ""
         )
-        user = Benchmark2_PROMPT["JUDGE_USER"]
-        for key, val in (
-            ("question", question or ""),
-            ("expected_answer", expected_answer or ""),
-            ("score_dimensions", dims_block),
-            ("answer", rag_answer or ""),
-        ):
-            user = user.replace("{" + key + "}", str(val))
+        user = fill_prompt(
+            Benchmark2_PROMPT["JUDGE_USER_SINGLE"],
+            {
+                "question": question or "",
+                "expected_answer": expected_answer or "",
+                "score_dimensions": dims_block,
+                "answer": rag_answer or "",
+            },
+        )
 
         last_err = None
         for _attempt in range(1, self.max_judge_retries + 1):
@@ -299,59 +408,18 @@ class ExcelQueryEvaluator:
             if not obj:
                 last_err = "judge json parse failed"
                 continue
-            score = normalize_score(obj.get("score"))
-            judgment = normalize_judgment(
-                obj.get("judgment") or obj.get("llm_acc"),
-                score=score,
+            parsed = self._parse_side_judgment(
+                obj, score_dimensions=score_dimensions
             )
-            if judgment not in JUDGMENT_LABELS:
-                last_err = f"invalid judgment={obj.get('judgment')!r} score={score!r}"
+            if not parsed:
+                last_err = (
+                    f"invalid judgment={obj.get('judgment')!r} "
+                    f"score={obj.get('score')!r}"
+                )
                 continue
-            if score is None:
-                score = {"正确": 2, "部分正确": 1, "错误": 0}[judgment]
-
-            dim_scores = []
-            raw_dims = obj.get("dimension_scores") or obj.get("dimensions") or []
-            if isinstance(raw_dims, list):
-                for d in raw_dims:
-                    if not isinstance(d, dict):
-                        continue
-                    name = str(d.get("dimension") or d.get("name") or "").strip()
-                    if not name:
-                        continue
-                    ds = normalize_score(d.get("score"))
-                    passed = d.get("pass")
-                    if passed is None and ds is not None:
-                        passed = ds >= 2
-                    dim_scores.append(
-                        {
-                            "dimension": name,
-                            "score": ds,
-                            "pass": bool(passed) if passed is not None else None,
-                            "comment": str(d.get("comment") or "").strip(),
-                        }
-                    )
-            if not dim_scores:
-                for name in score_dimensions or []:
-                    dim_scores.append(
-                        {
-                            "dimension": name,
-                            "score": score,
-                            "pass": score >= 2 if score is not None else None,
-                            "comment": "",
-                        }
-                    )
-
-            return {
-                "llm_acc": judgment,
-                "score": score,
-                "judge_reason": (obj.get("reason") or "").strip(),
-                "dimension_scores": dim_scores,
-                "judge_status": 1,
-                "judge_error": None,
-                "judge_latency_s": resp.get("latency_s"),
-                "judge_usage": usage,
-            }
+            parsed["judge_latency_s"] = resp.get("latency_s")
+            parsed["judge_usage"] = usage
+            return parsed
 
         return {
             "llm_acc": None,
@@ -363,6 +431,211 @@ class ExcelQueryEvaluator:
             "judge_latency_s": None,
             "judge_usage": {},
         }
+
+    def _judge_pair(
+        self,
+        *,
+        qid: Any,
+        question: str,
+        expected_answer: str,
+        score_dimensions: Sequence[str],
+        score_dimensions_raw: str,
+        answers: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """两路回答一次送入裁判，对比后分别打 0-3 分。"""
+        a_sys, b_sys = pairwise_system_order(qid, SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY)
+        dims_block = format_score_dimensions(
+            score_dimensions, raw=score_dimensions_raw or ""
+        )
+        ans_a = (answers.get(a_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
+        ans_b = (answers.get(b_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
+        user = fill_prompt(
+            Benchmark2_PROMPT["JUDGE_USER"],
+            {
+                "question": question or "",
+                "expected_answer": expected_answer or "",
+                "score_dimensions": dims_block,
+                "answer_a": ans_a,
+                "answer_b": ans_b,
+            },
+        )
+
+        last_err = None
+        for _attempt in range(1, self.max_judge_retries + 1):
+            resp = call_llm(
+                self.judge_llm,
+                system=Benchmark2_PROMPT.get("JUDGE_SYSTEM", ""),
+                user=user,
+                model_args=self.judge_model_args,
+                use_cache=self.use_cache,
+            )
+            usage = {
+                "prompt_tokens": resp.get("usage_prompt_tokens"),
+                "completion_tokens": resp.get("usage_completion_tokens"),
+                "total_tokens": resp.get("usage_total_tokens"),
+            }
+            if resp.get("status") != 1:
+                last_err = f"judge llm status={resp.get('status')}"
+                continue
+            obj = extract_json_object(resp.get("answer") or "")
+            if not obj:
+                last_err = "judge json parse failed"
+                continue
+
+            named = extract_named_system_sides(obj)
+            if named:
+                parsed_a = self._parse_side_judgment(
+                    named.get(a_sys) or {}, score_dimensions=score_dimensions
+                )
+                parsed_b = self._parse_side_judgment(
+                    named.get(b_sys) or {}, score_dimensions=score_dimensions
+                )
+            else:
+                parsed_a = self._parse_side_judgment(
+                    extract_pair_side(obj, "A"), score_dimensions=score_dimensions
+                )
+                parsed_b = self._parse_side_judgment(
+                    extract_pair_side(obj, "B"), score_dimensions=score_dimensions
+                )
+            if not parsed_a or not parsed_b:
+                last_err = (
+                    f"invalid pair judgment "
+                    f"A={None if not parsed_a else parsed_a.get('llm_acc')} "
+                    f"B={None if not parsed_b else parsed_b.get('llm_acc')}"
+                )
+                continue
+
+            sides = {a_sys: parsed_a, b_sys: parsed_b}
+            winner = resolve_pairwise_winner(
+                pairwise_better_raw(obj),
+                a_system=a_sys,
+                b_system=b_sys,
+            ) or self._infer_winner(sides, a_sys, b_sys)
+            reason = ""
+            if isinstance(obj, dict):
+                reason = str(obj.get("reason") or "").strip()
+                cmp_ = obj.get("comparison")
+                if not reason and isinstance(cmp_, dict):
+                    reason = str(cmp_.get("reason") or "").strip()
+            return {
+                "sides": sides,
+                "winner": winner,
+                "reason": reason,
+                "order": [a_sys, b_sys],
+                "judge_status": 1,
+                "judge_error": None,
+                "judge_latency_s": resp.get("latency_s"),
+                "judge_usage": usage,
+            }
+
+        return {
+            "sides": {},
+            "winner": None,
+            "reason": "",
+            "order": [a_sys, b_sys],
+            "judge_status": 0,
+            "judge_error": last_err or "judge failed",
+            "judge_latency_s": None,
+            "judge_usage": {},
+        }
+
+    def _apply_pair_judge(
+        self,
+        result: Dict[str, Any],
+        judge: Dict[str, Any],
+    ) -> None:
+        sides = judge.get("sides") or {}
+        usage = judge.get("judge_usage") or {}
+        shared = {
+            "judge_status": judge.get("judge_status"),
+            "judge_error": judge.get("judge_error"),
+            "judge_latency_s": judge.get("judge_latency_s"),
+            "judge_usage": usage,
+        }
+        for sys in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY):
+            block = result.get(sys)
+            if not isinstance(block, dict):
+                continue
+            payload = dict(sides.get(sys) or {})
+            payload.update(shared)
+            payload.setdefault("llm_acc", None)
+            payload.setdefault("score", None)
+            payload.setdefault("judge_reason", "")
+            payload.setdefault("dimension_scores", [])
+            self._apply_judge(block, payload)
+        result["comparison"] = {
+            "winner": judge.get("winner"),
+            "reason": judge.get("reason") or "",
+            "order": list(judge.get("order") or []),
+            "judge_status": judge.get("judge_status"),
+            "judge_error": judge.get("judge_error"),
+            "metrics": {
+                "judge_latency_s": judge.get("judge_latency_s"),
+                "judge_prompt_tokens": usage.get("prompt_tokens"),
+                "judge_completion_tokens": usage.get("completion_tokens"),
+                "judge_total_tokens": usage.get("total_tokens"),
+            },
+        }
+
+    def _skip_judge_block(self, block: Optional[Dict[str, Any]], err: str) -> None:
+        if not isinstance(block, dict):
+            return
+        block["judge_status"] = 0
+        block["judge_error"] = err
+
+    def _judge_result(self, result: Dict[str, Any]) -> None:
+        question = result.get("question") or ""
+        expected = result.get("expected_answer") or ""
+        dims = list(result.get("score_dimensions") or [])
+        dims_raw = result.get("score_dimensions_raw") or ""
+        hg = result.get(SYSTEM_HYPERGRAPH) or {}
+        lo = result.get(SYSTEM_LLM_ONLY) or {}
+        hg_ans = self._block_answer(hg)
+        lo_ans = self._block_answer(lo)
+
+        lo_present = self._system_attempted(lo)
+        if self.enable_llm_only and lo_present:
+            if not hg_ans and not lo_ans:
+                self._skip_judge_block(
+                    hg,
+                    "skip judge: query failed" if hg.get("query_error") else "skip judge: empty answer",
+                )
+                self._skip_judge_block(
+                    lo,
+                    "skip judge: query failed" if lo.get("query_error") else "skip judge: empty answer",
+                )
+                return
+            self._apply_pair_judge(
+                result,
+                self._judge_pair(
+                    qid=result.get("id"),
+                    question=question,
+                    expected_answer=expected,
+                    score_dimensions=dims,
+                    score_dimensions_raw=dims_raw,
+                    answers={
+                        SYSTEM_HYPERGRAPH: hg_ans,
+                        SYSTEM_LLM_ONLY: lo_ans,
+                    },
+                ),
+            )
+            return
+
+        if hg_ans:
+            self._apply_judge(
+                hg,
+                self._judge_one(
+                    question=question,
+                    expected_answer=expected,
+                    score_dimensions=dims,
+                    score_dimensions_raw=dims_raw,
+                    rag_answer=hg_ans,
+                ),
+            )
+        elif hg.get("query_error"):
+            self._skip_judge_block(hg, "skip judge: query failed")
+        else:
+            self._skip_judge_block(hg, "skip judge: empty answer")
 
     def _fill_hypergraph(self, question: str) -> Dict[str, Any]:
         block = _empty_system_block()
@@ -507,72 +780,18 @@ class ExcelQueryEvaluator:
                 return self._drop_mirrored_system_fields(result)
 
             result[SYSTEM_HYPERGRAPH] = self._fill_hypergraph(question)
-            hg = result[SYSTEM_HYPERGRAPH]
-            hg_ans = (hg.get("answer") or hg.get("raw_answer") or "").strip()
-            if hg_ans:
-                self._apply_judge(
-                    hg,
-                    self._judge_one(
-                        question=question,
-                        expected_answer=expected,
-                        score_dimensions=dims,
-                        score_dimensions_raw=dims_raw,
-                        rag_answer=hg_ans,
-                    ),
-                )
-            elif hg.get("query_error"):
-                hg["judge_status"] = 0
-                hg["judge_error"] = "skip judge: query failed"
-
             if self.enable_llm_only:
                 result[SYSTEM_LLM_ONLY] = self._fill_llm_only(question)
-                lo = result[SYSTEM_LLM_ONLY]
-                lo_ans = (lo.get("answer") or lo.get("raw_answer") or "").strip()
-                if lo_ans:
-                    self._apply_judge(
-                        lo,
-                        self._judge_one(
-                            question=question,
-                            expected_answer=expected,
-                            score_dimensions=dims,
-                            score_dimensions_raw=dims_raw,
-                            rag_answer=lo_ans,
-                        ),
-                    )
-                elif lo.get("query_error"):
-                    lo["judge_status"] = 0
-                    lo["judge_error"] = "skip judge: query failed"
-
+            self._judge_result(result)
             return self._drop_mirrored_system_fields(result)
         finally:
             if self.sleep_between > 0:
                 time.sleep(self.sleep_between)
 
     def rejudge_one(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """只重跑裁判，不重新检索/生成。"""
+        """只重跑裁判，不重新检索/生成。两路回答一次对比打分。"""
         r = self._drop_mirrored_system_fields(dict(result))
-        question = r.get("question") or ""
-        expected = r.get("expected_answer") or ""
-        dims = list(r.get("score_dimensions") or [])
-        dims_raw = r.get("score_dimensions_raw") or ""
-
-        for system in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY):
-            block = r.get(system)
-            if not isinstance(block, dict) or not block:
-                continue
-            ans = (block.get("answer") or block.get("raw_answer") or "").strip()
-            if not ans:
-                continue
-            self._apply_judge(
-                block,
-                self._judge_one(
-                    question=question,
-                    expected_answer=expected,
-                    score_dimensions=dims,
-                    score_dimensions_raw=dims_raw,
-                    rag_answer=ans,
-                ),
-            )
+        self._judge_result(r)
         return r
 
     def rejudge_all(
@@ -767,6 +986,7 @@ class ExcelQueryEvaluator:
                 "dataset_meta": dataset.get("meta"),
                 "query_mode": self.query_mode,
                 "judge_model": (self.judge_model_args or {}).get("model"),
+                "judge_mode": "pairwise" if self.enable_llm_only else "single",
                 "answer_model": (self.answer_model_args or {}).get("model"),
                 "enable_llm_only": self.enable_llm_only,
                 "n_questions": len(results),
@@ -783,7 +1003,11 @@ class ExcelQueryEvaluator:
         hg = r.get(SYSTEM_HYPERGRAPH) or {}
         lo = r.get(SYSTEM_LLM_ONLY) or {}
         qerr = hg.get("query_error") or r.get("query_error")
-        jerr = hg.get("judge_error") or r.get("judge_error")
+        jerr = (
+            (r.get("comparison") or {}).get("judge_error")
+            or hg.get("judge_error")
+            or r.get("judge_error")
+        )
         if qerr:
             parts.append(f"hypergraph_query={str(qerr)[:120]}")
         if jerr:

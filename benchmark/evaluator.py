@@ -11,14 +11,21 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from .prompts import Benchmark_PROMPT
 from .utils import (
+    EMPTY_ANSWER_PLACEHOLDER,
     call_llm,
     extract_json_object,
+    extract_named_system_sides,
+    extract_pair_side,
     fail_print,
+    fill_prompt,
     format_docs_block,
     match_doc_names,
     mean,
+    pairwise_better_raw,
+    pairwise_system_order,
     progress_iter,
     quiet_loggers,
+    resolve_pairwise_winner,
     safe_div,
     truncate_text,
 )
@@ -145,7 +152,7 @@ class QueryEvaluator:
     对测试集 JSON 中的问题：
       1) 按 query_mode 调用 DHMF.query（dual_path）或 DHMF.agent_query（agent）
       2) 可选：同一模型不检索的纯 LLM 对照
-      3) 两路各自用 LLM 二分类评判 llm-acc（正确/错误）
+      3) 两路回答一次送入裁判对比打分（二分类 llm-acc：正确/错误）
       4) 文档召回率 = 命中 gold 文档数 / gold 文档数（仅超图）
       5) 汇总时延、token 等综合统计
     """
@@ -353,19 +360,7 @@ class QueryEvaluator:
             "recall": recall,
         }
 
-    def _judge_one(
-        self,
-        *,
-        question: str,
-        ground_truth_answer: str,
-        source_docs: Sequence[dict],
-        rag_answer: str,
-    ) -> Dict[str, Any]:
-        """
-        将 问题 + 标准答案 + 全部相关完整文档 + RAG 回答 发给评测模型。
-        二分类：正确 / 错误（答到要点即可，不必字面一致）。
-        """
-        # 完整文档；max_source_chars=-1 时不截断
+    def _source_block(self, source_docs: Sequence[dict]) -> str:
         full_docs = []
         for d in source_docs or []:
             full_docs.append({
@@ -375,14 +370,82 @@ class QueryEvaluator:
                     d.get("content") or "", self.max_source_chars
                 ),
             })
-        source_block = format_docs_block(
+        return format_docs_block(
             full_docs, max_chars_per_doc=self.max_source_chars
         )
-        user = Benchmark_PROMPT['JUDGE_USER'].format(
-            question=question or "",
-            ground_truth_answer=ground_truth_answer or "",
-            source_block=source_block,
-            rag_answer=rag_answer or "",
+
+    @staticmethod
+    def _block_answer(block: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(block, dict):
+            return ""
+        return (block.get("answer") or block.get("raw_answer") or "").strip()
+
+    @classmethod
+    def _system_attempted(cls, block: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(block, dict) or not block:
+            return False
+        if cls._block_answer(block):
+            return True
+        if block.get("query_error"):
+            return True
+        if block.get("query_status") == 1:
+            return True
+        metrics = block.get("metrics") or {}
+        return any(
+            metrics.get(k) is not None
+            for k in ("query_latency_s", "wall_latency_s")
+        )
+
+    @staticmethod
+    def _parse_side_judgment(obj: dict) -> Optional[Dict[str, Any]]:
+        if not isinstance(obj, dict) or not obj:
+            return None
+        judgment = normalize_judgment(
+            obj.get("judgment") or obj.get("llm_acc") or ""
+        )
+        if judgment not in JUDGMENT_LABELS:
+            return None
+        return {
+            "llm_acc": judgment,
+            "judge_reason": (obj.get("reason") or "").strip(),
+            "judge_status": 1,
+            "judge_error": None,
+        }
+
+    @staticmethod
+    def _infer_winner(
+        sides: Dict[str, Dict[str, Any]],
+        a_sys: str,
+        b_sys: str,
+    ) -> Optional[str]:
+        rank = {"正确": 1, "错误": 0}
+        ra = rank.get((sides.get(a_sys) or {}).get("llm_acc"))
+        rb = rank.get((sides.get(b_sys) or {}).get("llm_acc"))
+        if ra is None or rb is None:
+            return None
+        if ra > rb:
+            return a_sys
+        if rb > ra:
+            return b_sys
+        return "tie"
+
+    def _judge_one(
+        self,
+        *,
+        question: str,
+        ground_truth_answer: str,
+        source_docs: Sequence[dict],
+        rag_answer: str,
+    ) -> Dict[str, Any]:
+        """单路二分类：正确 / 错误（仅 enable_llm_only=false 时使用）。"""
+        user = fill_prompt(
+            Benchmark_PROMPT["JUDGE_USER_SINGLE"],
+            {
+                "question": question or "",
+                "ground_truth_answer": ground_truth_answer or "",
+                "source_block": self._source_block(source_docs),
+                "rag_answer": rag_answer or "",
+            },
         )
 
         last_err = None
@@ -406,20 +469,13 @@ class QueryEvaluator:
             if not obj:
                 last_err = "judge json parse failed"
                 continue
-            judgment = normalize_judgment(
-                obj.get("judgment") or obj.get("llm_acc") or ""
-            )
-            if judgment not in JUDGMENT_LABELS:
+            parsed = self._parse_side_judgment(obj)
+            if not parsed:
                 last_err = f"invalid judgment={obj.get('judgment')!r}"
                 continue
-            return {
-                "llm_acc": judgment,
-                "judge_reason": (obj.get("reason") or "").strip(),
-                "judge_status": 1,
-                "judge_error": None,
-                "judge_latency_s": resp.get("latency_s"),
-                "judge_usage": usage,
-            }
+            parsed["judge_latency_s"] = resp.get("latency_s")
+            parsed["judge_usage"] = usage
+            return parsed
 
         return {
             "llm_acc": None,
@@ -429,6 +485,199 @@ class QueryEvaluator:
             "judge_latency_s": None,
             "judge_usage": {},
         }
+
+    def _judge_pair(
+        self,
+        *,
+        qid: Any,
+        question: str,
+        ground_truth_answer: str,
+        source_docs: Sequence[dict],
+        answers: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """两路回答一次送入裁判，对比后分别判定。"""
+        a_sys, b_sys = pairwise_system_order(qid, SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY)
+        ans_a = (answers.get(a_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
+        ans_b = (answers.get(b_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
+        user = fill_prompt(
+            Benchmark_PROMPT["JUDGE_USER"],
+            {
+                "question": question or "",
+                "ground_truth_answer": ground_truth_answer or "",
+                "source_block": self._source_block(source_docs),
+                "answer_a": ans_a,
+                "answer_b": ans_b,
+            },
+        )
+
+        last_err = None
+        for _attempt in range(1, self.max_judge_retries + 1):
+            resp = call_llm(
+                self.judge_llm,
+                system=Benchmark_PROMPT.get("JUDGE_SYSTEM", ""),
+                user=user,
+                model_args=self.judge_model_args,
+                use_cache=self.use_cache,
+            )
+            usage = {
+                "prompt_tokens": resp.get("usage_prompt_tokens"),
+                "completion_tokens": resp.get("usage_completion_tokens"),
+                "total_tokens": resp.get("usage_total_tokens"),
+            }
+            if resp.get("status") != 1:
+                last_err = f"judge llm status={resp.get('status')}"
+                continue
+            obj = extract_json_object(resp.get("answer") or "")
+            if not obj:
+                last_err = "judge json parse failed"
+                continue
+
+            named = extract_named_system_sides(obj)
+            if named:
+                parsed_a = self._parse_side_judgment(named.get(a_sys) or {})
+                parsed_b = self._parse_side_judgment(named.get(b_sys) or {})
+            else:
+                parsed_a = self._parse_side_judgment(extract_pair_side(obj, "A"))
+                parsed_b = self._parse_side_judgment(extract_pair_side(obj, "B"))
+            if not parsed_a or not parsed_b:
+                last_err = (
+                    f"invalid pair judgment "
+                    f"A={None if not parsed_a else parsed_a.get('llm_acc')} "
+                    f"B={None if not parsed_b else parsed_b.get('llm_acc')}"
+                )
+                continue
+
+            sides = {a_sys: parsed_a, b_sys: parsed_b}
+            winner = resolve_pairwise_winner(
+                pairwise_better_raw(obj),
+                a_system=a_sys,
+                b_system=b_sys,
+            ) or self._infer_winner(sides, a_sys, b_sys)
+            reason = ""
+            if isinstance(obj, dict):
+                reason = str(obj.get("reason") or "").strip()
+                cmp_ = obj.get("comparison")
+                if not reason and isinstance(cmp_, dict):
+                    reason = str(cmp_.get("reason") or "").strip()
+            return {
+                "sides": sides,
+                "winner": winner,
+                "reason": reason,
+                "order": [a_sys, b_sys],
+                "judge_status": 1,
+                "judge_error": None,
+                "judge_latency_s": resp.get("latency_s"),
+                "judge_usage": usage,
+            }
+
+        return {
+            "sides": {},
+            "winner": None,
+            "reason": "",
+            "order": [a_sys, b_sys],
+            "judge_status": 0,
+            "judge_error": last_err or "judge failed",
+            "judge_latency_s": None,
+            "judge_usage": {},
+        }
+
+    def _apply_pair_judge(
+        self,
+        result: Dict[str, Any],
+        judge: Dict[str, Any],
+    ) -> None:
+        sides = judge.get("sides") or {}
+        usage = judge.get("judge_usage") or {}
+        shared = {
+            "judge_status": judge.get("judge_status"),
+            "judge_error": judge.get("judge_error"),
+            "judge_latency_s": judge.get("judge_latency_s"),
+            "judge_usage": usage,
+        }
+        for sys in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY):
+            block = result.get(sys)
+            if not isinstance(block, dict):
+                continue
+            payload = dict(sides.get(sys) or {})
+            payload.update(shared)
+            if "llm_acc" not in payload:
+                payload["llm_acc"] = None
+                payload["judge_reason"] = payload.get("judge_reason") or ""
+            self._apply_judge(block, payload)
+        result["comparison"] = {
+            "winner": judge.get("winner"),
+            "reason": judge.get("reason") or "",
+            "order": list(judge.get("order") or []),
+            "judge_status": judge.get("judge_status"),
+            "judge_error": judge.get("judge_error"),
+            "metrics": {
+                "judge_latency_s": judge.get("judge_latency_s"),
+                "judge_prompt_tokens": usage.get("prompt_tokens"),
+                "judge_completion_tokens": usage.get("completion_tokens"),
+                "judge_total_tokens": usage.get("total_tokens"),
+            },
+        }
+
+    def _skip_judge_block(self, block: Optional[Dict[str, Any]], err: str) -> None:
+        if not isinstance(block, dict):
+            return
+        block["judge_status"] = 0
+        block["judge_error"] = err
+
+    def _judge_result(
+        self,
+        result: Dict[str, Any],
+        *,
+        source_docs: Sequence[dict],
+    ) -> None:
+        question = result.get("question") or ""
+        gt = result.get("ground_truth_answer") or ""
+        hg = result.get(SYSTEM_HYPERGRAPH) or {}
+        lo = result.get(SYSTEM_LLM_ONLY) or {}
+        hg_ans = self._block_answer(hg)
+        lo_ans = self._block_answer(lo)
+
+        lo_present = self._system_attempted(lo)
+        if self.enable_llm_only and lo_present:
+            if not hg_ans and not lo_ans:
+                self._skip_judge_block(
+                    hg,
+                    "skip judge: query failed" if hg.get("query_error") else "skip judge: empty answer",
+                )
+                self._skip_judge_block(
+                    lo,
+                    "skip judge: query failed" if lo.get("query_error") else "skip judge: empty answer",
+                )
+                return
+            self._apply_pair_judge(
+                result,
+                self._judge_pair(
+                    qid=result.get("id"),
+                    question=question,
+                    ground_truth_answer=gt,
+                    source_docs=source_docs,
+                    answers={
+                        SYSTEM_HYPERGRAPH: hg_ans,
+                        SYSTEM_LLM_ONLY: lo_ans,
+                    },
+                ),
+            )
+            return
+
+        if hg_ans:
+            self._apply_judge(
+                hg,
+                self._judge_one(
+                    question=question,
+                    ground_truth_answer=gt,
+                    source_docs=source_docs,
+                    rag_answer=hg_ans,
+                ),
+            )
+        elif hg.get("query_error"):
+            self._skip_judge_block(hg, "skip judge: query failed")
+        else:
+            self._skip_judge_block(hg, "skip judge: empty answer")
 
     def _fill_hypergraph(self, question: str) -> Dict[str, Any]:
         block = _empty_system_block()
@@ -578,39 +827,12 @@ class QueryEvaluator:
                     expected_names, hg.get("retrieval_sources") or []
                 )
 
-            hg_ans = (hg.get("answer") or hg.get("raw_answer") or "").strip()
-            if hg_ans:
-                self._apply_judge(
-                    hg,
-                    self._judge_one(
-                        question=question,
-                        ground_truth_answer=result["ground_truth_answer"],
-                        source_docs=item.get("source_docs") or [],
-                        rag_answer=hg_ans,
-                    ),
-                )
-            elif hg.get("query_error"):
-                hg["judge_status"] = 0
-                hg["judge_error"] = "skip judge: query failed"
-
             if self.enable_llm_only:
                 result[SYSTEM_LLM_ONLY] = self._fill_llm_only(question)
-                lo = result[SYSTEM_LLM_ONLY]
-                lo_ans = (lo.get("answer") or lo.get("raw_answer") or "").strip()
-                if lo_ans:
-                    self._apply_judge(
-                        lo,
-                        self._judge_one(
-                            question=question,
-                            ground_truth_answer=result["ground_truth_answer"],
-                            source_docs=item.get("source_docs") or [],
-                            rag_answer=lo_ans,
-                        ),
-                    )
-                elif lo.get("query_error"):
-                    lo["judge_status"] = 0
-                    lo["judge_error"] = "skip judge: query failed"
 
+            self._judge_result(
+                result, source_docs=item.get("source_docs") or []
+            )
             return result
         finally:
             if self.sleep_between > 0:
@@ -693,6 +915,7 @@ class QueryEvaluator:
                 "dataset_meta": self._slim_dataset_meta(dataset.get("meta")),
                 "query_mode": self.query_mode,
                 "judge_model": (self.judge_model_args or {}).get("model"),
+                "judge_mode": "pairwise" if self.enable_llm_only else "single",
                 "enable_doc_recall": self.enable_doc_recall,
                 "enable_llm_only": self.enable_llm_only,
                 "n_questions": len(results),
@@ -709,7 +932,11 @@ class QueryEvaluator:
         hg = r.get(SYSTEM_HYPERGRAPH) or {}
         lo = r.get(SYSTEM_LLM_ONLY) or {}
         qerr = hg.get("query_error") or r.get("query_error")
-        jerr = hg.get("judge_error") or r.get("judge_error")
+        jerr = (
+            (r.get("comparison") or {}).get("judge_error")
+            or hg.get("judge_error")
+            or r.get("judge_error")
+        )
         if qerr:
             parts.append(f"hypergraph_query={str(qerr)[:120]}")
         if jerr:
@@ -955,6 +1182,15 @@ class QueryEvaluator:
                 "dhmf_config_path": cfg_src.get("dhmf_config_path"),
                 "query_mode": src_meta.get("query_mode") or cfg_src.get("query_mode"),
                 "judge_model": src_meta.get("judge_model") or cfg_src.get("judge_model"),
+                "judge_mode": src_meta.get("judge_mode") or (
+                    "pairwise"
+                    if (
+                        src_meta.get("enable_llm_only")
+                        if src_meta.get("enable_llm_only") is not None
+                        else cfg_src.get("enable_llm_only")
+                    )
+                    else "single"
+                ),
                 "enable_doc_recall": enable_doc_recall,
                 "enable_llm_only": src_meta.get("enable_llm_only")
                 if src_meta.get("enable_llm_only") is not None
@@ -1005,20 +1241,26 @@ class QueryEvaluator:
             out[SYSTEM_LLM_ONLY] = self._summarize_one(
                 lo_rows, enable_doc_recall=False
             )
-            out["comparison"] = self._compare_systems(hg_rows, lo_rows)
+            out["comparison"] = self._compare_systems(results, hg_rows, lo_rows)
         return out
 
     @staticmethod
     def _compare_systems(
+        results: Sequence[Dict[str, Any]],
         hg_rows: Sequence[Dict[str, Any]],
         lo_rows: Sequence[Dict[str, Any]],
     ) -> Dict[str, Any]:
         by_id_lo = {r.get("id"): r for r in lo_rows}
+        by_id_raw = {r.get("id"): r for r in results}
         n_paired = 0
         n_both = 0
         n_hg_only = 0
         n_lo_only = 0
         n_neither = 0
+        n_hg_win = 0
+        n_lo_win = 0
+        n_tie = 0
+        n_pairwise = 0
         crosstab: Dict[str, int] = defaultdict(int)
         for hg in hg_rows:
             lo = by_id_lo.get(hg.get("id"))
@@ -1038,12 +1280,36 @@ class QueryEvaluator:
                 n_lo_only += 1
             else:
                 n_neither += 1
+            raw = by_id_raw.get(hg.get("id")) or {}
+            winner = (raw.get("comparison") or {}).get("winner")
+            if winner in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY, "tie"):
+                n_pairwise += 1
+            else:
+                if hj == "正确" and lj != "正确":
+                    winner = SYSTEM_HYPERGRAPH
+                elif lj == "正确" and hj != "正确":
+                    winner = SYSTEM_LLM_ONLY
+                else:
+                    winner = "tie"
+            if winner == SYSTEM_HYPERGRAPH:
+                n_hg_win += 1
+            elif winner == SYSTEM_LLM_ONLY:
+                n_lo_win += 1
+            else:
+                n_tie += 1
         return {
             "n_paired": n_paired,
+            "n_pairwise_judged": n_pairwise,
             "both_correct": n_both,
             "hypergraph_only": n_hg_only,
             "llm_only_only": n_lo_only,
             "both_wrong": n_neither,
+            "win": {
+                "hypergraph": n_hg_win,
+                "llm_only": n_lo_win,
+                "tie": n_tie,
+            },
+            "win_note": "胜负优先取裁判对比字段 comparison.winner；缺省则正确>错误",
             "judgment_crosstab": dict(crosstab),
         }
 

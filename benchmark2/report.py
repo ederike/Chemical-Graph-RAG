@@ -326,14 +326,20 @@ def _build_one_summary(
 
 
 def _compare_systems(
+    results: Sequence[Dict[str, Any]],
     hg_rows: Sequence[Dict[str, Any]],
     lo_rows: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     by_id_lo = {r.get("id"): r for r in lo_rows}
+    by_id_raw = {r.get("id"): r for r in results}
     n_paired = 0
     n_hg_win = 0
     n_lo_win = 0
     n_tie = 0
+    n_pairwise = 0
+    n_score_hg_win = 0
+    n_score_lo_win = 0
+    n_score_tie = 0
     deltas: List[float] = []
     crosstab: Dict[str, int] = defaultdict(int)
     for hg in hg_rows:
@@ -350,17 +356,36 @@ def _compare_systems(
         n_paired += 1
         deltas.append(hf - lf)
         if hf > lf:
-            n_hg_win += 1
+            n_score_hg_win += 1
         elif lf > hf:
-            n_lo_win += 1
+            n_score_lo_win += 1
         else:
-            n_tie += 1
+            n_score_tie += 1
         hj = hg.get("llm_acc") if hg.get("llm_acc") in JUDGMENT_LABELS else "未知"
         lj = lo.get("llm_acc") if lo.get("llm_acc") in JUDGMENT_LABELS else "未知"
         crosstab[f"超图{hj}_纯LLM{lj}"] += 1
 
+        raw = by_id_raw.get(hg.get("id")) or {}
+        winner = (raw.get("comparison") or {}).get("winner")
+        if winner in (SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY, "tie"):
+            n_pairwise += 1
+        else:
+            if hf > lf:
+                winner = SYSTEM_HYPERGRAPH
+            elif lf > hf:
+                winner = SYSTEM_LLM_ONLY
+            else:
+                winner = "tie"
+        if winner == SYSTEM_HYPERGRAPH:
+            n_hg_win += 1
+        elif winner == SYSTEM_LLM_ONLY:
+            n_lo_win += 1
+        else:
+            n_tie += 1
+
     return {
         "n_paired": n_paired,
+        "n_pairwise_judged": n_pairwise,
         "score_delta_mean": mean(deltas),
         "score_delta_note": "正值表示超图 均分更高",
         "win": {
@@ -368,6 +393,12 @@ def _compare_systems(
             "llm_only": n_lo_win,
             "tie": n_tie,
         },
+        "win_by_score": {
+            "hypergraph": n_score_hg_win,
+            "llm_only": n_score_lo_win,
+            "tie": n_score_tie,
+        },
+        "win_note": "胜负优先取裁判对比字段 comparison.winner；缺省再按分数差",
         "judgment_crosstab": dict(crosstab),
     }
 
@@ -397,7 +428,7 @@ def build_summary(
     if enable_llm_only:
         lo_rows = [project_system_row(r, SYSTEM_LLM_ONLY) for r in results]
         out[SYSTEM_LLM_ONLY] = _build_one_summary(lo_rows, stats=stats)
-        out["comparison"] = _compare_systems(hg_rows, lo_rows)
+        out["comparison"] = _compare_systems(results, hg_rows, lo_rows)
     return out
 
 
@@ -438,6 +469,7 @@ def build_report_document(
             or cfg_src.get("dhmf_config_path"),
             "query_mode": src_meta.get("query_mode") or cfg_src.get("query_mode"),
             "judge_model": src_meta.get("judge_model") or cfg_src.get("judge_model"),
+            "judge_mode": src_meta.get("judge_mode"),
             "enable_llm_only": (
                 enable_llm_only
                 if enable_llm_only is not None
@@ -509,6 +541,7 @@ def format_summary_text(summary: Dict[str, Any]) -> str:
             parts.append("======== 对比 ========")
             parts.append(
                 f"paired={cmp_.get('n_paired')}  "
+                f"pairwise={cmp_.get('n_pairwise_judged')}  "
                 f"delta_mean={cmp_.get('score_delta_mean')}  "
                 f"win 超图={win.get('hypergraph')}  "
                 f"纯LLM={win.get('llm_only')}  "
