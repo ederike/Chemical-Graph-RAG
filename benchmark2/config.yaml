@@ -15,7 +15,7 @@ dataset:
   id_list: null           # 指定题号列表，如 [1, 2, 10]；null = 不限制
 
 paths:
-  output_dir: benchmark2_question1_results 
+  output_dir: benchmark2_results/benchmark2_question2_results
 
   stats_filename: stats_question.json
   stats_path: null
