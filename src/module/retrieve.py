@@ -39,6 +39,28 @@ def add_retrieve_timing(a, b) -> dict:
         out[k] = float((a or {}).get(k) or 0.0) + float((b or {}).get(k) or 0.0)
     return out
 
+
+def normalize_full_body_mode(raw) -> str:
+    """
+    enable_full_body_context → 'full' | 'simple' | 'off'。
+
+    - full（True / on / full）：命中文档写入全部 body，不含头块
+    - simple：不扩未命中正文；命中过 body 时把超边头块补到最前；
+      并集里只有头块则不扩展，只保留头块
+    - off（False）：原关闭行为，头块 + 命中正文（不扩未命中 body）
+    """
+    if raw is True:
+        return 'full'
+    if isinstance(raw, str):
+        s = raw.strip().lower()
+        if s in ('simple', 'head', 'hyperedge'):
+            return 'simple'
+        if s in ('true', '1', 'yes', 'on', 'full'):
+            return 'full'
+        if s in ('false', '0', 'no', 'off', ''):
+            return 'off'
+    return 'off'
+
 class Retrieve:
     """
     三路检索（查询改写 / query instruct 可选）：
@@ -52,8 +74,9 @@ class Retrieve:
          → 文档级首轮 rerank → keyword_top_k（只截关键词路，不伤向量路）
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
-         默认每文档：头块 + 命中索引块（原文序、块去重）
-         enable_full_body_context=True 时：每命中文档写入该文全部 body 索引块，不含头块
+         false：每文档头块 + 命中索引块（原文序、块去重）
+         simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
+         true：每命中文档写入该文全部 body 索引块，不含头块
     """
     def vector_match(self, db_name, vector, topk=10):
         vdb = self.vdb[db_name]
@@ -1044,19 +1067,26 @@ class Retrieve:
             out.append(c)
         return out
 
+    def _full_body_mode(self) -> str:
+        raw = getattr(self.config.retrieve, 'enable_full_body_context', False)
+        return normalize_full_body_mode(raw)
+
     def _build_materials(self, hits_by_chunk: dict) -> list:
         """
         按文档聚合（不再做全局 top_k 截断）：
-          默认：资料 = 头块 + 命中索引块（按原文顺序，块去重）
-          enable_full_body_context：资料 = 该文档全部 body 索引块（不含头块）
+          false：资料 = 头块 + 命中索引块（按原文顺序、块去重）
+          simple：不扩未命中正文；命中过 body 时把超边头块插到该文最前
+                  （body 按原文序）；并集只有头块则不扩展、只保留头块
+          true：资料 = 该文档全部 body 索引块（不含头块）
             —— 命中 head 或任一 body 均同样扩全篇 body
           文档组之间按组内最高分降序（仅排序，全部进入上下文）
 
         召回宽度由双路各自的 chunk_candidate_k / node_candidate_k 决定。
         """
-        full_body = bool(
-            getattr(self.config.retrieve, 'enable_full_body_context', False)
-        )
+        mode = self._full_body_mode()
+        full_body = mode == 'full'
+        # simple / off 都写入头块；true 不写头块
+        include_head = mode != 'full'
 
         groups = {}
         for cid, hit in hits_by_chunk.items():
@@ -1111,14 +1141,22 @@ class Retrieve:
             hid = he.get('id') if he else None
             head = g['head']
             source = self._source_label(head or {'doc_id': doc_id})
+            hit_body = bool(g['index_ids'])
+            # simple / off 都写头块：只中头块 → 仅头块；中过 body → 头块在前再按序拼命中正文
+            write_head = include_head and head is not None
 
-            # 全篇 body 模式：不把头块写入上下文
-            if head is not None and not full_body:
+            if write_head:
                 head_hit = g['hit_meta'].get(head['id'], {})
+                if head_hit:
+                    head_match = head_hit.get('match_type') or 'head'
+                elif mode == 'simple' and hit_body:
+                    head_match = 'head_expand'
+                else:
+                    head_match = 'head'
                 passages.append({
                     'chunk': head,
                     'score': float(g['score']),
-                    'match_type': head_hit.get('match_type') or 'head',
+                    'match_type': head_match,
                     'hyperedge_id': hid,
                     'doc_id': doc_id,
                     'role': 'head',
@@ -1138,7 +1176,7 @@ class Retrieve:
             index_chunks.sort(key=self._chunk_order_key)
 
             seen = set()
-            if head is not None and not full_body:
+            if write_head and head is not None:
                 seen.add(head['id'])
             for c in index_chunks:
                 cid = c.get('id')
@@ -1563,9 +1601,7 @@ class Retrieve:
             enable_kw = False
 
         use_cache = getattr(self.config.retrieve, 'use_cache', True)
-        full_body = bool(
-            getattr(self.config.retrieve, 'enable_full_body_context', False)
-        )
+        body_mode = self._full_body_mode()
         enable_rerank = bool(
             getattr(self.config.retrieve, 'enable_rerank', False)
         )
@@ -1719,7 +1755,7 @@ class Retrieve:
             f"kw_majority={self.last_keyword.get('majority')!r} "
             f"kw_pool={self.last_keyword.get('pool_chunks')} "
             f"kw_docs={self.last_keyword.get('top_docs')} "
-            f"full_body={full_body} rerank={enable_rerank} rerank_k={rerank_top} "
+            f"full_body={body_mode} rerank={enable_rerank} rerank_k={rerank_top} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "

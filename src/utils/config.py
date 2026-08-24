@@ -485,7 +485,10 @@ class RetrieveConfig(BaseModel):
     query_instruct: str = (
         "Given a web search query, retrieve relevant passages that answer the query"
     )
-    enable_full_body_context: bool = False
+    # true / on / full：命中文档扩全部正文（不含头块）
+    # false / off：头块 + 命中正文块（原关闭行为）
+    # simple：只补超边头块，不扩未命中正文；仅命中头块时不扩展
+    enable_full_body_context: Union[bool, str] = False
 
     enable_keyword_exact: bool = True
     keyword_candidate_k: int = 50
@@ -516,6 +519,26 @@ class RetrieveConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("enable_full_body_context", mode="before")
+    @classmethod
+    def _coerce_full_body_context(cls, v):
+        """true / false / simple。非法值报错，避免把 simple 当成非空字符串变成开。"""
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        s = str(v).strip().lower()
+        if s in ("simple", "head", "hyperedge"):
+            return "simple"
+        if s in ("true", "1", "yes", "on", "full"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(
+            "enable_full_body_context 只接受 true / false / simple，"
+            f"收到 {v!r}"
+        )
 
     @field_validator(
         "chunk_candidate_k",

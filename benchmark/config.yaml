@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | excel | all
-  mode: all
+  mode: evaluate
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -8,7 +8,7 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: benchmark_results
+  output_dir: benchmark_results_simple
 
   # generate 写出
   questions_filename: questions_complex.json
