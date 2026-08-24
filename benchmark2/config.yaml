@@ -7,7 +7,7 @@ dhmf:
   query_mode: agent  # dual_path | agent
 
 dataset:
-  excel_path: benchmark2/建筑涂料测试问题集1.xlsx
+  excel_path: benchmark2/建筑涂料测试问题集2.xlsx
   questions_sheet: null   # 空则自动识别
   stats_sheet: null       # 空则自动识别
   design_sheet: null      # 空则自动识别（仅测试集2有「设计说明」）

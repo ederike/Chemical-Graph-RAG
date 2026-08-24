@@ -144,11 +144,13 @@ def _normalize_run_mode(mode: Any) -> str:
         return "evaluate"
     if s in ("report", "summary", "summarize", "r"):
         return "report"
+    if s in ("excel", "xlsx", "export", "export_excel"):
+        return "excel"
     if s in ("all", "both", "full"):
         return "all"
     raise ValueError(
         f"Unknown run.mode={mode!r}. "
-        f"Supported: 'generate' | 'evaluate' | 'report' | 'all'"
+        f"Supported: 'generate' | 'evaluate' | 'report' | 'excel' | 'all'"
     )
 
 def resolve_file_path(
@@ -185,7 +187,7 @@ class BenchmarkConfig:
     """工作流全部可配置项的扁平视图。"""
 
     # run：脚本入口按此模式执行（不使用 CLI 传参）
-    run_mode: str = "all"  # generate | evaluate | report | all
+    run_mode: str = "all"  # generate | evaluate | report | excel | all
 
     # dhmf
     dhmf_config_path: str = "example/a/config_open.yaml"
@@ -212,6 +214,10 @@ class BenchmarkConfig:
     # report 写出：汇总统计 JSON
     report_filename: str = "report.json"
     report_path: Optional[str] = None
+
+    # excel 写出：report JSON 摊平的多 sheet xlsx；空则与 report 同名 .xlsx
+    report_excel_filename: Optional[str] = None
+    report_excel_path: Optional[str] = None
 
     # generate
     hop_counts: Dict[int, int] = field(default_factory=lambda: {1: 5, 2: 3, 3: 2})
@@ -308,6 +314,8 @@ class BenchmarkConfig:
             report_source_path=_opt_str(paths.get("report_source_path")),
             report_filename=report_out_name,
             report_path=_opt_str(paths.get("report_path")),
+            report_excel_filename=_opt_str(paths.get("report_excel_filename")),
+            report_excel_path=_opt_str(paths.get("report_excel_path")),
             hop_counts=hop_counts,
             seed=int(gen.get("seed", 42)),
             max_chars_per_doc=int(gen.get("max_chars_per_doc", 4000)),
@@ -353,6 +361,7 @@ class BenchmarkConfig:
             "eval_results_path",
             "report_source_path",
             "report_path",
+            "report_excel_path",
         ):
             val = getattr(self, attr, None)
             if val:
@@ -408,6 +417,16 @@ class BenchmarkConfig:
             self.report_path,
             timestamp=timestamp,
         )
+
+    def report_excel_file(self) -> Path:
+        """excel 写出：report 同名 xlsx，或 paths.report_excel_*。"""
+        if self.report_excel_path:
+            return resolve_file_path(self.output_dir, "", self.report_excel_path)
+        fname = _opt_str(self.report_excel_filename)
+        if not fname:
+            json_name = self.report_filename or "report.json"
+            fname = str(Path(json_name).with_suffix(".xlsx"))
+        return resolve_file_path(self.output_dir, fname, None)
 
     def to_meta_snapshot(self) -> dict:
         """写入 JSON meta 的精简配置快照。"""

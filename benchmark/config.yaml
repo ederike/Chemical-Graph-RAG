@@ -1,6 +1,6 @@
 run:
-  # generate | evaluate | report | all
-  mode: evaluate
+  # generate | evaluate | report | excel | all
+  mode: all
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -27,6 +27,9 @@ paths:
   # report 写出
   report_filename: report_complex.json
   report_path: null
+  # excel 写出（空则与 report 同名 .xlsx）
+  report_excel_filename: report_complex.xlsx
+  report_excel_path: null
 
 generate:
   hop_counts:
@@ -37,7 +40,7 @@ generate:
   max_chars_per_doc: -1
   max_retries: 3
   sleep_between: 20
-  num_thread: 10          #
+  num_thread: 5          #
   use_cache: True
   question_gen_prompt: QUESTION_GEN_USER
   api_key: null
@@ -56,7 +59,7 @@ evaluate:
   max_source_chars: -1
   max_retries: 10
   sleep_between: 0.0
-  num_thread: 3
+  num_thread: 2
   use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null

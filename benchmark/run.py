@@ -5,7 +5,7 @@ benchmark 脚本入口（无 CLI 传参）。
 全部选项写在 benchmark/config.yaml，例如::
 
     run:
-      mode: all          # generate | evaluate | report | all
+      mode: all          # generate | evaluate | report | excel | all
 
 运行::
 

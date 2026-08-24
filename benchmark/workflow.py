@@ -7,7 +7,7 @@
     # 或
     python -m benchmark.run
 
-run.mode: generate | evaluate | report | all
+run.mode: generate | evaluate | report | excel | all
 """
 
 from __future__ import annotations
@@ -407,11 +407,73 @@ class TestQueryWorkflow:
         if save:
             out = self.cfg.report_file()
             self.save_json(report_doc, out)
+            self.export_excel(
+                report_doc=report_doc,
+                eval_data=eval_data,
+                save=True,
+            )
 
         return report_doc
 
+    def export_excel(
+        self,
+        report_doc: Optional[Dict[str, Any]] = None,
+        eval_data: Optional[Dict[str, Any]] = None,
+        *,
+        save: bool = True,
+    ) -> Path:
+        """把 report / evals 摊成多 sheet 的 xlsx。"""
+        if report_doc is None:
+            if self._report is not None:
+                report_doc = self._report
+            else:
+                rp = self.cfg.report_file()
+                if rp.is_file():
+                    report_doc = self.load_json(rp)
+                    self._report = report_doc
+                    print(f"[loaded] report <- {rp}", file=sys.stderr)
+                elif eval_data is None:
+                    eval_data = self._eval_data
+                    if eval_data is None:
+                        ev = self.cfg.eval_results_file()
+                        if ev.is_file():
+                            eval_data = self.load_eval_results(ev)
+                    if eval_data is not None:
+                        report_doc = QueryEvaluator.build_report_document(
+                            eval_data,
+                            source_path=str(self.cfg.eval_results_file()),
+                            enable_doc_recall=self.cfg.enable_doc_recall,
+                        )
+                        self._report = report_doc
+        if report_doc is None:
+            raise FileNotFoundError(
+                "未找到 report / evals JSON，无法导出 Excel。\n"
+                f"  report: {self.cfg.report_file()}\n"
+                f"  evals:  {self.cfg.eval_results_file()}\n"
+                "  请先 run.mode=report，或 python -m benchmark.export_excel。"
+            )
+
+        if eval_data is None:
+            eval_data = self._eval_data
+        if eval_data is None:
+            ev = self.cfg.eval_results_file()
+            if ev.is_file():
+                try:
+                    eval_data = self.load_json(ev)
+                except Exception as e:
+                    print(f"[excel] 无法读取 evals {ev}: {e}", file=sys.stderr)
+                    eval_data = None
+
+        out = self.cfg.report_excel_file()
+        if save:
+            from .export_excel import write_report_workbook
+
+            write_report_workbook(report_doc, out, eval_data=eval_data)
+            print(f"[saved] {out}", file=sys.stderr)
+        return out
+
     def run_all(self) -> Dict[str, Any]:
-        """generate → evaluate → report。"""
+        """generate → evaluate → report（report 结束后自动写出 Excel）。"""
         dataset = self.generate_questions(save=True)
         eval_data = self.evaluate(dataset=dataset, save=True)
         return self.report(eval_data=eval_data, save=True)
@@ -421,8 +483,9 @@ class TestQueryWorkflow:
         按 config.run.mode 执行：
           generate → 只生成问题集
           evaluate → 只评测（写 eval_results）
-          report   → 只汇总（读评测结果，写 report）
-          all      → 生成 + 评测 + 汇总
+          report   → 只汇总（读评测结果，写 report + Excel）
+          excel    → 只把已有 report/evals JSON 写成 xlsx
+          all      → 生成 + 评测 + 汇总 + Excel
         """
         mode = (self.cfg.run_mode or "all").strip().lower()
         print(
@@ -435,10 +498,12 @@ class TestQueryWorkflow:
             return self.evaluate(save=True)
         if mode == "report":
             return self.report(save=True)
+        if mode == "excel":
+            return self.export_excel(save=True)
         if mode == "all":
             return self.run_all()
         raise ValueError(
             f"Unknown run.mode={self.cfg.run_mode!r}. "
             f"Set run.mode in benchmark/config.yaml: "
-            f"generate | evaluate | report | all"
+            f"generate | evaluate | report | excel | all"
         )

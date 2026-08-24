@@ -4,7 +4,7 @@
 配置：benchmark/config.yaml
 运行：python benchmark.py  或  python -m benchmark.run
 
-run.mode: generate | evaluate | report | all
+run.mode: generate | evaluate | report | excel | all
 """
 
 from .config import BenchmarkConfig, DEFAULT_CONFIG_PATH
