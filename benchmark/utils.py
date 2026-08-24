@@ -145,17 +145,26 @@ def truncate_text(text: str, max_chars: Optional[int]) -> str:
 def format_docs_block(
     docs: Sequence[Dict[str, Any]],
     max_chars_per_doc: Optional[int] = 4000,
+    *,
+    numbered: bool = True,
 ) -> str:
-    """max_chars_per_doc=-1 时全文不截断。"""
+    """max_chars_per_doc=-1 时全文不截断。
+
+    numbered=True：保留 Document i / filename / doc_id（评测裁判对照用）。
+    numbered=False：出题用，文档之间只用无序号分隔，避免模型把「文档1」写进题目。
+    """
     parts = []
     for i, d in enumerate(docs, start=1):
         content = truncate_text(d.get("content") or "", max_chars_per_doc)
-        parts.append(
-            f"## Document {i}\n"
-            f"filename: {d.get('name')}\n"
-            f"doc_id: {d.get('doc_id')}\n"
-            f"content:\n{content}"
-        )
+        if numbered:
+            parts.append(
+                f"## Document {i}\n"
+                f"filename: {d.get('name')}\n"
+                f"doc_id: {d.get('doc_id')}\n"
+                f"content:\n{content}"
+            )
+        else:
+            parts.append(f"----- 产品资料 -----\n{content}")
     return "\n\n".join(parts)
 
 def extract_json_object(text: str) -> Optional[dict]:

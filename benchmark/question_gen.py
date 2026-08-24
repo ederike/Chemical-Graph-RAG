@@ -127,7 +127,9 @@ class QuestionGenerator:
         return template.format(
             hop=hop,
             n_docs=len(docs),
-            docs_block=format_docs_block(docs, self.max_chars_per_doc),
+            docs_block=format_docs_block(
+                docs, self.max_chars_per_doc, numbered=False
+            ),
         )
 
     def generate_one(
