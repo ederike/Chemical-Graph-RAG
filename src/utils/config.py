@@ -485,7 +485,7 @@ class RetrieveConfig(BaseModel):
     query_instruct: str = (
         "Given a web search query, retrieve relevant passages that answer the query"
     )
-    # true / on / full：命中文档扩全部正文（不含头块）
+    # true / on / full：命中文档扩全部正文；切片文档在文首补超边头块，未切开的不加
     # false / off：头块 + 命中正文块（原关闭行为）
     # simple：只补超边头块，不扩未命中正文；仅命中头块时不扩展
     enable_full_body_context: Union[bool, str] = False

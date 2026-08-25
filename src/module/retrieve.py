@@ -44,7 +44,8 @@ def normalize_full_body_mode(raw) -> str:
     """
     enable_full_body_context → 'full' | 'simple' | 'off'。
 
-    - full（True / on / full）：命中文档写入全部 body，不含头块
+    - full（True / on / full）：命中文档写入全部 body；
+      长 PDF 切片文档（n_slices>1 或 文件名 *_N）在文首补超边头块，未切开的不加
     - simple：不扩未命中正文；命中过 body 时把超边头块补到最前；
       并集里只有头块则不扩展，只保留头块
     - off（False）：原关闭行为，头块 + 命中正文（不扩未命中 body）
@@ -76,7 +77,7 @@ class Retrieve:
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          false：每文档头块 + 命中索引块（原文序、块去重）
          simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
-         true：每命中文档写入该文全部 body 索引块，不含头块
+         true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
     """
     def vector_match(self, db_name, vector, topk=10):
         vdb = self.vdb[db_name]
@@ -152,6 +153,7 @@ class Retrieve:
         self.chunks_by_doc = defaultdict(list)
         self.doc_head_chunk = {}
         self.doc_dict = {}
+        self.sliced_doc_ids = set()
         self.last_rewrite = {'original': '', 'rewritten': ''}
         self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
         self.last_keyword = {
@@ -222,8 +224,68 @@ class Retrieve:
 
         docs = list(self.db['doc'].search_all() or [])
         self.doc_dict = {d['id']: d for d in docs}
+        self.sliced_doc_ids = self._compute_sliced_doc_ids()
 
         self._precomputed = True
+
+    @staticmethod
+    def _infer_slice_from_doc_name(name: str):
+        """foo.pdf_1 → (foo.pdf, 1)；非切片名返回 (name, 0)。"""
+        raw = (name or '').strip()
+        if not raw:
+            return '', 0
+        m = re.match(r'^(?P<base>.+\.pdf)_(?P<idx>\d+)$', raw, flags=re.I)
+        if not m:
+            return raw, 0
+        return m.group('base'), int(m.group('idx'))
+
+    def _compute_sliced_doc_ids(self) -> set:
+        """
+        不重建库：用 doc.extra（n_slices / slice_index / source_name）
+        和「原名.pdf_N」文件名判断长 PDF 切片家族。
+        """
+        sliced = set()
+        family_bases = set()
+        by_name = {}
+        for did, doc in (self.doc_dict or {}).items():
+            if did is None or not doc:
+                continue
+            name = (doc.get('name') or '').strip()
+            if name:
+                by_name[name] = did
+            extra = self._parse_extra(doc.get('extra'))
+            try:
+                n_slices = int(extra.get('n_slices') or 1)
+            except (TypeError, ValueError):
+                n_slices = 1
+            try:
+                slice_index = int(extra.get('slice_index') or 0)
+            except (TypeError, ValueError):
+                slice_index = 0
+            source_name = (extra.get('source_name') or '').strip()
+            inferred_base, inferred_idx = self._infer_slice_from_doc_name(name)
+            is_slice = n_slices > 1 or slice_index > 0 or inferred_idx > 0
+            if is_slice:
+                sliced.add(did)
+                if source_name:
+                    family_bases.add(source_name)
+                if inferred_idx > 0 and inferred_base:
+                    family_bases.add(inferred_base)
+        for base in family_bases:
+            bid = by_name.get(base)
+            if bid is not None:
+                sliced.add(bid)
+        for did, doc in (self.doc_dict or {}).items():
+            extra = self._parse_extra((doc or {}).get('extra'))
+            src = (extra.get('source_name') or '').strip()
+            if src and src in family_bases:
+                sliced.add(did)
+        return sliced
+
+    def _is_sliced_doc(self, doc_id) -> bool:
+        if doc_id is None:
+            return False
+        return doc_id in (self.sliced_doc_ids or ())
 
     @staticmethod
     def _parse_extra(raw):
@@ -1077,15 +1139,16 @@ class Retrieve:
           false：资料 = 头块 + 命中索引块（按原文顺序、块去重）
           simple：不扩未命中正文；命中过 body 时把超边头块插到该文最前
                   （body 按原文序）；并集只有头块则不扩展、只保留头块
-          true：资料 = 该文档全部 body 索引块（不含头块）
+          true：资料 = 该文档全部 body 索引块
             —— 命中 head 或任一 body 均同样扩全篇 body
+            —— 长 PDF 切片文档在文首补超边头块；未切开的不加头块
           文档组之间按组内最高分降序（仅排序，全部进入上下文）
 
         召回宽度由双路各自的 chunk_candidate_k / node_candidate_k 决定。
         """
         mode = self._full_body_mode()
         full_body = mode == 'full'
-        # simple / off 都写入头块；true 不写头块
+        # simple / off 都写头块；true 仅对切片文档写头块
         include_head = mode != 'full'
 
         groups = {}
@@ -1142,14 +1205,15 @@ class Retrieve:
             head = g['head']
             source = self._source_label(head or {'doc_id': doc_id})
             hit_body = bool(g['index_ids'])
-            # simple / off 都写头块：只中头块 → 仅头块；中过 body → 头块在前再按序拼命中正文
-            write_head = include_head and head is not None
+            sliced = self._is_sliced_doc(doc_id)
+            # simple / off：每篇都写头块；true：只给被切开的长 PDF 切片补头块，放文首
+            write_head = head is not None and (include_head or (full_body and sliced))
 
             if write_head:
                 head_hit = g['hit_meta'].get(head['id'], {})
                 if head_hit:
                     head_match = head_hit.get('match_type') or 'head'
-                elif mode == 'simple' and hit_body:
+                elif (mode == 'simple' and hit_body) or (full_body and sliced):
                     head_match = 'head_expand'
                 else:
                     head_match = 'head'
