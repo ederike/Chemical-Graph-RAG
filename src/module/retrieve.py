@@ -153,7 +153,6 @@ class Retrieve:
         self.chunks_by_doc = defaultdict(list)
         self.doc_head_chunk = {}
         self.doc_dict = {}
-        self.sliced_doc_ids = set()
         self.last_rewrite = {'original': '', 'rewritten': ''}
         self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
         self.last_keyword = {
@@ -224,68 +223,31 @@ class Retrieve:
 
         docs = list(self.db['doc'].search_all() or [])
         self.doc_dict = {d['id']: d for d in docs}
-        self.sliced_doc_ids = self._compute_sliced_doc_ids()
 
         self._precomputed = True
 
-    @staticmethod
-    def _infer_slice_from_doc_name(name: str):
-        """foo.pdf_1 → (foo.pdf, 1)；非切片名返回 (name, 0)。"""
-        raw = (name or '').strip()
-        if not raw:
-            return '', 0
-        m = re.match(r'^(?P<base>.+\.pdf)_(?P<idx>\d+)$', raw, flags=re.I)
-        if not m:
-            return raw, 0
-        return m.group('base'), int(m.group('idx'))
-
-    def _compute_sliced_doc_ids(self) -> set:
-        """
-        不重建库：用 doc.extra（n_slices / slice_index / source_name）
-        和「原名.pdf_N」文件名判断长 PDF 切片家族。
-        """
-        sliced = set()
-        family_bases = set()
-        by_name = {}
-        for did, doc in (self.doc_dict or {}).items():
-            if did is None or not doc:
-                continue
-            name = (doc.get('name') or '').strip()
-            if name:
-                by_name[name] = did
-            extra = self._parse_extra(doc.get('extra'))
-            try:
-                n_slices = int(extra.get('n_slices') or 1)
-            except (TypeError, ValueError):
-                n_slices = 1
-            try:
-                slice_index = int(extra.get('slice_index') or 0)
-            except (TypeError, ValueError):
-                slice_index = 0
-            source_name = (extra.get('source_name') or '').strip()
-            inferred_base, inferred_idx = self._infer_slice_from_doc_name(name)
-            is_slice = n_slices > 1 or slice_index > 0 or inferred_idx > 0
-            if is_slice:
-                sliced.add(did)
-                if source_name:
-                    family_bases.add(source_name)
-                if inferred_idx > 0 and inferred_base:
-                    family_bases.add(inferred_base)
-        for base in family_bases:
-            bid = by_name.get(base)
-            if bid is not None:
-                sliced.add(bid)
-        for did, doc in (self.doc_dict or {}).items():
-            extra = self._parse_extra((doc or {}).get('extra'))
-            src = (extra.get('source_name') or '').strip()
-            if src and src in family_bases:
-                sliced.add(did)
-        return sliced
-
     def _is_sliced_doc(self, doc_id) -> bool:
+        """只看本条 doc.extra，不扫库、不查同名 _1。
+
+        insert 时已写入 n_slices / slice_index：切开则 n_slices>1（含第 0 段）。
+        """
         if doc_id is None:
             return False
-        return doc_id in (self.sliced_doc_ids or ())
+        doc = (self.doc_dict or {}).get(doc_id)
+        if not doc:
+            return False
+        extra = self._parse_extra(doc.get('extra'))
+        try:
+            n_slices = int(extra.get('n_slices') or 1)
+        except (TypeError, ValueError):
+            n_slices = 1
+        if n_slices > 1:
+            return True
+        try:
+            slice_index = int(extra.get('slice_index') or 0)
+        except (TypeError, ValueError):
+            slice_index = 0
+        return slice_index > 0
 
     @staticmethod
     def _parse_extra(raw):
