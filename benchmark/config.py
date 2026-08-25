@@ -136,6 +136,59 @@ def _normalize_query_mode(mode: Any) -> str:
         f"Unknown query_mode={mode!r}. Supported: 'dual_path' | 'agent'"
     )
 
+def merge_llm_only_model_args(
+    retrieve_model_args: Optional[dict],
+    override: Optional[dict] = None,
+) -> dict:
+    """纯 LLM 生成参数：继承 retrieve 的 model，思考开关以 yaml 为准。
+
+    retrieve.model_args 常带 enable_thinking=True（检索作答）；
+    纯 LLM 默认关思考，除非 evaluate.llm_only.model_args 显式打开。
+    同时去掉 json_object，避免把对照回答绑成 JSON。
+    """
+    base = dict(retrieve_model_args or {})
+    over = dict(override or {})
+    thinking_set = "enable_thinking" in over
+    if not over.get("model"):
+        over.pop("model", None)
+    merged = {**base, **over}
+    merged.pop("response_format", None)
+    if not thinking_set:
+        merged["enable_thinking"] = False
+    merged.setdefault("temperature", 0.2)
+    return merged
+
+
+def parse_llm_only_settings(
+    ev: Optional[dict],
+    *,
+    eval_use_cache: bool,
+    judge_timeout: float,
+) -> dict:
+    """从 evaluate.llm_only 读出纯 LLM 客户端设置。
+
+    timeout 缺省跟裁判 timeout；use_cache 缺省跟 evaluate.use_cache。
+    """
+    ev = ev or {}
+    lo = ev.get("llm_only")
+    if not isinstance(lo, dict):
+        lo = {}
+    timeout_raw = lo.get("timeout")
+    if timeout_raw is None:
+        timeout = float(judge_timeout)
+    else:
+        timeout = float(timeout_raw)
+    cache = _opt_bool(lo.get("use_cache"))
+    return {
+        "llm_only_api_key": _opt_str(lo.get("api_key")),
+        "llm_only_base_url": _opt_str(lo.get("base_url")),
+        "llm_only_timeout": timeout,
+        "llm_only_max_retries": max(1, int(lo.get("max_retries", 3) or 3)),
+        "llm_only_use_cache": eval_use_cache if cache is None else cache,
+        "llm_only_model_args": _clean_model_args(lo.get("model_args")),
+    }
+
+
 def _normalize_run_mode(mode: Any) -> str:
     s = str(mode or "all").strip().lower()
     if s in ("generate", "gen", "g"):
@@ -247,6 +300,12 @@ class BenchmarkConfig:
     judge_base_url: Optional[str] = None
     judge_timeout: float = 180.0
     judge_model_args: Dict[str, Any] = field(default_factory=dict)
+    llm_only_api_key: Optional[str] = None
+    llm_only_base_url: Optional[str] = None
+    llm_only_timeout: float = 180.0
+    llm_only_max_retries: int = 3
+    llm_only_use_cache: bool = False
+    llm_only_model_args: Dict[str, Any] = field(default_factory=dict)
 
     # logging
     log_level: int = logging.INFO
@@ -298,6 +357,12 @@ class BenchmarkConfig:
         )
         report_out_name = _opt_str(paths.get("report_filename")) or "report.json"
 
+        eval_use_cache = bool(ev.get("use_cache", False))
+        judge_timeout = float(ev.get("timeout", 180))
+        llm_only = parse_llm_only_settings(
+            ev, eval_use_cache=eval_use_cache, judge_timeout=judge_timeout
+        )
+
         cfg = cls(
             run_mode=_normalize_run_mode(run.get("mode") or "all"),
             dhmf_config_path=str(dhmf.get("config_path") or "example/a/config_open.yaml"),
@@ -338,12 +403,18 @@ class BenchmarkConfig:
             eval_max_retries=int(ev.get("max_retries", 3)),
             eval_sleep_between=float(ev.get("sleep_between", 0.0)),
             eval_num_thread=max(1, int(ev.get("num_thread", 1) or 1)),
-            eval_use_cache=bool(ev.get("use_cache", False)),
+            eval_use_cache=eval_use_cache,
             dhmf_retrieve_use_cache=_opt_bool(ev.get("dhmf_retrieve_use_cache")),
             judge_api_key=_opt_str(ev.get("api_key")),
             judge_base_url=_opt_str(ev.get("base_url")),
-            judge_timeout=float(ev.get("timeout", 180)),
+            judge_timeout=judge_timeout,
             judge_model_args=_clean_model_args(ev.get("model_args")),
+            llm_only_api_key=llm_only["llm_only_api_key"],
+            llm_only_base_url=llm_only["llm_only_base_url"],
+            llm_only_timeout=llm_only["llm_only_timeout"],
+            llm_only_max_retries=llm_only["llm_only_max_retries"],
+            llm_only_use_cache=llm_only["llm_only_use_cache"],
+            llm_only_model_args=llm_only["llm_only_model_args"],
             log_level=_log_level(log.get("level", "INFO")),
             config_file=str(cfg_path) if cfg_path else None,
             raw=raw,
@@ -443,4 +514,9 @@ class BenchmarkConfig:
             "eval_num_thread": self.eval_num_thread,
             "gen_model": (self.gen_model_args or {}).get("model"),
             "judge_model": (self.judge_model_args or {}).get("model"),
+            "llm_only_timeout": self.llm_only_timeout,
+            "llm_only_model": (self.llm_only_model_args or {}).get("model"),
+            "llm_only_enable_thinking": (self.llm_only_model_args or {}).get(
+                "enable_thinking"
+            ),
         }

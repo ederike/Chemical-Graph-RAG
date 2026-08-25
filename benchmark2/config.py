@@ -21,6 +21,7 @@ from benchmark.config import (
     _normalize_query_mode,
     _opt_bool,
     _opt_str,
+    parse_llm_only_settings,
     resolve_file_path,
 )
 from benchmark.utils import resolve_path
@@ -131,6 +132,12 @@ class Benchmark2Config:
     judge_base_url: Optional[str] = None
     judge_timeout: float = 180.0
     judge_model_args: Dict[str, Any] = field(default_factory=dict)
+    llm_only_api_key: Optional[str] = None
+    llm_only_base_url: Optional[str] = None
+    llm_only_timeout: float = 180.0
+    llm_only_max_retries: int = 3
+    llm_only_use_cache: bool = False
+    llm_only_model_args: Dict[str, Any] = field(default_factory=dict)
 
     log_level: int = logging.INFO
 
@@ -172,6 +179,12 @@ class Benchmark2Config:
 
         default_excel = "benchmark2/建筑涂料行业超图评测测试集2.xlsx"
 
+        eval_use_cache = bool(ev.get("use_cache", False))
+        judge_timeout = float(ev.get("timeout", 180))
+        llm_only = parse_llm_only_settings(
+            ev, eval_use_cache=eval_use_cache, judge_timeout=judge_timeout
+        )
+
         cfg = cls(
             run_mode=_normalize_run_mode(run.get("mode") or "all"),
             dhmf_config_path=str(
@@ -204,12 +217,18 @@ class Benchmark2Config:
             eval_max_retries=int(ev.get("max_retries", 3)),
             eval_sleep_between=float(ev.get("sleep_between", 0.0)),
             eval_num_thread=max(1, int(ev.get("num_thread", 1) or 1)),
-            eval_use_cache=bool(ev.get("use_cache", False)),
+            eval_use_cache=eval_use_cache,
             dhmf_retrieve_use_cache=_opt_bool(ev.get("dhmf_retrieve_use_cache")),
             judge_api_key=_opt_str(ev.get("api_key")),
             judge_base_url=_opt_str(ev.get("base_url")),
-            judge_timeout=float(ev.get("timeout", 180)),
+            judge_timeout=judge_timeout,
             judge_model_args=_clean_model_args(ev.get("model_args")),
+            llm_only_api_key=llm_only["llm_only_api_key"],
+            llm_only_base_url=llm_only["llm_only_base_url"],
+            llm_only_timeout=llm_only["llm_only_timeout"],
+            llm_only_max_retries=llm_only["llm_only_max_retries"],
+            llm_only_use_cache=llm_only["llm_only_use_cache"],
+            llm_only_model_args=llm_only["llm_only_model_args"],
             log_level=_log_level(log.get("level", "INFO")),
             config_file=str(cfg_path) if cfg_path else None,
             raw=raw,
@@ -290,4 +309,9 @@ class Benchmark2Config:
             "eval_num_thread": self.eval_num_thread,
             "enable_llm_only": self.enable_llm_only,
             "judge_model": (self.judge_model_args or {}).get("model"),
+            "llm_only_timeout": self.llm_only_timeout,
+            "llm_only_model": (self.llm_only_model_args or {}).get("model"),
+            "llm_only_enable_thinking": (self.llm_only_model_args or {}).get(
+                "enable_thinking"
+            ),
         }

@@ -18,7 +18,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from .config import BenchmarkConfig, DEFAULT_CONFIG_PATH
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    BenchmarkConfig,
+    merge_llm_only_model_args,
+)
 from .evaluator import QueryEvaluator
 from .question_gen import QuestionGenerator
 from .utils import project_root, resolve_path
@@ -43,6 +47,7 @@ class TestQueryWorkflow:
         self.dhmf = None
         self.llm = None          # 出题
         self.judge_llm = None    # 评判
+        self.answer_llm = None   # 纯 LLM 对照
         self._dataset: Optional[Dict[str, Any]] = None
         self._eval_data: Optional[Dict[str, Any]] = None
         self._report: Optional[Dict[str, Any]] = None
@@ -167,6 +172,29 @@ class TestQueryWorkflow:
 
         self.cfg.judge_model_args = self._merge_model_args(self.cfg.judge_model_args)
         return self.judge_llm
+
+    def _merge_llm_only_model_args(self, user_ma: dict) -> dict:
+        dcfg = self._load_dhmf_config()
+        base = dict(getattr(dcfg.retrieve, "model_args", None) or {})
+        return merge_llm_only_model_args(base, user_ma)
+
+    def setup_answer_llm(self, force: bool = False):
+        """初始化纯 LLM 对照客户端（timeout / thinking 走 evaluate.llm_only）。"""
+        if self.answer_llm is not None and not force:
+            return self.answer_llm
+        if not self.cfg.enable_llm_only:
+            return None
+        self._ensure_sys_path()
+        from src.utils.OpenAIAPI import LLM
+
+        api_key, base_url = self._resolve_llm_endpoint(
+            self.cfg.llm_only_api_key, self.cfg.llm_only_base_url
+        )
+        self.answer_llm = LLM(api_key, base_url, timeout=self.cfg.llm_only_timeout)
+        self.cfg.llm_only_model_args = self._merge_llm_only_model_args(
+            self.cfg.llm_only_model_args
+        )
+        return self.answer_llm
 
     def setup_dhmf(self, force: bool = False):
         """加载 Config + DHMF（评测需要检索索引）。"""
@@ -299,14 +327,21 @@ class TestQueryWorkflow:
 
         self.setup_dhmf()
         self.setup_judge_llm()
+        answer_llm = (
+            self.setup_answer_llm() if self.cfg.enable_llm_only else None
+        )
 
         evaluator = QueryEvaluator(
             self.dhmf,
             judge_llm=self.judge_llm,
             judge_model_args=self.cfg.judge_model_args,
+            answer_llm=answer_llm,
+            answer_model_args=self.cfg.llm_only_model_args,
             query_mode=self.cfg.query_mode,
             use_cache=self.cfg.eval_use_cache,
             max_judge_retries=self.cfg.eval_max_retries,
+            max_llm_only_retries=self.cfg.llm_only_max_retries,
+            llm_only_use_cache=self.cfg.llm_only_use_cache,
             max_source_chars=self.cfg.max_source_chars,
             sleep_between=self.cfg.eval_sleep_between,
             enable_doc_recall=self.cfg.enable_doc_recall,

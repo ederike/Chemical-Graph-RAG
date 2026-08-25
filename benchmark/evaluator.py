@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
+from .config import merge_llm_only_model_args
 from .prompts import Benchmark_PROMPT
 from .utils import (
     EMPTY_ANSWER_PLACEHOLDER,
@@ -70,20 +71,14 @@ def _empty_system_block() -> Dict[str, Any]:
 
 
 def _answer_model_args_from_dhmf(dhmf, override: Optional[dict] = None) -> dict:
-    """纯 LLM 生成参数：继承 retrieve.model_args，去掉 json_object。"""
+    """纯 LLM 生成参数：继承 retrieve 的 model；思考开关以 yaml/override 为准。"""
     base: Dict[str, Any] = {}
     try:
-        base = dict(getattr(dhmf.config.retrieve, "model_args", None) or {})
+        if dhmf is not None:
+            base = dict(getattr(dhmf.config.retrieve, "model_args", None) or {})
     except Exception:
         pass
-    over = dict(override or {})
-    if not over.get("model"):
-        over.pop("model", None)
-    merged = {**base, **over}
-    merged.pop("response_format", None)
-    merged.setdefault("temperature", 0.2)
-    merged.setdefault("enable_thinking", False)
-    return merged
+    return merge_llm_only_model_args(base, override)
 
 
 def project_system_row(result: Dict[str, Any], system: str) -> Dict[str, Any]:
@@ -163,10 +158,13 @@ class QueryEvaluator:
         judge_llm=None,
         *,
         judge_model_args: Optional[dict] = None,
+        answer_llm=None,
         answer_model_args: Optional[dict] = None,
         query_mode: str = "dual_path",
         use_cache: bool = False,
         max_judge_retries: int = 3,
+        max_llm_only_retries: int = 3,
+        llm_only_use_cache: Optional[bool] = None,
         max_source_chars: int = -1,
         sleep_between: float = 0.0,
         enable_doc_recall: bool = True,
@@ -177,7 +175,9 @@ class QueryEvaluator:
         self.judge_llm = judge_llm or getattr(dhmf, "llmmodel", None)
         if self.judge_llm is None:
             raise ValueError("judge_llm 未提供且 DHMF 无 llmmodel")
-        self.answer_llm = getattr(dhmf, "llmmodel", None) or self.judge_llm
+        self.answer_llm = (
+            answer_llm or getattr(dhmf, "llmmodel", None) or self.judge_llm
+        )
 
         self.judge_model_args = dict(judge_model_args or {})
         self.judge_model_args.setdefault("temperature", 0.0)
@@ -200,7 +200,11 @@ class QueryEvaluator:
 
         self.query_mode = self._normalize_query_mode(query_mode)
         self.use_cache = bool(use_cache)
+        self.llm_only_use_cache = (
+            self.use_cache if llm_only_use_cache is None else bool(llm_only_use_cache)
+        )
         self.max_judge_retries = max(1, int(max_judge_retries))
+        self.max_llm_only_retries = max(1, int(max_llm_only_retries))
         # -1 = 送入完整文档不截断
         self.max_source_chars = int(max_source_chars)
         self.sleep_between = float(sleep_between)
@@ -239,13 +243,21 @@ class QueryEvaluator:
         user = Benchmark_PROMPT["PURE_LLM_USER"].replace(
             "{question}", question or ""
         )
-        return call_llm(
-            self.answer_llm,
-            system=Benchmark_PROMPT.get("PURE_LLM_SYSTEM", ""),
-            user=user,
-            model_args=self.answer_model_args,
-            use_cache=self.use_cache,
-        )
+        last: Dict[str, Any] = {}
+        for _attempt in range(1, self.max_llm_only_retries + 1):
+            last = call_llm(
+                self.answer_llm,
+                system=Benchmark_PROMPT.get("PURE_LLM_SYSTEM", ""),
+                user=user,
+                model_args=self.answer_model_args,
+                use_cache=self.llm_only_use_cache,
+            )
+            if isinstance(last, dict) and last.get("status") == 1:
+                return last
+        return last if isinstance(last, dict) else {
+            "status": 0,
+            "answer": str(last),
+        }
 
     @staticmethod
     def _apply_judge(block: Dict[str, Any], judge: Dict[str, Any]) -> None:

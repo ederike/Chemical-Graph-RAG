@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | excel | all
-  mode: evaluate
+  mode: report
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -64,13 +64,24 @@ evaluate:
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
-  timeout: 300
-  model_args:
+  timeout: 300            # 裁判 HTTP 超时
+  model_args:             # 裁判
     model: null
     temperature: 0.0
     enable_thinking: True
     response_format:
       type: json_object
+
+  llm_only:
+    api_key: null        
+    base_url: null
+    timeout: 300          
+    max_retries: 3        
+    use_cache: False
+    model_args:
+      model: null         
+      temperature: 0.2
+      enable_thinking: false
 
 logging:
   level: INFO
