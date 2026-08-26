@@ -10,8 +10,8 @@ if __name__ == '__main__':
     # graph.dedupe_downloaded_docs()
 
     # graph.insert_default()
-    graph.summary()
-    graph.chunk()
+    # graph.summary()
+    # graph.chunk()
     graph.extract()
     graph.build()
 

@@ -1,0 +1,36 @@
+{
+  "question": "我们在使用DCPD不饱和聚酯树脂进行常温固化层压时，发现之前使用的BYK-S 740因溶解度过高无法形成有效的表面膜来抑制苯乙烯排放。请问是否有替代的排放抑制剂能在降低排放的同时不影响层间粘合力？如果有，请提供该产品的推荐添加量范围、储存温度要求以及加工时的关键注意事项。",
+  "n_chunks": 377548,
+  "note": "warmup 含首次载入内存，不计入对比均值；均值取 timed run1/run2。",
+  "keywords": {
+    "minority": ["DCPD不饱和聚酯树脂", "BYK-S 740"],
+    "majority": ["排放抑制剂", "添加量", "储存温度", "注意事项"]
+  },
+  "hits_unchanged": {
+    "pool_chunks": 30,
+    "keyword_top_docs": 5,
+    "n_passages": 33
+  },
+  "after_fts": {
+    "early_stop": false,
+    "reason": "minority 只命中 10 块 < keyword_candidate_k=30，仍会查 majority",
+    "n_minority_ids": 10,
+    "n_majority_ids": 31075,
+    "fts_build_s": 129.678
+  },
+  "before": {
+    "run1": {"match_s": 5.4674, "extract_s": 2.3754, "keyword_s": 8.6417, "wall_s": 14.7365},
+    "run2": {"match_s": 6.6534, "extract_s": 2.0811, "keyword_s": 9.5151, "wall_s": 17.8606},
+    "mean": {"match_s": 6.0604, "extract_s": 2.2283, "keyword_s": 9.0784, "wall_s": 16.2986}
+  },
+  "after": {
+    "run1": {"match_s": 0.2442, "fts_s": 0.0527, "extract_s": 1.9304, "keyword_s": 2.9256, "wall_s": 6.7660},
+    "run2": {"match_s": 0.3771, "fts_s": 0.0544, "extract_s": 1.7912, "keyword_s": 2.9166, "wall_s": 6.1396},
+    "mean": {"match_s": 0.3107, "fts_s": 0.0536, "extract_s": 1.8608, "keyword_s": 2.9211, "wall_s": 6.4528}
+  },
+  "speedup": {
+    "match": 19.5,
+    "keyword_path": 3.1,
+    "retrieve_wall": 2.5
+  }
+}

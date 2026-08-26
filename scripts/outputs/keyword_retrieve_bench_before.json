@@ -1,0 +1,106 @@
+{
+  "phase": "before",
+  "question": "我们在使用DCPD不饱和聚酯树脂进行常温固化层压时，发现之前使用的BYK-S 740因溶解度过高无法形成有效的表面膜来抑制苯乙烯排放。请问是否有替代的排放抑制剂能在降低排放的同时不影响层间粘合力？如果有，请提供该产品的推荐添加量范围、储存温度要求以及加工时的关键注意事项。",
+  "n_chunks": 377548,
+  "warmup": {
+    "tag": "warmup",
+    "wall_s": 30.1275,
+    "timing": {
+      "precompute_s": 14.785001,
+      "rewrite_s": 6e-06,
+      "embed_s": 0.995044,
+      "chunk_s": 0.490408,
+      "node_s": 4.25284,
+      "keyword_s": 8.568449,
+      "expand_s": 0.005406,
+      "rerank_s": 1.029584,
+      "total_s": 30.127131
+    },
+    "match_s": 5.3961,
+    "extract_s": 2.2824,
+    "keyword": {
+      "minority": [
+        "DCPD不饱和聚酯树脂",
+        "BYK-S 740"
+      ],
+      "majority": [
+        "排放抑制剂",
+        "添加量",
+        "储存温度",
+        "注意事项"
+      ],
+      "pool_chunks": 30,
+      "top_docs": 5,
+      "n_doc_ids": 5
+    },
+    "n_passages": 33
+  },
+  "runs": [
+    {
+      "tag": "run1",
+      "wall_s": 14.7365,
+      "timing": {
+        "precompute_s": 1e-06,
+        "rewrite_s": 4e-06,
+        "embed_s": 0.372347,
+        "chunk_s": 0.427516,
+        "node_s": 4.298005,
+        "keyword_s": 8.641698,
+        "expand_s": 0.004019,
+        "rerank_s": 0.992088,
+        "total_s": 14.736061
+      },
+      "match_s": 5.4674,
+      "extract_s": 2.3754,
+      "keyword": {
+        "minority": [
+          "DCPD不饱和聚酯树脂",
+          "BYK-S 740"
+        ],
+        "majority": [
+          "排放抑制剂",
+          "添加量",
+          "储存温度",
+          "注意事项"
+        ],
+        "pool_chunks": 30,
+        "top_docs": 5,
+        "n_doc_ids": 5
+      },
+      "n_passages": 33
+    },
+    {
+      "tag": "run2",
+      "wall_s": 17.8606,
+      "timing": {
+        "precompute_s": 1e-06,
+        "rewrite_s": 3e-06,
+        "embed_s": 0.355075,
+        "chunk_s": 0.301613,
+        "node_s": 6.685175,
+        "keyword_s": 9.515066,
+        "expand_s": 0.004179,
+        "rerank_s": 0.998764,
+        "total_s": 17.860167
+      },
+      "match_s": 6.6534,
+      "extract_s": 2.0811,
+      "keyword": {
+        "minority": [
+          "DCPD不饱和聚酯树脂",
+          "BYK-S 740"
+        ],
+        "majority": [
+          "排放抑制剂",
+          "添加量",
+          "储存温度",
+          "注意事项"
+        ],
+        "pool_chunks": 30,
+        "top_docs": 5,
+        "n_doc_ids": 5
+      },
+      "n_passages": 33
+    }
+  ]
+}

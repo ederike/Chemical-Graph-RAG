@@ -70,7 +70,8 @@ class Retrieve:
       1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k（0=跳过）
       2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k（0=跳过）→ 映射所属 chunk
       3) 关键词精确匹配（可选 enable_keyword_exact；candidate/top 任一为 0 则跳过）：
-         LLM 抽取 minority/majority 关键词 → chunk.content 精确包含匹配
+         LLM 抽取 minority/majority 关键词
+         → FTS5 MATCH 小写正文（短词 instr）；minority 命中够 candidate_k 则不再查 majority
          → 少数值优先、多数值命中数排序取 keyword_candidate_k
          → 文档级首轮 rerank → keyword_top_k（只截关键词路，不伤向量路）
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
@@ -163,6 +164,8 @@ class Retrieve:
             'top_docs': 0,
             'doc_ids': [],
         }
+        self.last_fts_info = {}
+        self.last_keyword_fts = {}
         # 最近一次 retrieve_items 的分阶段耗时（thread-local）
         self._tls = threading.local()
         self.last_timing = empty_retrieve_timing()
@@ -187,6 +190,17 @@ class Retrieve:
     def _ensure_precompute(self):
         if self._precomputed:
             return
+
+        chunk_db = self.db.get('chunk')
+        if chunk_db is not None and hasattr(chunk_db, 'ensure_fts'):
+            try:
+                self.last_fts_info = chunk_db.ensure_fts() or {}
+                self.logger.info(f"[retrieve] chunk_fts {self.last_fts_info}")
+            except Exception as e:
+                self.logger.warning(f"[retrieve] chunk_fts ensure failed: {e}")
+                self.last_fts_info = {'error': str(e)}
+        else:
+            self.last_fts_info = {}
 
         self.all_chunks = list(self.db['chunk'].search_all() or [])
         self.chunk_dict = {c['id']: c for c in self.all_chunks}
@@ -591,12 +605,12 @@ class Retrieve:
         candidate_k: int,
     ) -> list:
         """
-        在预加载的 chunk.content 上做精确包含匹配，构造候选池：
-          1) 优选取 minority 命中块（有少数值时）
-          2) 再按 majority 命中个数降序补齐
-          3) 截到 candidate_k；candidate_k<=0 时返回空（跳过）
+        FTS5 MATCH（小写正文）精确包含匹配，构造候选池：
+          1) 先查 minority；命中块数 >= candidate_k 则提前收束，不再查 majority
+          2) 否则并上 majority 命中
+          3) 少数值优先、多数值命中数排序，截到 candidate_k
 
-        返回 hit 列表，含 score / match_type / keyword 统计字段。
+        FTS 不可用时回退为内存扫描（每块只 casefold 一次）。
         """
         try:
             candidate_k = int(candidate_k)
@@ -610,39 +624,44 @@ class Retrieve:
         if not minority and not majority:
             return []
 
-        scored = []
-        for chunk in self.all_chunks:
-            content = chunk.get('content') or ''
-            if not content:
-                continue
-            min_hits = [k for k in minority if self._content_contains(content, k)]
-            maj_hits = [k for k in majority if self._content_contains(content, k)]
-            if not min_hits and not maj_hits:
-                continue
-            n_min = len(min_hits)
-            n_maj = len(maj_hits)
-            # 排序键：少数值优先，再多数值命中数；score 供后续展示
-            # minority 权重远高于 majority，便于 max 合并时保留
-            score = float(n_min) * 10.0 + float(n_maj)
-            scored.append({
-                'chunk_id': chunk.get('id'),
-                'chunk': chunk,
-                'doc_id': chunk.get('doc_id'),
-                'score': score,
-                'match_type': 'keyword',
-                'keyword_minority_hits': min_hits,
-                'keyword_majority_hits': maj_hits,
-                'n_minority': n_min,
-                'n_majority': n_maj,
-                '_sort': (
-                    1 if n_min > 0 else 0,
-                    n_min,
-                    n_maj,
-                    score,
-                ),
-            })
+        t0 = time.perf_counter()
+        early_stop = False
+        used_fts = False
+        min_ids = set()
+        maj_ids = set()
+        cand_ids = None
+        chunk_db = self.db.get('chunk')
 
-        # 少数值块优先，再按少数值命中数、多数值命中数
+        if chunk_db is not None and hasattr(chunk_db, 'fts_match_keywords'):
+            try:
+                if minority:
+                    min_ids = chunk_db.fts_match_keywords(minority) or set()
+                if minority and len(min_ids) >= candidate_k:
+                    early_stop = True
+                    cand_ids = min_ids
+                else:
+                    if majority:
+                        maj_ids = chunk_db.fts_match_keywords(majority) or set()
+                    cand_ids = min_ids | maj_ids
+                used_fts = True
+            except Exception as e:
+                self.logger.warning(
+                    f"[retrieve] keyword FTS failed, fallback scan: {e}"
+                )
+                used_fts = False
+                cand_ids = None
+
+        fts_dt = time.perf_counter() - t0
+        if used_fts:
+            # 命中 id 已由 FTS 小写索引给出；打分只 casefold 候选块，不再回表拉全文
+            scored = self._score_keyword_chunk_ids(
+                cand_ids or set(),
+                minority,
+                majority,
+            )
+        else:
+            scored = self._score_keyword_scan(minority, majority)
+
         scored.sort(
             key=lambda h: (
                 -h['_sort'][0],
@@ -657,7 +676,89 @@ class Retrieve:
             h = dict(h)
             h.pop('_sort', None)
             out.append(h)
+
+        self.last_keyword_fts = {
+            'used_fts': used_fts,
+            'early_stop': early_stop,
+            'n_minority_ids': len(min_ids),
+            'n_majority_ids': len(maj_ids),
+            'n_candidate_ids': len(cand_ids or []),
+            'n_scored': len(scored),
+            'n_out': len(out),
+            'fts_s': round(fts_dt, 4),
+        }
+        self.logger.info(
+            f"[retrieve] keyword match fts={used_fts} early_stop={early_stop} "
+            f"min_ids={len(min_ids)} maj_ids={len(maj_ids)} "
+            f"scored={len(scored)} out={len(out)} fts_dt={fts_dt:.3f}s"
+        )
         return out
+
+    def _keyword_hit_row(self, chunk, min_hits, maj_hits) -> dict:
+        n_min = len(min_hits)
+        n_maj = len(maj_hits)
+        score = float(n_min) * 10.0 + float(n_maj)
+        return {
+            'chunk_id': chunk.get('id'),
+            'chunk': chunk,
+            'doc_id': chunk.get('doc_id'),
+            'score': score,
+            'match_type': 'keyword',
+            'keyword_minority_hits': min_hits,
+            'keyword_majority_hits': maj_hits,
+            'n_minority': n_min,
+            'n_majority': n_maj,
+            '_sort': (
+                1 if n_min > 0 else 0,
+                n_min,
+                n_maj,
+                score,
+            ),
+        }
+
+    def _score_keyword_chunk_ids(
+        self,
+        chunk_ids,
+        minority,
+        majority,
+        content_cf_map=None,
+    ) -> list:
+        min_pairs = [(k, k.casefold()) for k in (minority or []) if k]
+        maj_pairs = [(k, k.casefold()) for k in (majority or []) if k]
+        content_cf_map = content_cf_map or {}
+        scored = []
+        for cid in chunk_ids or []:
+            chunk = self.chunk_dict.get(cid)
+            if not chunk:
+                continue
+            content_cf = content_cf_map.get(cid)
+            if content_cf is None:
+                content_cf = (chunk.get('content') or '').casefold()
+            if not content_cf:
+                continue
+            min_hits = [k for k, cf in min_pairs if cf and cf in content_cf]
+            maj_hits = [k for k, cf in maj_pairs if cf and cf in content_cf]
+            if not min_hits and not maj_hits:
+                continue
+            scored.append(self._keyword_hit_row(chunk, min_hits, maj_hits))
+        return scored
+
+    def _score_keyword_scan(self, minority, majority) -> list:
+        """FTS 不可用时的回退：预计算每块小写正文后再做 in。"""
+        min_pairs = [(k, k.casefold()) for k in (minority or []) if k]
+        maj_pairs = [(k, k.casefold()) for k in (majority or []) if k]
+        scored = []
+        for chunk in self.all_chunks:
+            content = chunk.get('content') or ''
+            if not content:
+                continue
+            content_cf = content.casefold()
+            min_hits = [k for k, cf in min_pairs if cf and cf in content_cf]
+            maj_hits = [k for k, cf in maj_pairs if cf and cf in content_cf]
+            if not min_hits and not maj_hits:
+                continue
+            scored.append(self._keyword_hit_row(chunk, min_hits, maj_hits))
+        return scored
 
     def _hits_to_doc_passages(self, hits: list) -> list:
         """
@@ -1718,6 +1819,8 @@ class Retrieve:
                 ),
                 'has_minority': bool(kw_result.get('has_minority')),
             }
+            if getattr(self, 'last_keyword_fts', None):
+                self.last_keyword.update(self.last_keyword_fts)
         elif kw_cand <= 0 or kw_top <= 0:
             self.logger.info(
                 f"[retrieve] keyword path skipped "
