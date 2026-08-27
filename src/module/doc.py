@@ -19,6 +19,39 @@ from ..utils.prompt import PROMPT
 from ..utils.utils import hash_str, CacheDB, Retry, NonRetryableError, TQDM_BAR_FORMAT
 from ..utils.config import resolve_credentials
 
+_IMAGE_EXTS = frozenset({
+    '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tif', '.tiff',
+})
+_PDF_EXTS = frozenset({'.pdf'})
+_EXT_TO_MIME = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+}
+
+
+def _mime_from_magic(magic: bytes, suffix: str = '') -> str:
+    """Guess image MIME from file header; fall back to suffix. Empty if unknown."""
+    if magic.startswith(b'\xff\xd8'):
+        return 'image/jpeg'
+    if magic.startswith(b'\x89PNG\r\n\x1a\n') or magic.startswith(b'\x89PNG'):
+        return 'image/png'
+    if magic.startswith(b'GIF87a') or magic.startswith(b'GIF89a'):
+        return 'image/gif'
+    if len(magic) >= 12 and magic[:4] == b'RIFF' and magic[8:12] == b'WEBP':
+        return 'image/webp'
+    if magic.startswith(b'BM'):
+        return 'image/bmp'
+    if magic.startswith(b'II*\x00') or magic.startswith(b'MM\x00*'):
+        return 'image/tiff'
+    return _EXT_TO_MIME.get((suffix or '').lower(), '')
+
+
 class Doc:
     def _flush_every(self) -> int:
         try:
@@ -98,7 +131,21 @@ class Doc:
         doc_dir = self.resolve_doc_dir()
         if not doc_dir.exists():
             return []
-        return sorted(doc_dir.glob('*.pdf'))
+        return sorted(
+            p for p in doc_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in _PDF_EXTS
+        )
+
+    def list_source_files(self):
+        """Collect PDF and image paths under working_path/doc (one level)."""
+        doc_dir = self.resolve_doc_dir()
+        if not doc_dir.exists():
+            return []
+        exts = _PDF_EXTS | _IMAGE_EXTS
+        return sorted(
+            p for p in doc_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in exts
+        )
 
     @staticmethod
     def classify_pdf_magic(path: Path) -> str:
@@ -129,6 +176,54 @@ class Doc:
         elif magic.startswith(b'Can not') or magic.startswith(b'Cannot '):
             kind = 'error-text'
         return f'Not a real PDF (magic={magic!r}, kind={kind})'
+
+    @staticmethod
+    def classify_source_kind(path: Path) -> str:
+        """
+        源文件类型：'pdf' / 'image'；其它返回可读失败原因。
+        按文件头优先：假 PDF 实为 JPEG/PNG 的也当图片识别，不跳过。
+        """
+        path = Path(path)
+        try:
+            if not path.is_file() or path.stat().st_size <= 0:
+                return 'missing or empty'
+            magic = path.read_bytes()[:16]
+        except OSError as e:
+            return f'unreadable: {e}'
+        if magic.startswith(b'%PDF'):
+            return 'pdf'
+        if _mime_from_magic(magic, path.suffix):
+            return 'image'
+        ext = path.suffix.lower()
+        if ext in _IMAGE_EXTS:
+            return 'image'
+        if ext in _PDF_EXTS:
+            return Doc.classify_pdf_magic(path) or 'pdf'
+        return f'unsupported file (magic={magic[:8]!r})'
+
+    def plan_image_slices(self, path: Path) -> list:
+        """一张图片 = 一段文档，不切片。"""
+        path = Path(path)
+        return [{
+            'path': path,
+            'doc_name': path.name,
+            'page_start': 0,
+            'page_end': 1,
+            'slice_index': 0,
+            'total_pages': 1,
+            'n_slices': 1,
+            'kind': 'image',
+        }]
+
+    def image_to_b64(self, path: Path) -> str:
+        """Read an image file and return a data-URL for generate_vision."""
+        path = Path(path)
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise NonRetryableError(f"Image missing or empty: {path}")
+        data = path.read_bytes()
+        mime = _mime_from_magic(data[:16], path.suffix) or 'image/jpeg'
+        b64 = base64.b64encode(data).decode('ascii')
+        return f'data:{mime};base64,{b64}'
 
     def get_existing_doc_names(self) -> set:
         """Set of file names already present in the doc table."""
@@ -397,6 +492,7 @@ class Doc:
         page_start: int = 0,
         page_end: int = None,
         slice_index: int = 0,
+        source_kind: str = 'pdf',
     ) -> str:
         """Per-slice recognition result cache key."""
         recog = self.config.doc.recognition
@@ -415,6 +511,7 @@ class Doc:
             'prompt_hash': self._prompt_hash(),
             'pipeline': 'page_slice_plain_text_v1',
             'image_format': getattr(recog, 'image_format', 'jpeg'),
+            'source_kind': source_kind or 'pdf',
         }
         return hashlib.md5(
             json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
@@ -456,6 +553,7 @@ class Doc:
         page_start: int = 0,
         page_end: int = None,
         total_pages: int = 0,
+        source_kind: str = 'pdf',
     ) -> dict:
         """doc.extra metadata (full recognition text lives in doc.content)."""
         return {
@@ -470,6 +568,7 @@ class Doc:
             'page_start': int(page_start or 0),
             'page_end': page_end,
             'total_pages': int(total_pages or page_count or 0),
+            'source_kind': source_kind or 'pdf',
         }
 
     @Retry(
@@ -498,31 +597,42 @@ class Doc:
         max_attempt = int(kwargs.get('max_attempt', 1) or 1)
 
         pdf_path = Path(pdf_path)
-        page_start = int(kwargs.get('page_start', 0) or 0)
-        page_end = kwargs.get('page_end', None)
-        if page_end is not None:
-            page_end = int(page_end)
-        slice_index = int(kwargs.get('slice_index', 0) or 0)
-        n_slices = int(kwargs.get('n_slices', 1) or 1)
-        total_pages = kwargs.get('total_pages', None)
-        doc_name = kwargs.get('doc_name') or self.slice_doc_name(
-            pdf_path.name, slice_index
-        )
+        is_image = self.classify_source_kind(pdf_path) == 'image'
+        source_kind = 'image' if is_image else 'pdf'
 
-        # 无切片参数的旧调用：按规划取第 0 段（≤上限即全文）
-        if (
-            'page_end' not in kwargs
-            and 'page_start' not in kwargs
-            and 'slice_index' not in kwargs
-        ):
-            units = self.plan_pdf_slices(pdf_path)
-            unit = units[0]
-            page_start = unit['page_start']
-            page_end = unit['page_end']
-            slice_index = unit['slice_index']
-            n_slices = unit['n_slices']
-            total_pages = unit['total_pages']
-            doc_name = unit['doc_name']
+        if is_image:
+            page_start = 0
+            page_end = 1
+            slice_index = 0
+            n_slices = 1
+            total_pages = 1
+            doc_name = kwargs.get('doc_name') or pdf_path.name
+        else:
+            page_start = int(kwargs.get('page_start', 0) or 0)
+            page_end = kwargs.get('page_end', None)
+            if page_end is not None:
+                page_end = int(page_end)
+            slice_index = int(kwargs.get('slice_index', 0) or 0)
+            n_slices = int(kwargs.get('n_slices', 1) or 1)
+            total_pages = kwargs.get('total_pages', None)
+            doc_name = kwargs.get('doc_name') or self.slice_doc_name(
+                pdf_path.name, slice_index
+            )
+
+            # 无切片参数的旧调用：按规划取第 0 段（≤上限即全文）
+            if (
+                'page_end' not in kwargs
+                and 'page_start' not in kwargs
+                and 'slice_index' not in kwargs
+            ):
+                units = self.plan_pdf_slices(pdf_path)
+                unit = units[0]
+                page_start = unit['page_start']
+                page_end = unit['page_end']
+                slice_index = unit['slice_index']
+                n_slices = unit['n_slices']
+                total_pages = unit['total_pages']
+                doc_name = unit['doc_name']
 
         raw_bytes = pdf_path.read_bytes()
         file_hash = hashlib.md5(raw_bytes).hexdigest()
@@ -534,6 +644,7 @@ class Doc:
             page_start=page_start,
             page_end=page_end,
             slice_index=slice_index,
+            source_kind=source_kind,
         )
 
         if recog.use_cache:
@@ -557,12 +668,15 @@ class Doc:
                 f"(source={pdf_path.name}, pages={page_start}:{page_end})"
             )
 
-        images_b64 = self.pdf_to_images_b64(
-            pdf_path, page_start=page_start, page_end=page_end
-        )
+        if is_image:
+            images_b64 = [self.image_to_b64(pdf_path)]
+        else:
+            images_b64 = self.pdf_to_images_b64(
+                pdf_path, page_start=page_start, page_end=page_end
+            )
         if not images_b64:
             raise NonRetryableError(
-                f"No pages rendered from PDF: {pdf_path.name} "
+                f"No pages rendered from {source_kind}: {pdf_path.name} "
                 f"[{page_start}:{page_end}]"
             )
 
@@ -579,7 +693,9 @@ class Doc:
         # 对模型按「本段文档」描述；页码用源文件 1-based 区间便于对齐
         human_from = page_start + 1
         human_to = page_start + page_count
-        if n_slices > 1:
+        if is_image:
+            span_note = "本文件为单张图片，以下给出该图片。"
+        elif n_slices > 1:
             span_note = (
                 f"本段为源文件第 {human_from}-{human_to} 页"
                 f"（共 {total_pages} 页，第 {slice_index + 1}/{n_slices} 段），"
@@ -644,6 +760,7 @@ class Doc:
             page_start=page_start,
             page_end=page_start + page_count,
             total_pages=total_pages,
+            source_kind=source_kind,
         )
         result = {
             'name': doc_name,
@@ -701,19 +818,20 @@ class Doc:
         progress_total: int = None,
     ):
         """
-        Recognize PDFs into doc_list tasks (before insert).
+        Recognize PDFs and images into doc_list tasks (before insert).
 
         渲染页数超过 max_pages_per_doc 时切成多段，每段作为独立文档：
         首段名=原文件名，后续=原文件名_{n}。切片级多线程并行。
+        图片（jpg/png 等）不切片，直接 base64 送 VLM。
         """
         if pdf_paths is None:
-            pdf_paths = self.list_pdf_files()
+            pdf_paths = self.list_source_files()
         else:
             pdf_paths = [Path(p) for p in pdf_paths]
 
         if not pdf_paths:
             self.logger.warning(
-                f"No PDF files found under {self.resolve_doc_dir()} "
+                f"No PDF/image files found under {self.resolve_doc_dir()} "
             )
 
         existing_names = self.get_existing_doc_names() if skip_existing else set()
@@ -723,16 +841,21 @@ class Doc:
         max_pages = self.max_pages_per_doc()
         n_source_files = 0
         n_sliced_files = 0
+        n_image_files = 0
 
         for p in pdf_paths:
-            bad = self.classify_pdf_magic(p)
-            if bad:
-                invalid.append((p.name, bad))
-                continue
-            try:
-                units = self.plan_pdf_slices(p)
-            except Exception as e:
-                invalid.append((p.name, str(e)))
+            kind = self.classify_source_kind(p)
+            if kind == 'image':
+                units = self.plan_image_slices(p)
+                n_image_files += 1
+            elif kind == 'pdf':
+                try:
+                    units = self.plan_pdf_slices(p)
+                except Exception as e:
+                    invalid.append((p.name, str(e)))
+                    continue
+            else:
+                invalid.append((p.name, kind))
                 continue
             n_source_files += 1
             if len(units) > 1:
@@ -762,8 +885,8 @@ class Doc:
 
         if invalid:
             self.logger.warning(
-                f"Skip {len(invalid)} non-PDF/unreadable file(s) "
-                f"(wrong magic / empty / plan failed; not sent to VLM): "
+                f"Skip {len(invalid)} unreadable file(s) "
+                f"(empty / plan failed; not sent to VLM): "
                 # f"{invalid[:5]}{'...' if len(invalid) > 5 else ''}"
             )
             if self.metrics is not None:
@@ -778,7 +901,7 @@ class Doc:
                     )
 
         if not to_process:
-            self.logger.info("No new PDF slices to recognize.")
+            self.logger.info("No new PDF/image slices to recognize.")
             return []
 
         if progress_total is None:
@@ -858,11 +981,12 @@ class Doc:
             return pf
 
         self.logger.info(
-            f"PDF recognition start: sources={n_source_files}, "
+            f"Recognition start: sources={n_source_files} "
+            f"(images={n_image_files}), "
             f"slices={len(to_process)}, sliced_files={n_sliced_files}, "
             f"max_pages_per_doc={max_pages}, num_thread={num_thread}, "
             f"http_timeout={http_timeout:.0f}s "
-            f"(page-slice multi-image per unit)"
+            f"(PDF page-slice or raw image per unit)"
         )
         t0 = time.perf_counter()
 
@@ -945,8 +1069,9 @@ class Doc:
             self.metrics.log_stage('recognize')
 
         self.logger.info(
-            f"Recognized {len(results)}/{len(to_process)} valid PDF slice docs "
-            f"(sources={n_source_files}, sliced_files={n_sliced_files}, "
+            f"Recognized {len(results)}/{len(to_process)} valid slice docs "
+            f"(sources={n_source_files}, images={n_image_files}, "
+            f"sliced_files={n_sliced_files}, "
             f"skipped existing={len(skipped)}, invalid={len(invalid)}, "
             f"max_pages_per_doc={max_pages}, threads={num_thread}, "
             f"wall_time={wall:.3f}s)."

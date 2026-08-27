@@ -655,6 +655,8 @@ class OssDownloadConfig(BaseModel):
     bucket_key: str = 'ky-products-files'
     # Parallel GET workers. 1 = serial. OSS is latency-bound; 16–32 is typical.
     num_thread: int = 16
+    # After download, collapse byte-identical local PDFs (legacy {name}_{id}.pdf).
+    dedupe_local: bool = False
 
     @field_validator("num_thread", mode="before")
     @classmethod
@@ -664,6 +666,20 @@ class OssDownloadConfig(BaseModel):
         except (TypeError, ValueError):
             return 16
         return max(1, n)
+
+    @field_validator("dedupe_local", mode="before")
+    @classmethod
+    def _dedupe_local(cls, v):
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        s = str(v).strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        return bool(v)
 
 class Config(BaseModel):
     settings: SettingsConfig

@@ -187,7 +187,7 @@ class DHMF:
         limit=None,
         file_type=None,
         skip_existing: bool = True,
-        dedupe_local: bool = True,
+        dedupe_local=None,
         num_thread=None,
     ):
         """
@@ -202,7 +202,8 @@ class DHMF:
                       Ignored (download all) when the table has no `type` column.
             skip_existing: skip when local file named after the OSS object already exists
             dedupe_local: after download, delete byte-identical local PDFs (legacy
-                          {product}_{id}.pdf copies of the same object)
+                          {product}_{id}.pdf copies of the same object).
+                          None → config.oss_download.dedupe_local (default False).
             num_thread: parallel OSS GET workers; None → config.oss_download.num_thread
 
         Returns:
@@ -223,6 +224,13 @@ class DHMF:
         if file_type is None:
             file_type = getattr(oss_cfg, 'file_type', 'all') if oss_cfg else 'all'
 
+        if dedupe_local is None:
+            dedupe_local = (
+                bool(getattr(oss_cfg, 'dedupe_local', False)) if oss_cfg else False
+            )
+        else:
+            dedupe_local = bool(dedupe_local)
+
         table = getattr(oss_cfg, 'table', 'spider_product') if oss_cfg else 'spider_product'
         bucket_key = (
             getattr(oss_cfg, 'bucket_key', 'ky-products-files')
@@ -240,7 +248,7 @@ class DHMF:
         self.logger.info(
             f"Start download_from_oss: dir={download_dir}, "
             f"file_type={file_type}, limit={limit if limit > 0 else 'none'}, "
-            f"num_thread={num_thread}"
+            f"num_thread={num_thread}, dedupe_local={dedupe_local}"
         )
 
         rows = fetch_spider_products(
@@ -265,7 +273,7 @@ class DHMF:
         return summary
 
     def insert_default(self):
-        """Insert docs from working_path/doc (pdf recognition or plain txt)."""
+        """Insert docs from working_path/doc (pdf/image recognition or plain txt)."""
         self.begin_build()
         source_type = getattr(self.config.doc, 'source_type', 'pdf')
         if source_type == 'txt':
@@ -282,22 +290,25 @@ class DHMF:
 
     def insert_pdfs(self, pdf_paths=None, skip_existing: bool = True):
         """
-        Pre-insert: PDF under working_path/doc → images → vision recognition → doc table.
+        Pre-insert: PDF/images under working_path/doc → vision recognition → doc table.
 
-        页数超过 recognition.max_pages_per_doc 时切成多段独立文档：
+        PDF 页数超过 recognition.max_pages_per_doc 时切成多段独立文档：
         首段名=原文件名，后续=原文件名_{n}。
+        图片（jpg/png 等）不切片，直接编码后送 VLM。
 
-        按 doc.flush_every 分批（按源 PDF 文件计）：识别一批 → 入库一批，
+        按 doc.flush_every 分批（按源文件计）：识别一批 → 入库一批，
         避免大量全文同时驻留内存。
 
         skip_existing: 按切片文档名跳过已在 doc 表中的段（默认 True），
                        重跑时只补缺切片，不会因首段已存在而整文件跳过。
         """
         self.begin_build()
-        self.logger.info("Start PDF recognition before insert (source: working_path/doc).")
+        self.logger.info(
+            "Start PDF/image recognition before insert (source: working_path/doc)."
+        )
 
         if pdf_paths is None:
-            all_pdfs = self.doc_module.list_pdf_files()
+            all_pdfs = self.doc_module.list_source_files()
         else:
             all_pdfs = [Path(p) for p in pdf_paths]
 
