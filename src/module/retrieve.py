@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import numpy as np
 
@@ -74,6 +75,10 @@ class Retrieve:
          → FTS5 MATCH 小写正文（短词 instr）；minority 命中够 candidate_k 则不再查 majority
          → 少数值优先、多数值命中数排序取 keyword_candidate_k
          → 文档级首轮 rerank → keyword_top_k（只截关键词路，不伤向量路）
+      enable_parallel_paths（默认 true）：
+        并行：关键词路与改写+向量同时启动；chunk / node 在嵌入完成后并行。
+              墙钟 ≈ max(关键词路, 改写+嵌入+max(chunk, node))
+        串行：chunk → node → keyword，峰值内存更低（分片向量检索不同时驻留）
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          false：每文档头块 + 命中索引块（原文序、块去重）
@@ -844,15 +849,7 @@ class Retrieve:
           pool_n, top_n,
         }
         """
-        empty = {
-            'hits_by_chunk': {},
-            'doc_ids': set(),
-            'minority': [],
-            'majority': [],
-            'has_minority': False,
-            'pool_n': 0,
-            'top_n': 0,
-        }
+        empty = self._empty_keyword_result()
         try:
             candidate_k = int(candidate_k)
         except (TypeError, ValueError):
@@ -1661,6 +1658,64 @@ class Retrieve:
         except (TypeError, ValueError):
             return max(0, int(default))
 
+    @staticmethod
+    def _resolve_parallel_paths(override, config_val, default: bool = True) -> bool:
+        """
+        三路并行开关：显式参数优先，否则配置，否则 default（并行）。
+        接受 True/False、parallel/serial、1/0、on/off。
+        """
+        raw = override if override is not None else config_val
+        if raw is None:
+            return bool(default)
+        if isinstance(raw, bool):
+            return raw
+        s = str(raw).strip().lower()
+        if s in ('true', '1', 'yes', 'on', 'parallel'):
+            return True
+        if s in ('false', '0', 'no', 'off', 'serial', 'sequential'):
+            return False
+        return bool(default)
+
+    @staticmethod
+    def _empty_keyword_result() -> dict:
+        return {
+            'hits_by_chunk': {},
+            'doc_ids': set(),
+            'minority': [],
+            'majority': [],
+            'has_minority': False,
+            'pool_n': 0,
+            'top_n': 0,
+        }
+
+    @staticmethod
+    def _call_timed(fn):
+        t0 = time.perf_counter()
+        return fn(), time.perf_counter() - t0
+
+    def _wait_path_futures(self, futs: dict) -> dict:
+        """
+        等齐各路 future；某路失败时仍等完其余路再抛，避免半截线程。
+        返回 {name: (result, elapsed_s)}，未提交的 name 不出现。
+        """
+        pending = [f for f in futs.values() if f is not None]
+        if pending:
+            wait(pending)
+        out = {}
+        first_err = None
+        for name, fut in futs.items():
+            if fut is None:
+                continue
+            try:
+                out[name] = fut.result()
+            except Exception as e:
+                self.logger.error(f"[retrieve] {name} path failed: {e}")
+                if first_err is None:
+                    first_err = e
+        if first_err is not None:
+            raise first_err
+        return out
+
     def retrieve_items(
         self,
         query,
@@ -1670,10 +1725,16 @@ class Retrieve:
         enable_keyword_exact=None,
         keyword_candidate_k=None,
         keyword_top_k=None,
+        enable_parallel_paths=None,
     ) -> list:
         """
         查询改写 → 双路向量 topk ∪ 关键词精确匹配（关键词路内部可先文档 rerank）
         → 并集混合 → 扩展 → 终轮 rerank。
+
+        enable_parallel_paths（默认配置 true）：
+          并行：关键词路与改写+向量同时启动；chunk 与 node 在嵌入完成后并行。
+                墙钟取决于最慢的一路，而不是相加。
+          串行：chunk → node → keyword，峰值内存更低。
 
         关键词路只增加候选，不删减向量命中；同 chunk 合并 score/match_type。
 
@@ -1681,11 +1742,12 @@ class Retrieve:
           - >0：正常截断
           - 0：跳过该路（chunk / node / keyword 候选与 top / rerank_top_k）
 
-        enable_query_rewrite / enable_keyword_exact:
+        enable_query_rewrite / enable_keyword_exact / enable_parallel_paths:
           None 用配置；True/False 仅本次覆盖（不改共享 config）。
 
         分阶段耗时写入 self.last_timing / get_last_timing()：
           precompute / rewrite / embed / chunk / node / keyword / expand / rerank / total
+          chunk/node/keyword 仍是各路自身耗时；total 是墙钟（并行时不再等于相加）。
         """
         t_all = time.perf_counter()
         t0 = time.perf_counter()
@@ -1736,54 +1798,12 @@ class Retrieve:
             enable_rerank = False
 
         need_vector = chunk_cand > 0 or node_cand > 0
+        parallel = self._resolve_parallel_paths(
+            enable_parallel_paths,
+            getattr(self.config.retrieve, 'enable_parallel_paths', True),
+            True,
+        )
 
-        t0 = time.perf_counter()
-        rewritten = self.rewrite_query(query, enabled=enable_query_rewrite)
-        t_rewrite = time.perf_counter() - t0
-        search_query = rewritten or query
-
-        t0 = time.perf_counter()
-        query_embedding = None
-        embed_query = self._apply_query_instruct(search_query)
-        if need_vector:
-            emb_resp = self.embedding.generate(
-                embed_query,
-                model_args=self.config.retrieve.embedding_model_args,
-                use_cache=use_cache,
-            )
-            query_embedding = emb_resp['answer']
-            if not isinstance(query_embedding, list):
-                self.logger.error(
-                    f"[retrieve] embedding failed: {query_embedding!r}"
-                )
-                query_embedding = None
-        t_emb = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        if chunk_cand > 0 and query_embedding is not None:
-            chunk_hits = self._search_chunks_by_query(
-                query_embedding, topk=chunk_cand
-            )
-        else:
-            chunk_hits = []
-            if chunk_cand <= 0:
-                self.logger.info('[retrieve] chunk path skipped (chunk_candidate_k=0)')
-        t_chunk = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        if node_cand > 0 and query_embedding is not None:
-            node_hits = self._search_nodes_by_query(
-                query_embedding, topk=node_cand
-            )
-        else:
-            node_hits = []
-            if node_cand <= 0:
-                self.logger.info('[retrieve] node path skipped (node_candidate_k=0)')
-        t_node = time.perf_counter() - t0
-
-        dual_merged = self._merge_chunk_hits(chunk_hits, node_hits)
-
-        t0 = time.perf_counter()
         self.last_keyword = {
             'enabled': enable_kw,
             'minority': [],
@@ -1792,41 +1812,152 @@ class Retrieve:
             'top_docs': 0,
             'doc_ids': [],
         }
-        kw_result = {
-            'hits_by_chunk': {},
-            'doc_ids': set(),
-            'minority': [],
-            'majority': [],
-            'has_minority': False,
-            'pool_n': 0,
-            'top_n': 0,
-        }
-        if enable_kw:
-            kw_result = self._keyword_path_retrieve(
-                query,
-                candidate_k=kw_cand,
-                top_k=kw_top,
+        kw_result = self._empty_keyword_result()
+        chunk_hits = []
+        node_hits = []
+        t_chunk = 0.0
+        t_node = 0.0
+        t_keyword = 0.0
+
+        if chunk_cand <= 0:
+            self.logger.info(
+                '[retrieve] chunk path skipped (chunk_candidate_k=0)'
             )
-            self.last_keyword = {
-                'enabled': True,
-                'minority': list(kw_result.get('minority') or []),
-                'majority': list(kw_result.get('majority') or []),
-                'pool_chunks': int(kw_result.get('pool_n') or 0),
-                'top_docs': int(kw_result.get('top_n') or 0),
-                'doc_ids': sorted(
-                    d for d in (kw_result.get('doc_ids') or set())
-                    if d is not None
-                ),
-                'has_minority': bool(kw_result.get('has_minority')),
-            }
-            if getattr(self, 'last_keyword_fts', None):
-                self.last_keyword.update(self.last_keyword_fts)
-        elif kw_cand <= 0 or kw_top <= 0:
+        if node_cand <= 0:
+            self.logger.info(
+                '[retrieve] node path skipped (node_candidate_k=0)'
+            )
+        if not enable_kw and (kw_cand <= 0 or kw_top <= 0):
             self.logger.info(
                 f"[retrieve] keyword path skipped "
                 f"(keyword_candidate_k={kw_cand}, keyword_top_k={kw_top})"
             )
-        t_keyword = time.perf_counter() - t0
+
+        def _rewrite_and_embed():
+            t_rw0 = time.perf_counter()
+            rewritten_q = self.rewrite_query(
+                query, enabled=enable_query_rewrite
+            )
+            t_rw = time.perf_counter() - t_rw0
+            sq = rewritten_q or query
+
+            t_em0 = time.perf_counter()
+            emb = None
+            embed_query = self._apply_query_instruct(sq)
+            if need_vector:
+                emb_resp = self.embedding.generate(
+                    embed_query,
+                    model_args=self.config.retrieve.embedding_model_args,
+                    use_cache=use_cache,
+                )
+                emb = emb_resp['answer']
+                if not isinstance(emb, list):
+                    self.logger.error(
+                        f"[retrieve] embedding failed: {emb!r}"
+                    )
+                    emb = None
+            t_em = time.perf_counter() - t_em0
+            return rewritten_q, sq, emb, t_rw, t_em
+
+        def _apply_keyword_meta(result):
+            self.last_keyword = {
+                'enabled': True,
+                'minority': list(result.get('minority') or []),
+                'majority': list(result.get('majority') or []),
+                'pool_chunks': int(result.get('pool_n') or 0),
+                'top_docs': int(result.get('top_n') or 0),
+                'doc_ids': sorted(
+                    d for d in (result.get('doc_ids') or set())
+                    if d is not None
+                ),
+                'has_minority': bool(result.get('has_minority')),
+            }
+            if getattr(self, 'last_keyword_fts', None):
+                self.last_keyword.update(self.last_keyword_fts)
+
+        if parallel:
+            n_workers = (
+                int(enable_kw) + int(chunk_cand > 0) + int(node_cand > 0)
+            )
+            n_workers = max(1, n_workers)
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                # 关键词路不依赖改写/向量，先丢进线程，与 rewrite+embed 重叠
+                fut_kw = None
+                if enable_kw:
+                    fut_kw = pool.submit(
+                        self._call_timed,
+                        lambda: self._keyword_path_retrieve(
+                            query,
+                            candidate_k=kw_cand,
+                            top_k=kw_top,
+                        ),
+                    )
+
+                rewritten, search_query, query_embedding, t_rewrite, t_emb = (
+                    _rewrite_and_embed()
+                )
+
+                fut_chunk = None
+                if chunk_cand > 0 and query_embedding is not None:
+                    fut_chunk = pool.submit(
+                        self._call_timed,
+                        lambda emb=query_embedding: self._search_chunks_by_query(
+                            emb, topk=chunk_cand
+                        ),
+                    )
+
+                fut_node = None
+                if node_cand > 0 and query_embedding is not None:
+                    fut_node = pool.submit(
+                        self._call_timed,
+                        lambda emb=query_embedding: self._search_nodes_by_query(
+                            emb, topk=node_cand
+                        ),
+                    )
+
+                path_out = self._wait_path_futures({
+                    'chunk': fut_chunk,
+                    'node': fut_node,
+                    'keyword': fut_kw,
+                })
+
+            if 'chunk' in path_out:
+                chunk_hits, t_chunk = path_out['chunk']
+            if 'node' in path_out:
+                node_hits, t_node = path_out['node']
+            if 'keyword' in path_out:
+                kw_result, t_keyword = path_out['keyword']
+        else:
+            rewritten, search_query, query_embedding, t_rewrite, t_emb = (
+                _rewrite_and_embed()
+            )
+            t0 = time.perf_counter()
+            if chunk_cand > 0 and query_embedding is not None:
+                chunk_hits = self._search_chunks_by_query(
+                    query_embedding, topk=chunk_cand
+                )
+            t_chunk = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            if node_cand > 0 and query_embedding is not None:
+                node_hits = self._search_nodes_by_query(
+                    query_embedding, topk=node_cand
+                )
+            t_node = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            if enable_kw:
+                kw_result = self._keyword_path_retrieve(
+                    query,
+                    candidate_k=kw_cand,
+                    top_k=kw_top,
+                )
+            t_keyword = time.perf_counter() - t0
+
+        if enable_kw:
+            _apply_keyword_meta(kw_result)
+
+        dual_merged = self._merge_chunk_hits(chunk_hits, node_hits)
 
         if enable_kw and (
             kw_result.get('hits_by_chunk') or kw_result.get('doc_ids')
@@ -1875,7 +2006,7 @@ class Retrieve:
         n_index = sum(1 for p in passages if p.get('role') == 'index')
         n_merged_chunks = len(merged)
         self.logger.info(
-            f"[retrieve] multi-path "
+            f"[retrieve] multi-path {'parallel' if parallel else 'serial'} "
             f"rewrite={rewritten!r} "
             f"query_instruct={self._query_instruct_enabled()} "
             f"chunk_k={chunk_cand} node_k={node_cand} "

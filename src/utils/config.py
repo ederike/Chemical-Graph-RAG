@@ -491,6 +491,9 @@ class RetrieveConfig(BaseModel):
     enable_full_body_context: Union[bool, str] = False
 
     enable_keyword_exact: bool = True
+    # 三路检索（chunk / node / keyword）是否并行。
+    # true / parallel：墙钟 ≈ max；false / serial：串行，峰值内存更低。
+    enable_parallel_paths: bool = True
     keyword_candidate_k: int = 50
     keyword_top_k: int = 10
     keyword_extract_model_args: dict = Field(default_factory=lambda: {
@@ -519,6 +522,24 @@ class RetrieveConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("enable_parallel_paths", mode="before")
+    @classmethod
+    def _coerce_parallel_paths(cls, v):
+        """true / parallel 并行；false / serial 串行。缺省并行。"""
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return True
+        s = str(v).strip().lower()
+        if s in ("true", "1", "yes", "on", "parallel"):
+            return True
+        if s in ("false", "0", "no", "off", "serial", "sequential"):
+            return False
+        raise ValueError(
+            "enable_parallel_paths 只接受 true / false / parallel / serial，"
+            f"收到 {v!r}"
+        )
 
     @field_validator("enable_full_body_context", mode="before")
     @classmethod
