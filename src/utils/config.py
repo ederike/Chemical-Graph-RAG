@@ -296,6 +296,8 @@ class VectorizationConfig(BaseModel):
     #   load page → embed → write FAISS → save disk → seal/unload.
     # Peak RAM ≈ N × dim × 4B (fp16: × 2B).
     # None/0 = mono single-file index (legacy; grows unboundedly in RAM).
+    # To merge existing shards later (no re-embed): graph.repack_vectors(...)
+    # or scripts/repack_vdb.py, then set this to the new size.
     shard_max_vectors: Optional[int] = None
     # FAISS index backend: flat_l2 (exact brute-force) | hnsw (approx ANN).
     # HNSW delete is a search-time tombstone (no graph rebuild).

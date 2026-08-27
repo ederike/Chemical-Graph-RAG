@@ -1,11 +1,14 @@
 import faiss
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
 import threading
 import numpy as np
 import json
+
+from tqdm import tqdm
 
 # Per-resource locks: same SQLite file / same FAISS file share one lock;
 # SQL and FAISS never block each other.
@@ -227,9 +230,13 @@ class BaseVDB:
     Deletion: FAISS HNSW has no remove_ids. remove() records tombstone ids
     (sidecar deleted.json) and search() drops them. The HNSW graph is unchanged;
     no rebuild. Re-adding an id clears its tombstone. clear() wipes tombstones.
-    compact() is manual only: rewrite vectors whose ids still exist in SQL,
+    compact() is manual only: rewrite each shard keeping ids still in SQL,
     then drop tombstones. Callers pass live_ids from SQLite. Skip when every
     indexed id is still in SQL. Never runs from delete() / search().
+
+    repack() rewrites the store to a new shard size (or one monolithic file)
+    by reconstructing already-stored vectors. It does not call the embedding
+    API. HNSW graphs are rebuilt from those vectors (CPU).
     """
 
     def __init__(
@@ -1067,6 +1074,350 @@ class BaseVDB:
         summary['deleted_after'] = 0
         return summary
 
+    def _live_pred(self, live_ids):
+        live_set = None
+        if live_ids is not None:
+            live_set = set()
+            for i in live_ids:
+                try:
+                    live_set.add(int(i))
+                except (TypeError, ValueError):
+                    continue
+
+        def is_live(i):
+            try:
+                i = int(i)
+            except (TypeError, ValueError):
+                return False
+            if i < 0:
+                return False
+            if live_set is not None:
+                return i in live_set
+            return i not in self._deleted
+
+        return is_live, live_set
+
+    def _iter_source_vectors(self, is_live, batch_size: int):
+        """Yield (ids, vecs) from sealed shards then active / mono."""
+        if self._sharding:
+            for name in list(self._sealed):
+                if self._active_name and name == self._active_name:
+                    continue
+                path = self.shards_dir / name
+                if not path.exists() or path.stat().st_size <= 0:
+                    continue
+                tmp = self._make_faiss(path, create_empty=False)
+                try:
+                    yield from tmp.iter_live_vectors(is_live, batch_size)
+                finally:
+                    tmp.unload()
+            if self.vdb is not None:
+                yield from self.vdb.iter_live_vectors(is_live, batch_size)
+            return
+        if self.vdb is not None:
+            yield from self.vdb.iter_live_vectors(is_live, batch_size)
+
+    def _add_trained(self, handle: "FassiVDB", ids, vecs):
+        if handle is None or handle.vdb is None:
+            return
+        if vecs is None or getattr(vecs, 'shape', (0,))[0] <= 0:
+            return
+        inner = getattr(handle.vdb, 'index', None)
+        if inner is not None and hasattr(inner, 'is_trained') and not inner.is_trained:
+            inner.train(vecs)
+        handle.add(ids, vecs)
+
+    def _minimal_shard_count(self, ntotal: int, shard_max: int) -> int:
+        if ntotal <= 0:
+            return 0
+        return (int(ntotal) + int(shard_max) - 1) // int(shard_max)
+
+    def repack(
+        self,
+        *,
+        shard_max_vectors=None,
+        live_ids=None,
+        batch_size: int = 8192,
+        force: bool = False,
+    ) -> dict:
+        """
+        Rewrite this store to a new shard size without re-embedding.
+
+        Reconstructs vectors already in FAISS (fp16 stores decode to float32
+        then re-quantize). HNSW is rebuilt; embedding API is not called.
+
+        shard_max_vectors:
+          None / 0 — one file {name}.vdb (monolithic)
+          N > 0    — shards of at most N vectors; leftover goes in the last
+                     sealed shard, plus an empty active write shard
+        live_ids: if given, drop ids not in this set (same as compact).
+        force: rewrite even when the current layout already matches.
+        """
+        try:
+            batch_size = max(256, int(batch_size or 8192))
+        except (TypeError, ValueError):
+            batch_size = 8192
+
+        dest_max = None
+        if shard_max_vectors is not None:
+            try:
+                dest_max = int(shard_max_vectors)
+            except (TypeError, ValueError):
+                dest_max = None
+            if dest_max is not None and dest_max <= 0:
+                dest_max = None
+
+        is_live, live_set = self._live_pred(live_ids)
+        n_before = int(self.ntotal or 0)
+        n_sealed = len(self._sealed) if self._sharding else 0
+        want_shards = dest_max is not None
+
+        summary = {
+            'name': self.vdb_name,
+            'skipped': False,
+            'reason': '',
+            'ntotal_before': n_before,
+            'sharding_before': bool(self._sharding),
+            'shard_max_before': self.shard_max_vectors,
+            'sealed_before': n_sealed,
+            'sharding_after': want_shards,
+            'shard_max_after': dest_max,
+            'kept': 0,
+            'dropped': 0,
+            'shards_written': 0,
+        }
+
+        if n_before <= 0:
+            summary['skipped'] = True
+            summary['reason'] = 'empty'
+            return summary
+
+        if not force and not self._deleted:
+            if not want_shards and not self._sharding:
+                summary['skipped'] = True
+                summary['reason'] = 'already_mono'
+                return summary
+            if (
+                want_shards
+                and self._sharding
+                and self.shard_max_vectors == dest_max
+                and n_sealed == self._minimal_shard_count(n_before, dest_max)
+            ):
+                summary['skipped'] = True
+                summary['reason'] = 'already_packed'
+                return summary
+
+        # Flush active so disk is complete, then stream reconstruct → new files.
+        if self.vdb is not None:
+            try:
+                self.vdb.save()
+            except Exception:
+                pass
+
+        work = self.vdb_path / f'{self.vdb_name}.repack.tmp'
+        bak = self.vdb_path / f'{self.vdb_name}.repack.bak'
+        if work.exists():
+            shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+
+        dest_dir = work / 'shards'
+        dest_mono = work / f'{self.vdb_name}.vdb'
+        if want_shards:
+            dest_dir.mkdir(parents=True)
+
+        seen = set()
+        kept = 0
+        next_id = 0
+        sealed_names = []
+        dest = None
+        active_name = None
+
+        def _open_dest():
+            nonlocal dest, active_name, next_id
+            if dest is not None:
+                dest.unload()
+                dest = None
+            if want_shards:
+                active_name = f'{next_id}.vdb'
+                next_id += 1
+                dest = self._make_faiss(dest_dir / active_name, create_empty=True)
+            else:
+                active_name = None
+                dest = self._make_faiss(dest_mono, create_empty=True)
+            return dest
+
+        def _seal_dest():
+            nonlocal dest, active_name
+            if dest is None or dest.ntotal <= 0:
+                return
+            dest.save()
+            dest.unload()
+            dest = None
+            if want_shards and active_name:
+                sealed_names.append(active_name)
+            active_name = None
+
+        _open_dest()
+        bar = tqdm(
+            total=n_before,
+            desc=f'repack {self.vdb_name}',
+            unit='vec',
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{rate_fmt}{postfix}]',
+        )
+        try:
+            for ids, vecs in self._iter_source_vectors(is_live, batch_size):
+                if ids is None or len(ids) == 0:
+                    continue
+                ids = np.asarray(ids, dtype=np.int64)
+                vecs = np.asarray(vecs, dtype=np.float32)
+                mask = []
+                for i in ids:
+                    ii = int(i)
+                    if ii in seen:
+                        mask.append(False)
+                    else:
+                        seen.add(ii)
+                        mask.append(True)
+                if not any(mask):
+                    continue
+                if not all(mask):
+                    sel = np.asarray(mask, dtype=bool)
+                    ids = ids[sel]
+                    vecs = vecs[sel]
+                offset = 0
+                n = int(ids.shape[0])
+                while offset < n:
+                    if want_shards and dest is not None and dest_max:
+                        room = dest_max - int(dest.ntotal or 0)
+                        if room <= 0:
+                            _seal_dest()
+                            _open_dest()
+                            room = dest_max
+                        take = min(n - offset, room)
+                    else:
+                        take = n - offset
+                    self._add_trained(
+                        dest, ids[offset:offset + take], vecs[offset:offset + take]
+                    )
+                    offset += take
+                kept += n
+                bar.update(n)
+            bar.close()
+        except Exception:
+            bar.close()
+            if dest is not None:
+                dest.unload()
+            shutil.rmtree(work, ignore_errors=True)
+            raise
+
+        if dest is not None and dest.ntotal > 0:
+            _seal_dest()
+        elif dest is not None:
+            dest.unload()
+            dest = None
+
+        dropped = max(0, n_before - kept)
+        summary['kept'] = kept
+        summary['dropped'] = dropped
+        summary['shards_written'] = len(sealed_names) if want_shards else (1 if kept else 0)
+
+        if kept <= 0:
+            shutil.rmtree(work, ignore_errors=True)
+            summary['skipped'] = True
+            summary['reason'] = 'no_live_vectors'
+            return summary
+
+        if want_shards:
+            # Empty active write shard so next DHMF init does not load all vectors.
+            empty_name = f'{next_id}.vdb'
+            next_id += 1
+            empty = self._make_faiss(dest_dir / empty_name, create_empty=True)
+            empty.save()
+            empty.unload()
+            meta = {
+                'version': 1,
+                'dim': self.vdb_dim,
+                'shard_max_vectors': dest_max,
+                'next_id': next_id,
+                'sealed': list(sealed_names),
+                'active': empty_name,
+                'index_type': self.index_type,
+                'index_quant': self.index_quant,
+                'hnsw_M': self.hnsw_M,
+                'hnsw_efConstruction': self.hnsw_efConstruction,
+                'hnsw_efSearch': self.hnsw_efSearch,
+            }
+            meta_path = dest_dir / 'meta.json'
+            tmp_meta = meta_path.with_suffix('.json.tmp')
+            with open(tmp_meta, 'w', encoding='utf-8') as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            os.replace(str(tmp_meta), str(meta_path))
+
+        # Unload RAM so files can be renamed.
+        if self.vdb is not None:
+            self.vdb.unload()
+            self.vdb = None
+
+        if bak.exists():
+            shutil.rmtree(bak, ignore_errors=True)
+        bak.mkdir(parents=True)
+
+        old_shards = self.vdb_path / f'{self.vdb_name}.shards'
+        old_mono = self.vdb_path / f'{self.vdb_name}.vdb'
+        try:
+            if old_shards.exists():
+                os.rename(str(old_shards), str(bak / 'shards'))
+            if old_mono.exists():
+                os.rename(str(old_mono), str(bak / 'mono.vdb'))
+            if want_shards:
+                os.rename(str(dest_dir), str(old_shards))
+            else:
+                os.rename(str(dest_mono), str(old_mono))
+        except Exception:
+            # Best-effort restore
+            try:
+                bak_shards = bak / 'shards'
+                bak_mono = bak / 'mono.vdb'
+                if want_shards and old_shards.exists():
+                    shutil.rmtree(old_shards, ignore_errors=True)
+                if (not want_shards) and old_mono.exists():
+                    try:
+                        old_mono.unlink()
+                    except OSError:
+                        pass
+                if bak_shards.exists() and not old_shards.exists():
+                    os.rename(str(bak_shards), str(old_shards))
+                if bak_mono.exists() and not old_mono.exists():
+                    os.rename(str(bak_mono), str(old_mono))
+            except OSError:
+                pass
+            shutil.rmtree(work, ignore_errors=True)
+            raise
+
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(bak, ignore_errors=True)
+
+        self._clear_deleted()
+        if want_shards:
+            self._sharding = False
+            self._sealed = []
+            self._active_name = None
+            self._next_id = 0
+            self.enable_sharding(dest_max)
+        else:
+            self._sharding = False
+            self.shards_dir = None
+            self._sealed = []
+            self._active_name = None
+            self._next_id = 0
+            self.shard_max_vectors = None
+            self.vdb_file_path = old_mono
+            self.vdb = self._make_faiss(self.vdb_file_path, create_empty=False)
+
+        summary['ntotal_after'] = int(self.ntotal or 0)
+        summary['sealed_after'] = len(self._sealed) if self._sharding else 0
+        return summary
+
     def iter_faiss_indexes(self):
         """
         Yield (label, faiss.Index) for export. Caller must not
@@ -1427,3 +1778,44 @@ class FassiVDB:
             'dropped': dropped,
             'rewritten': True,
         }
+
+    def iter_live_vectors(self, is_live, batch_size: int = 8192):
+        """Yield (ids: int64[N], vecs: float32[N, dim]) for rows passing is_live."""
+        if self.vdb is None:
+            return
+        try:
+            id_map = faiss.vector_to_array(self.vdb.id_map)
+        except Exception:
+            return
+        inner = getattr(self.vdb, 'index', None)
+        if inner is None:
+            return
+        try:
+            bs = max(256, int(batch_size or 8192))
+        except (TypeError, ValueError):
+            bs = 8192
+        live_pos = []
+        live_ids = []
+        for pos, nid in enumerate(id_map):
+            try:
+                ok = bool(is_live(nid))
+            except Exception:
+                ok = False
+            if not ok:
+                continue
+            live_pos.append(int(pos))
+            live_ids.append(int(nid))
+            if len(live_pos) >= bs:
+                vecs = self._reconstruct_positions(inner, live_pos)
+                yield (
+                    np.asarray(live_ids, dtype=np.int64),
+                    np.asarray(vecs, dtype=np.float32),
+                )
+                live_pos = []
+                live_ids = []
+        if live_pos:
+            vecs = self._reconstruct_positions(inner, live_pos)
+            yield (
+                np.asarray(live_ids, dtype=np.int64),
+                np.asarray(vecs, dtype=np.float32),
+            )

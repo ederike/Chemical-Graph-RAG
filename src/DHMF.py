@@ -762,6 +762,61 @@ class DHMF:
             self.retrieve_module._precomputed = False
         return out
 
+    def repack_vectors(self, db_name=None, *, shard_max_vectors, force: bool = False):
+        """
+        Rewrite FAISS shards to a new size without re-embedding.
+
+        Reconstructs vectors already stored in FAISS and rebuilds HNSW.
+        Does not call the embedding API or re-run insert/extract.
+
+        shard_max_vectors:
+          0    — merge each store into a single {name}.vdb (needs RAM for
+                 the full index at search / next process start)
+          N>0  — rewrite into shards of at most N vectors
+        db_name: one store, or None for every loaded store.
+        force: rewrite even if the current layout already matches.
+
+        After a larger shard size (or mono), update config
+        vectorization.shard_max_vectors to the same value so later
+        vectorization() does not seal at the old 100000 again.
+        """
+        try:
+            dest = int(shard_max_vectors)
+        except (TypeError, ValueError):
+            dest = 0
+        if dest < 0:
+            dest = 0
+
+        self.begin_build()
+        names = self._vdb_names(db_name)
+        out = {}
+        for name in names:
+            vdb = self.vdb.get(name)
+            if vdb is None or not hasattr(vdb, 'repack'):
+                continue
+            live_ids = self.db[name].list_ids() if name in self.db else []
+            self.logger.info(
+                f"Start repack_vectors {name}: "
+                f"shard_max={dest if dest > 0 else 'mono'} "
+                f"sql_live_ids={len(live_ids)} force={force}"
+            )
+            summary = vdb.repack(
+                shard_max_vectors=dest if dest > 0 else None,
+                live_ids=live_ids,
+                force=force,
+            )
+            out[name] = summary
+            if summary.get('skipped'):
+                self.logger.info(
+                    f"repack_vectors skip {name}: {summary.get('reason')}"
+                )
+            else:
+                self.logger.info(f"Finish repack_vectors {name}: {summary}")
+
+        if hasattr(self.retrieve_module, '_precomputed'):
+            self.retrieve_module._precomputed = False
+        return out
+
     @staticmethod
     def parse_query_answer(text: str) -> dict:
         """
