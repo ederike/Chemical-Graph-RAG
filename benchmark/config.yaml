@@ -1,6 +1,6 @@
 run:
   # generate | evaluate | report | excel | all
-  mode: report
+  mode: evaluate
 
 dhmf:
   config_path: example/a/config_open.yaml

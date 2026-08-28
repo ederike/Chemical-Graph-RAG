@@ -253,7 +253,8 @@ def inject_llm_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
 
 def inject_direct_retrieve_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
     """
-    并行加入「用原始总问题直接检索作答」步（depends_on=[]，不计入 max_steps）。
+    并行加入「用原始总问题检索并作答一次」步（depends_on=[]，不计入 max_steps）。
+    走 QuerySkill.run（retrieve_items + 一次生成），不嵌套 agent_query。
 
     仅应在多跳（规划检索子步 > 1）时调用；单跳本身就是原问题直检。
     """
