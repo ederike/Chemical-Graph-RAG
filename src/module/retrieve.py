@@ -79,16 +79,49 @@ class Retrieve:
         并行：关键词路与改写+向量同时启动；chunk / node 在嵌入完成后并行。
               墙钟 ≈ max(关键词路, 改写+嵌入+max(chunk, node))
         串行：chunk → node → keyword，峰值内存更低（分片向量检索不同时驻留）
+      chunk_max_vectors / node_max_vectors（0=全库）：
+        只搜先写入的前 N 条（FAISS id ≤ N，从 0.vdb 起打开分片直到 ntotal≥N）。
+        chunk_max_vectors 同时限制预加载的 chunk/doc/hyperedge 与关键词 FTS。
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          false：每文档头块 + 命中索引块（原文序、块去重）
          simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
          true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
     """
-    def vector_match(self, db_name, vector, topk=10):
+    def _scope_max_vectors(self, db_name) -> int:
+        """0 = 全库。chunk/node 各自读 retrieve.*_max_vectors。"""
+        cfg = self.config.retrieve
+        if db_name == 'node':
+            raw = getattr(cfg, 'node_max_vectors', 0)
+        elif db_name == 'chunk':
+            raw = getattr(cfg, 'chunk_max_vectors', 0)
+        else:
+            return 0
+        try:
+            return max(0, int(raw or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def vector_match(self, db_name, vector, topk=10, max_vectors=None):
         vdb = self.vdb[db_name]
         db = self.db[db_name]
-        vdb_res = vdb.search(vector, topk)
+        if max_vectors is None:
+            max_vectors = self._scope_max_vectors(db_name)
+        try:
+            cap = max(0, int(max_vectors or 0))
+        except (TypeError, ValueError):
+            cap = 0
+        vdb_res = vdb.search(vector, topk, max_vectors=cap)
+        stats = getattr(vdb, 'last_search_stats', None) or {}
+        if stats:
+            self.logger.info(
+                f"[retrieve] {db_name} vdb search "
+                f"max_vectors={stats.get('max_vectors', cap)} "
+                f"shards={stats.get('shards_opened')}/{stats.get('shards_total')} "
+                f"ntotal_scanned={stats.get('ntotal_scanned')} "
+                f"skipped_tail={stats.get('skipped_tail')} "
+                f"hits={len(vdb_res or [])}"
+            )
         res = []
         for item in vdb_res:
             rows = db.search('id', item['id']) or []
@@ -207,10 +240,38 @@ class Retrieve:
         else:
             self.last_fts_info = {}
 
-        self.all_chunks = list(self.db['chunk'].search_all() or [])
+        chunk_max = self._scope_max_vectors('chunk')
+        self.all_chunks = list(
+            self.db['chunk'].search_all(max_id=chunk_max) or []
+        )
         self.chunk_dict = {c['id']: c for c in self.all_chunks}
 
-        self.all_hyperedges = list(self.db['hyperedge'].search_all() or [])
+        max_doc_id = 0
+        for c in self.all_chunks:
+            did = c.get('doc_id')
+            if did is None:
+                continue
+            try:
+                did_i = int(did)
+            except (TypeError, ValueError):
+                continue
+            if did_i > max_doc_id:
+                max_doc_id = did_i
+
+        hyper_db = self.db.get('hyperedge')
+        if chunk_max > 0 and hyper_db is not None and hasattr(hyper_db, 'search_lte'):
+            if max_doc_id > 0:
+                self.all_hyperedges = list(
+                    hyper_db.search_lte('doc_id', max_doc_id) or []
+                )
+            else:
+                self.all_hyperedges = list(
+                    hyper_db.search_all(max_id=chunk_max) or []
+                )
+        else:
+            self.all_hyperedges = list(
+                (hyper_db.search_all() if hyper_db is not None else None) or []
+            )
         self.hyperedge_dict = {h['id']: h for h in self.all_hyperedges}
         self.hyperedge_by_doc = {}
         self.hyperedge_by_chunk = {}
@@ -240,8 +301,18 @@ class Retrieve:
             if head is not None:
                 self.doc_head_chunk[did] = head
 
-        docs = list(self.db['doc'].search_all() or [])
+        doc_db = self.db.get('doc')
+        if chunk_max > 0 and max_doc_id > 0 and doc_db is not None:
+            docs = list(doc_db.search_all(max_id=max_doc_id) or [])
+        else:
+            docs = list((doc_db.search_all() if doc_db is not None else None) or [])
         self.doc_dict = {d['id']: d for d in docs}
+
+        self.logger.info(
+            f"[retrieve] precompute scope chunk_max_vectors={chunk_max} "
+            f"chunks={len(self.all_chunks)} docs={len(self.doc_dict)} "
+            f"hyperedges={len(self.all_hyperedges)} max_doc_id={max_doc_id}"
+        )
 
         self._precomputed = True
 
@@ -637,16 +708,21 @@ class Retrieve:
         cand_ids = None
         chunk_db = self.db.get('chunk')
 
+        chunk_max = self._scope_max_vectors('chunk')
         if chunk_db is not None and hasattr(chunk_db, 'fts_match_keywords'):
             try:
                 if minority:
-                    min_ids = chunk_db.fts_match_keywords(minority) or set()
+                    min_ids = chunk_db.fts_match_keywords(
+                        minority, max_id=chunk_max
+                    ) or set()
                 if minority and len(min_ids) >= candidate_k:
                     early_stop = True
                     cand_ids = min_ids
                 else:
                     if majority:
-                        maj_ids = chunk_db.fts_match_keywords(majority) or set()
+                        maj_ids = chunk_db.fts_match_keywords(
+                            majority, max_id=chunk_max
+                        ) or set()
                     cand_ids = min_ids | maj_ids
                 used_fts = True
             except Exception as e:
@@ -2016,6 +2092,8 @@ class Retrieve:
             f"kw_pool={self.last_keyword.get('pool_chunks')} "
             f"kw_docs={self.last_keyword.get('top_docs')} "
             f"full_body={body_mode} rerank={enable_rerank} rerank_k={rerank_top} "
+            f"chunk_max_v={self._scope_max_vectors('chunk')} "
+            f"node_max_v={self._scope_max_vectors('node')} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "

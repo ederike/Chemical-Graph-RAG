@@ -496,6 +496,10 @@ class RetrieveConfig(BaseModel):
     # 三路检索（chunk / node / keyword）是否并行。
     # true / parallel：墙钟 ≈ max；false / serial：串行，峰值内存更低。
     enable_parallel_paths: bool = True
+    # 范围检索：0=全库。>0 只搜 FAISS id / SQL id ≤ N 的前缀分片
+    #（按写入顺序，从 0.vdb 起），并限制预加载的 chunk/doc/hyperedge 与 FTS。
+    node_max_vectors: int = 0
+    chunk_max_vectors: int = 0
     keyword_candidate_k: int = 50
     keyword_top_k: int = 10
     keyword_extract_model_args: dict = Field(default_factory=lambda: {
@@ -562,6 +566,21 @@ class RetrieveConfig(BaseModel):
             "enable_full_body_context 只接受 true / false / simple，"
             f"收到 {v!r}"
         )
+
+    @field_validator(
+        "node_max_vectors",
+        "chunk_max_vectors",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_max_vectors(cls, v):
+        """0 = 不限制（全库）；负数钳到 0。"""
+        if v is None or v == "":
+            return 0
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
 
     @field_validator(
         "chunk_candidate_k",

@@ -149,10 +149,11 @@ class ChunkDB(BaseDB):
             )
         self._fts_touch_meta()
 
-    def fts_match_keywords(self, keywords) -> set:
+    def fts_match_keywords(self, keywords, *, max_id: int = 0) -> set:
         """
         对已小写入库的 chunk_fts 做子串检索，返回 chunk id 集合。
         词长 >= 3：FTS5 MATCH（trigram）；更短：instr（C 层扫描小写正文）。
+        max_id>0 时只返回 rowid <= max_id（范围检索）。
         """
         out = set()
         kws = [str(k).casefold().strip() for k in (keywords or []) if k]
@@ -161,20 +162,31 @@ class ChunkDB(BaseDB):
             return out
         if not self.fts_schema_ok():
             self.ensure_fts()
+        try:
+            cap = int(max_id or 0)
+        except (TypeError, ValueError):
+            cap = 0
         for kw in kws:
-            out.update(self._fts_match_one(kw))
+            out.update(self._fts_match_one(kw, max_id=cap))
         return out
 
-    def _fts_match_one(self, kw_cf: str) -> set:
+    def _fts_match_one(self, kw_cf: str, *, max_id: int = 0) -> set:
         if not kw_cf:
             return set()
+        try:
+            cap = int(max_id or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        id_clause = " AND rowid <= ?" if cap > 0 else ""
+        id_params = (cap,) if cap > 0 else ()
         rows = None
         if len(kw_cf) >= _FTS_MIN_CHARS:
             q = '"' + kw_cf.replace('"', '""') + '"'
             try:
                 rows = self.db.execute(
-                    f"SELECT rowid AS id FROM {_FTS_TABLE} WHERE {_FTS_TABLE} MATCH ?",
-                    (q,),
+                    f"SELECT rowid AS id FROM {_FTS_TABLE} "
+                    f"WHERE {_FTS_TABLE} MATCH ?{id_clause}",
+                    (q,) + id_params,
                 ) or []
             except Exception as e:
                 _log.warning(
@@ -183,8 +195,9 @@ class ChunkDB(BaseDB):
                 rows = None
         if rows is None:
             rows = self.db.execute(
-                f"SELECT rowid AS id FROM {_FTS_TABLE} WHERE instr(content, ?) > 0",
-                (kw_cf,),
+                f"SELECT rowid AS id FROM {_FTS_TABLE} "
+                f"WHERE instr(content, ?) > 0{id_clause}",
+                (kw_cf,) + id_params,
             ) or []
         ids = set()
         for row in rows:

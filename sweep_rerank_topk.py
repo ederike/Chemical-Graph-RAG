@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 # 要扫描的 rerank_top_k，按顺序评测
-RERANK_TOP_KS: List[int] = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+RERANK_TOP_KS: List[int] = [5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 
 # 固定问题集（已有，不再生成、不复制到各结果目录）
 QUESTIONS: str = "benchmark_results/benchmark_result_topk=8/questions_complex.json"

@@ -1,4 +1,5 @@
 import faiss
+import heapq
 import os
 import shutil
 import sqlite3
@@ -171,9 +172,24 @@ class BaseDB:
             params.append(int(limit))
         return self.db.execute(sql, tuple(params))
 
-    def search_all(self):
+    def search_all(self, *, max_id: int = 0):
+        """Load the table. max_id>0 → only rows with id <= max_id."""
+        try:
+            cap = int(max_id or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap > 0:
+            sql = f"SELECT * FROM {self.table} WHERE id <= ?"
+            return self.db.execute(sql, (cap,))
         sql = f"SELECT * FROM {self.table}"
         return self.db.execute(sql)
+
+    def search_lte(self, key: str, value):
+        """SELECT * WHERE key <= value. Unknown key → empty list."""
+        if key not in self.table_columns:
+            return []
+        sql = f"SELECT * FROM {self.table} WHERE {key} <= ?"
+        return self.db.execute(sql, (value,))
 
     def list_ids(self):
         """Primary-key ids only (compact / reconcile)."""
@@ -218,7 +234,10 @@ class BaseVDB:
     After each vectorization checkpoint the active shard is saved, sealed,
     unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
     (shard_max_vectors × dim × 4B, or × 2B when index_quant=fp16).
-    Search merges all sealed + active; sealed shards are loaded one-by-one.
+    Search merges sealed + active; sealed shards are loaded one-by-one.
+    search(..., max_vectors=N) only walks a prefix of shards (write order)
+    and keeps FAISS ids <= N, so an early-ingested slice (e.g. TDS) can
+    skip later patent shards.
 
     index_type:
       flat_l2 — IndexFlatL2 (exact, full scan)
@@ -278,6 +297,7 @@ class BaseVDB:
         # Cumulative FAISS add_with_ids wall time (HNSW graph build cost).
         self.index_add_seconds = 0.0
         self.index_add_count = 0
+        self.last_search_stats = {}
         self._deleted = set()
         self._deleted_lock = threading.Lock()
 
@@ -737,35 +757,101 @@ class BaseVDB:
         self.index_add_count += len(ids)
         return {'n': len(ids), 'add_seconds': add_s}
 
-    def search(self, vector: list, topk: int = 10):
+    @staticmethod
+    def _shard_index(name) -> int:
+        stem = str(name or '').rsplit('.', 1)[0]
+        try:
+            return int(stem)
+        except (TypeError, ValueError):
+            return 10 ** 9
+
+    def _ordered_sealed_names(self) -> list:
+        names = [n for n in (self._sealed or []) if n]
+        names.sort(key=self._shard_index)
+        return names
+
+    def search(self, vector: list, topk: int = 10, *, max_vectors: int = 0):
+        """
+        ANN search. max_vectors>0 keeps FAISS ids <= N and, in sharded mode,
+        only opens a prefix of shards (0.vdb, 1.vdb, …) until ntotal >= N.
+        0 / None = full corpus.
+        """
         vector = np.array(vector, dtype=np.float32).reshape(1, -1)
         if topk <= 0:
+            self.last_search_stats = {
+                'max_vectors': 0,
+                'shards_opened': 0,
+                'shards_total': 0,
+                'ntotal_scanned': 0,
+                'skipped_tail': False,
+            }
             return []
+
+        try:
+            cap = int(max_vectors or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap < 0:
+            cap = 0
 
         fetch_k = self._search_fetch_k(topk)
 
+        def _keep_id(i) -> bool:
+            if not self._live_id(i):
+                return False
+            if cap > 0 and int(i) > cap:
+                return False
+            return True
+
         if not self._sharding:
             if self.vdb is None:
+                self.last_search_stats = {
+                    'max_vectors': cap,
+                    'shards_opened': 0,
+                    'shards_total': 0,
+                    'ntotal_scanned': 0,
+                    'skipped_tail': False,
+                }
                 return []
             distances, ids = self.vdb.search(vector, fetch_k)
             if ids is None:
+                self.last_search_stats = {
+                    'max_vectors': cap,
+                    'shards_opened': 1,
+                    'shards_total': 1,
+                    'ntotal_scanned': int(self.vdb.ntotal or 0),
+                    'skipped_tail': False,
+                }
                 return []
             pairs = [
                 (float(d), int(i))
                 for d, i in zip(distances[0], ids[0])
-                if self._live_id(i)
+                if _keep_id(i)
             ]
+            self.last_search_stats = {
+                'max_vectors': cap,
+                'shards_opened': 1,
+                'shards_total': 1,
+                'ntotal_scanned': int(self.vdb.ntotal or 0),
+                'skipped_tail': bool(cap > 0),
+            }
             return self._dedupe_hits(pairs, topk)
 
-        # Merge top-k across sealed (load one-by-one) + active.
+        # Merge top-k across a prefix of sealed shards (+ active if needed).
         heap = []  # (distance, id) keep best topk (smallest L2)
-        import heapq
+        sealed_names = self._ordered_sealed_names()
+        n_total = len(sealed_names) + (
+            1 if (self.vdb is not None and self.vdb.vdb is not None) else 0
+        )
+        opened = 0
+        scanned = 0
+        skipped_tail = False
 
         def _consume(distances, ids):
             if ids is None:
                 return
             for d, i in zip(distances[0], ids[0]):
-                if not self._live_id(i):
+                if not _keep_id(i):
                     continue
                 i = int(i)
                 d = float(d)
@@ -774,7 +860,10 @@ class BaseVDB:
                 elif d < -heap[0][0]:
                     heapq.heapreplace(heap, (-d, i))
 
-        for name in self._sealed:
+        for name in sealed_names:
+            if cap > 0 and scanned >= cap:
+                skipped_tail = True
+                break
             path = self.shards_dir / name
             if not path.exists():
                 continue
@@ -782,13 +871,27 @@ class BaseVDB:
             try:
                 distances, ids = tmp.search(vector, fetch_k)
                 _consume(distances, ids)
+                scanned += int(tmp.ntotal or 0)
+                opened += 1
             finally:
                 tmp.unload()
 
-        if self.vdb is not None and self.vdb.vdb is not None:
-            distances, ids = self.vdb.search(vector, fetch_k)
-            _consume(distances, ids)
+        if not (cap > 0 and scanned >= cap):
+            if self.vdb is not None and self.vdb.vdb is not None:
+                distances, ids = self.vdb.search(vector, fetch_k)
+                _consume(distances, ids)
+                scanned += int(self.vdb.ntotal or 0)
+                opened += 1
+        else:
+            skipped_tail = True
 
+        self.last_search_stats = {
+            'max_vectors': cap,
+            'shards_opened': opened,
+            'shards_total': n_total,
+            'ntotal_scanned': scanned,
+            'skipped_tail': skipped_tail,
+        }
         pairs = [(-neg_d, i) for neg_d, i in heap]
         return self._dedupe_hits(pairs, topk)
 
