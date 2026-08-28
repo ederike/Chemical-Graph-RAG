@@ -57,9 +57,9 @@ evaluate:
   enable_llm_only: False   # 每题额外跑一路纯 LLM；与超图回答一次对比打分，不再分开评判
   enable_doc_recall: True
   max_source_chars: -1
-  max_retries: 3
+  max_retries: 2
   sleep_between: 0.0
-  num_thread: 1
+  num_thread: 3
   use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null

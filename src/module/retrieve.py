@@ -126,6 +126,7 @@ class Retrieve:
                 f"already={stats.get('already')} dt={stats.get('seconds')}s"
             )
             out[name] = stats
+        self._ensure_precompute()
         return out
 
     def unpin_indexes(self, db_name=None) -> dict:
@@ -226,6 +227,7 @@ class Retrieve:
             retry_wait=max(0.5, emb_wait),
         )
         self._precomputed = False
+        self._precompute_lock = threading.Lock()
         self.all_chunks = []
         self.chunk_dict = {}
         self.all_hyperedges = []
@@ -271,7 +273,12 @@ class Retrieve:
     def _ensure_precompute(self):
         if self._precomputed:
             return
+        with self._precompute_lock:
+            if self._precomputed:
+                return
+            self._load_precompute()
 
+    def _load_precompute(self):
         chunk_db = self.db.get('chunk')
         if chunk_db is not None and hasattr(chunk_db, 'ensure_fts'):
             try:

@@ -9,19 +9,16 @@ if __name__ == '__main__':
     # graph.download_from_oss()
     # graph.dedupe_downloaded_docs()
 
-    graph.insert_default()
-    graph.summary()
-    graph.chunk()
-    graph.extract()
-    graph.build()
+    # graph.insert_default()
+    # graph.summary()
+    # graph.chunk()
+    # graph.extract()
+    # graph.build()
+    # graph.vectorization()
 
-    # graph.vectorization_clear()
-    graph.vectorization()
-
-    # 检索前按 yaml 的 chunk_max_vectors / node_max_vectors 常驻 FAISS 分片；
-    # 不调用则仍按片 load/unload。须与 query 同一进程。
     # graph.pin_retrieve_indexes()
     # print(graph.query('...', mode='dual_path', pretty=True))
-    # print(graph.agent_query('满足 NFPA 评级为健康1、相对密度约1.10、自燃温度高于400°C 的产品，其生产公司还有什么抗氧化剂产品吗？', pretty=True))
+    print(graph.agent_query('我们厂做保温装饰一体板，水性弹性丙烯酸涂料辊涂下线后覆 PE 保护膜，叠压码垛入库。天热堆放一两周后问题来了：揭膜时漆膜跟着膜被撕下来，板与板叠压面也互相粘连掉漆，废板率很高。乳液 Tg 偏低、漆膜偏软这个改不了（板子要弯折）。加蜡粉以前试过，表面会沾油污。不想上双组分。从配方上怎么解决？',
+                             pretty=True))
     # graph.unpin_retrieve_indexes()
 
