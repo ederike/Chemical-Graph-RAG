@@ -101,13 +101,15 @@ class ChunkDB(BaseDB):
         """
         t0 = time.perf_counter()
         self._fts_ensure_schema()
-        n_chunk = self._count_table(self.table)
         n_fts = self._fts_meta_n()
+        n_chunk = self._n_chunk_fast()
         rebuilt = False
         if force or n_fts != n_chunk:
-            self._fts_rebuild()
-            n_fts = self._fts_meta_n()
-            rebuilt = True
+            n_chunk = self._count_table(self.table)
+            if force or n_fts != n_chunk:
+                self._fts_rebuild()
+                n_fts = self._fts_meta_n()
+                rebuilt = True
         dt = time.perf_counter() - t0
         info = {
             'n_chunk': n_chunk,
@@ -149,11 +151,18 @@ class ChunkDB(BaseDB):
             )
         self._fts_touch_meta()
 
-    def fts_match_keywords(self, keywords, *, max_id: int = 0) -> set:
+    def fts_match_keywords(
+        self,
+        keywords,
+        *,
+        max_id: int = 0,
+        limit: int = 0,
+    ) -> set:
         """
         对已小写入库的 chunk_fts 做子串检索，返回 chunk id 集合。
         词长 >= 3：FTS5 MATCH（trigram）；更短：instr（C 层扫描小写正文）。
         max_id>0 时只返回 rowid <= max_id（范围检索）。
+        limit>0 时最多返回 limit 条（instr 全表扫描可提前停）。
         """
         out = set()
         kws = [str(k).casefold().strip() for k in (keywords or []) if k]
@@ -166,49 +175,79 @@ class ChunkDB(BaseDB):
             cap = int(max_id or 0)
         except (TypeError, ValueError):
             cap = 0
+        try:
+            lim = int(limit or 0)
+        except (TypeError, ValueError):
+            lim = 0
         for kw in kws:
-            out.update(self._fts_match_one(kw, max_id=cap))
+            out.update(self._fts_match_one(kw, max_id=cap, limit=lim))
         return out
 
-    def _fts_match_one(self, kw_cf: str, *, max_id: int = 0) -> set:
+    def _fts_match_one(
+        self,
+        kw_cf: str,
+        *,
+        max_id: int = 0,
+        limit: int = 0,
+    ) -> set:
         if not kw_cf:
             return set()
         try:
             cap = int(max_id or 0)
         except (TypeError, ValueError):
             cap = 0
-        id_clause = " AND rowid <= ?" if cap > 0 else ""
-        id_params = (cap,) if cap > 0 else ()
-        rows = None
+        try:
+            lim = int(limit or 0)
+        except (TypeError, ValueError):
+            lim = 0
+        extra = ""
+        params: list = []
+        if cap > 0:
+            extra += " AND rowid <= ?"
+            params.append(cap)
+        if lim > 0:
+            extra += " LIMIT ?"
+            params.append(lim)
+        fetch = getattr(self.db, 'execute_ids', None)
+        ids = None
         if len(kw_cf) >= _FTS_MIN_CHARS:
             q = '"' + kw_cf.replace('"', '""') + '"'
+            sql = (
+                f"SELECT rowid FROM {_FTS_TABLE} "
+                f"WHERE {_FTS_TABLE} MATCH ?{extra}"
+            )
             try:
-                rows = self.db.execute(
-                    f"SELECT rowid AS id FROM {_FTS_TABLE} "
-                    f"WHERE {_FTS_TABLE} MATCH ?{id_clause}",
-                    (q,) + id_params,
-                ) or []
+                if fetch:
+                    ids = fetch(sql, tuple([q] + params))
+                else:
+                    rows = self.db.execute(sql, tuple([q] + params)) or []
+                    ids = set()
+                    for row in rows:
+                        try:
+                            ids.add(int(row['id'] if isinstance(row, dict) else row[0]))
+                        except (TypeError, ValueError, KeyError, IndexError):
+                            continue
             except Exception as e:
                 _log.warning(
                     f"[chunk_fts] MATCH {kw_cf!r} failed, instr fallback: {e}"
                 )
-                rows = None
-        if rows is None:
-            rows = self.db.execute(
-                f"SELECT rowid AS id FROM {_FTS_TABLE} "
-                f"WHERE instr(content, ?) > 0{id_clause}",
-                (kw_cf,) + id_params,
-            ) or []
-        ids = set()
-        for row in rows:
-            cid = row.get('id') if isinstance(row, dict) else None
-            if cid is None:
-                continue
-            try:
-                ids.add(int(cid))
-            except (TypeError, ValueError):
-                continue
-        return ids
+                ids = None
+        if ids is None:
+            sql = (
+                f"SELECT rowid FROM {_FTS_TABLE} "
+                f"WHERE instr(content, ?) > 0{extra}"
+            )
+            if fetch:
+                ids = fetch(sql, tuple([kw_cf] + params))
+            else:
+                rows = self.db.execute(sql, tuple([kw_cf] + params)) or []
+                ids = set()
+                for row in rows:
+                    try:
+                        ids.add(int(row['id'] if isinstance(row, dict) else row[0]))
+                    except (TypeError, ValueError, KeyError, IndexError):
+                        continue
+        return ids or set()
 
     def _fts_ensure_schema(self):
         self.db.execute(
@@ -285,6 +324,19 @@ class ChunkDB(BaseDB):
             f"built_at=excluded.built_at",
             (n, _FTS_TOKENIZER, now),
         )
+
+    def _n_chunk_fast(self) -> int:
+        """O(1) row estimate via sqlite_sequence (AUTOINCREMENT)."""
+        try:
+            rows = self.db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name=?",
+                (self.table,),
+            ) or []
+            if rows:
+                return int((rows[0] or {}).get('seq') or 0)
+        except Exception:
+            pass
+        return self._count_table(self.table)
 
     def _count_table(self, table: str) -> int:
         try:

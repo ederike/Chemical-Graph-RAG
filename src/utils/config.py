@@ -502,6 +502,9 @@ class RetrieveConfig(BaseModel):
     chunk_max_vectors: int = 0
     keyword_candidate_k: int = 50
     keyword_top_k: int = 10
+    # 关键词 FTS 文档频率上限。命中超过该值视为停用词（如「产品」「方法」），
+    # 跳过以免 instr 全表扫描 + 对数万块 Python 打分。0=不封顶。
+    keyword_max_df: int = 2500
     keyword_extract_model_args: dict = Field(default_factory=lambda: {
         'enable_thinking': False,
         'max_tokens': 256,
@@ -570,6 +573,7 @@ class RetrieveConfig(BaseModel):
     @field_validator(
         "node_max_vectors",
         "chunk_max_vectors",
+        "keyword_max_df",
         mode="before",
     )
     @classmethod

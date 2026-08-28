@@ -1615,6 +1615,19 @@ class SQLiteDB:
         res=[dict(row) for row in res]
         return res
 
+    def execute_ids(self, SQL, values=()):
+        """SELECT first-column ints as a set. No dict wrap, no commit."""
+        with self._lock:
+            self.cursor.execute(SQL, values)
+            rows = self.cursor.fetchall()
+        out = set()
+        for row in rows:
+            try:
+                out.add(int(row[0]))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return out
+
     def execute_batch(self,SQL,values_list):
         with self._lock:
             self.cursor.executemany(SQL,values_list)

@@ -706,23 +706,50 @@ class Retrieve:
         min_ids = set()
         maj_ids = set()
         cand_ids = None
+        skipped_df = []
         chunk_db = self.db.get('chunk')
 
         chunk_max = self._scope_max_vectors('chunk')
+        try:
+            max_df = int(
+                getattr(self.config.retrieve, 'keyword_max_df', 2500) or 0
+            )
+        except (TypeError, ValueError):
+            max_df = 2500
+        max_df = max(0, max_df)
+        fetch_lim = (max_df + 1) if max_df > 0 else 0
+
+        def _fts_term(kw: str) -> set:
+            return chunk_db.fts_match_keywords(
+                [kw], max_id=chunk_max, limit=fetch_lim,
+            ) or set()
+
+        def _absorb_terms(kws) -> tuple:
+            """Return (ids, skipped_too_common)."""
+            acc = set()
+            skipped = []
+            for kw in kws or []:
+                part = _fts_term(kw)
+                if max_df > 0 and len(part) > max_df:
+                    skipped.append(kw)
+                    continue
+                acc |= part
+                if max_df > 0 and len(acc) >= max_df:
+                    break
+            return acc, skipped
+
         if chunk_db is not None and hasattr(chunk_db, 'fts_match_keywords'):
             try:
                 if minority:
-                    min_ids = chunk_db.fts_match_keywords(
-                        minority, max_id=chunk_max
-                    ) or set()
+                    min_ids, skip_min = _absorb_terms(minority)
+                    skipped_df.extend(skip_min)
                 if minority and len(min_ids) >= candidate_k:
                     early_stop = True
                     cand_ids = min_ids
                 else:
                     if majority:
-                        maj_ids = chunk_db.fts_match_keywords(
-                            majority, max_id=chunk_max
-                        ) or set()
+                        maj_ids, skip_maj = _absorb_terms(majority)
+                        skipped_df.extend(skip_maj)
                     cand_ids = min_ids | maj_ids
                 used_fts = True
             except Exception as e:
@@ -733,6 +760,7 @@ class Retrieve:
                 cand_ids = None
 
         fts_dt = time.perf_counter() - t0
+        t_score = time.perf_counter()
         if used_fts:
             # 命中 id 已由 FTS 小写索引给出；打分只 casefold 候选块，不再回表拉全文
             scored = self._score_keyword_chunk_ids(
@@ -742,6 +770,7 @@ class Retrieve:
             )
         else:
             scored = self._score_keyword_scan(minority, majority)
+        score_dt = time.perf_counter() - t_score
 
         scored.sort(
             key=lambda h: (
@@ -767,11 +796,16 @@ class Retrieve:
             'n_scored': len(scored),
             'n_out': len(out),
             'fts_s': round(fts_dt, 4),
+            'score_s': round(score_dt, 4),
+            'max_df': max_df,
+            'skipped_df': skipped_df,
         }
         self.logger.info(
             f"[retrieve] keyword match fts={used_fts} early_stop={early_stop} "
             f"min_ids={len(min_ids)} maj_ids={len(maj_ids)} "
-            f"scored={len(scored)} out={len(out)} fts_dt={fts_dt:.3f}s"
+            f"scored={len(scored)} out={len(out)} "
+            f"fts_dt={fts_dt:.3f}s score_dt={score_dt:.3f}s "
+            f"max_df={max_df} skipped_df={skipped_df!r}"
         )
         return out
 
@@ -946,16 +980,20 @@ class Retrieve:
         if not q:
             return empty
 
+        t_ex = time.perf_counter()
         kw = self.extract_keywords(q)
+        extract_dt = time.perf_counter() - t_ex
         minority = kw.get('minority') or []
         majority = kw.get('majority') or []
         if not minority and not majority:
             self.logger.info('[retrieve] keyword path: no keywords extracted')
             return {**empty, 'minority': minority, 'majority': majority}
 
+        t_match = time.perf_counter()
         pool = self._search_chunks_by_keywords(
             minority, majority, candidate_k=candidate_k
         )
+        match_dt = time.perf_counter() - t_match
         if not pool:
             self.logger.info(
                 f"[retrieve] keyword path: no content hits "
@@ -969,6 +1007,7 @@ class Retrieve:
             }
 
         # 文档级首轮 rerank（关键词路强制启用，不受 enable_rerank 开关影响）
+        t_rr = time.perf_counter()
         passages = self._hits_to_doc_passages(pool)
         reranked = self._rerank_materials(
             q,
@@ -978,6 +1017,7 @@ class Retrieve:
             update_last=False,
             stage='keyword',
         )
+        rerank_dt = time.perf_counter() - t_rr
         # 取保留文档
         keep_docs = set()
         for p in reranked or []:
@@ -1041,7 +1081,9 @@ class Retrieve:
         self.logger.info(
             f"[retrieve] keyword path pool={len(pool)} docs_in={len({h.get('doc_id') for h in pool})} "
             f"rerank_top_docs={len(keep_docs)} hits={len(hits_by_chunk)} "
-            f"minority={minority!r} majority={majority!r}"
+            f"minority={minority!r} majority={majority!r} "
+            f"extract={extract_dt:.3f}s match={match_dt:.3f}s "
+            f"rerank={rerank_dt:.3f}s"
         )
         return {
             'hits_by_chunk': hits_by_chunk,
