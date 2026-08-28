@@ -5,7 +5,7 @@
 
     dhmf.agent_query("……", pretty=True)
 
-内部：plan（检索步 + 并行纯 LLM）→ execute → synthesize。
+内部：plan（检索步 + 并行纯 LLM，多跳可选原问题直检）→ execute → synthesize。
 """
 
 from .prompts import Agent_PROMPT

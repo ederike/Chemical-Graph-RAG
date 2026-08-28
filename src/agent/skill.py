@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig, resolve_credentials
 from .prompts import Agent_PROMPT
-from .state import answer_of, first_line
+from .state import DIRECT_STEP_KIND, answer_of, first_line
 
 if TYPE_CHECKING:
     from ..DHMF import DHMF
@@ -52,6 +52,7 @@ class QuerySkill:
         n_steps: Optional[int] = None,
         planned_question: Optional[str] = None,
         depends_on: Optional[Sequence[str]] = None,
+        kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         q = (question or '').strip()
         t_all = time.perf_counter()
@@ -77,6 +78,7 @@ class QuerySkill:
             n_steps=n_steps,
             planned_question=planned_question,
             depends_on=depends_on,
+            kind=kind,
         )
         respond['retrieve_latency_s'] = retrieve_latency_s
         respond['retrieve_timing']    = retrieve_timing
@@ -145,8 +147,15 @@ class QuerySkill:
         step_id: Optional[str],
         n_steps: Optional[int],
         depends_on: Optional[Sequence[str]],
+        kind: Optional[str] = None,
     ) -> str:
         sid = str(step_id or '1').strip() or '1'
+        if kind == DIRECT_STEP_KIND:
+            return (
+                '这是用用户原始总问题做的一次完整检索作答，'
+                '结果只作为最终汇总的对照参考。'
+                '请依据语料完整回答原始总问题，不要按规划子步裁剪信息。'
+            )
         try:
             n = max(1, int(n_steps or 1))
         except (TypeError, ValueError):
@@ -175,6 +184,7 @@ class QuerySkill:
         n_steps: Optional[int] = None,
         planned_question: Optional[str] = None,
         depends_on: Optional[Sequence[str]] = None,
+        kind: Optional[str] = None,
     ) -> dict:
         original = (original_query or query or "").strip()
         planned = (planned_question or query or "").strip()
@@ -184,7 +194,10 @@ class QuerySkill:
             (
                 "step_context",
                 self._format_step_context(
-                    step_id=step_id, n_steps=n_steps, depends_on=depends_on
+                    step_id=step_id,
+                    n_steps=n_steps,
+                    depends_on=depends_on,
+                    kind=kind,
                 ),
             ),
             ("original_query", original),

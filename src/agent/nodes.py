@@ -1,7 +1,7 @@
 """
 LangGraph 节点：plan → execute ⟲ → synthesize。
 
-依赖图 = 规划检索步 + 自动并行的纯 LLM 步；单跳/多跳都进 synthesize。
+依赖图 = 规划检索步 + 自动并行的纯 LLM 步（+ 可选原问题直检）；单跳/多跳都进 synthesize。
 """
 
 from __future__ import annotations
@@ -21,10 +21,13 @@ from .state import (
     StepResult,
     answer_of,
     first_line,
+    format_direct_answer,
     format_llm_answer,
     format_prior,
     format_step_blocks,
+    inject_direct_retrieve_step,
     inject_llm_step,
+    is_direct_step,
     is_llm_step,
     merge_sources,
     normalize_plan,
@@ -75,8 +78,12 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     steps = normalize_plan(parse_plan(raw), max_steps=int(ctx.cfg.max_steps), fallback=query)
     steps = inject_llm_step(steps, query)
     n_ret = len(retrieve_plan(steps))
+    # 单跳已经是原问题直检，再加一步只会重复检索。
+    if bool(getattr(ctx.cfg, 'enable_direct_retrieve', False)) and n_ret > 1:
+        steps = inject_direct_retrieve_step(steps, query)
+    extra = ' + direct' if any(is_direct_step(s) for s in steps) else ''
     ctx.logger.info(
-        f'[agent.plan] retrieve={n_ret} + llm '
+        f'[agent.plan] retrieve={n_ret} + llm{extra} '
         + ' | '.join(
             f"{s['id']}:{s.get('kind', 'retrieve')}:{s['question'][:40]}"
             for s in steps
@@ -143,6 +150,18 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
                 ),
             )
             resolved = query
+        elif is_direct_step(step):
+            resolved = query
+            ctx.logger.info(f'[agent.execute] step={sid} kind=direct q={query!r}')
+            resp = ctx.skill.run(
+                query,
+                original_query=query,
+                step_id=sid,
+                n_steps=1,
+                planned_question=query,
+                depends_on=[],
+                kind='direct',
+            )
         else:
             resolved = _resolve_question(ctx, query=query, step=step, results=results)
             ctx.logger.info(f'[agent.execute] step={sid} q={resolved!r}')
@@ -182,6 +201,7 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
             Agent_PROMPT.get('SYNTH_USER', ''),
             query=query,
             step_results=format_step_blocks(plan, results),
+            direct_answer=format_direct_answer(plan, results),
             llm_answer=format_llm_answer(plan, results),
         ),
     )

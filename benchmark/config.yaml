@@ -8,7 +8,7 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: benchmark_results_simple
+  output_dir: benchmark_results/benchmark_result_topk=8_Direct
 
   # generate 写出
   questions_filename: questions_complex.json

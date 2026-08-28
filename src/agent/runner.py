@@ -17,6 +17,7 @@ from .state import (
     PlanStep,
     StepResult,
     aggregate_usage,
+    is_direct_step,
     is_llm_step,
     merge_sources,
 )
@@ -47,7 +48,12 @@ def _format_pretty(
             resolved = (r.get('resolved_question') or '').strip()
             ans      = (r.get('answer') or '').strip()
             src      = r.get('sources') or []
-            kind     = '纯LLM' if is_llm_step(s) else '检索'
+            if is_llm_step(s):
+                kind = '纯LLM'
+            elif is_direct_step(s):
+                kind = '原问题直检'
+            else:
+                kind = '检索'
 
             lines.append(f'### Step {sid}  ·  {kind}  ·  deps: {deps_s}')
             lines.append(f'planned:  {planned}')
@@ -73,7 +79,7 @@ def run_agent_query(
     pretty: bool = False,
 ) -> Union[dict, str]:
     """
-    规划检索依赖图（并行加入纯 LLM 步）→ 按就绪序执行 → 汇总对照检索与纯 LLM。
+    规划检索依赖图（并行加入纯 LLM 步；多跳且开启时再加入原问题直检）→ 按就绪序执行 → 汇总。
     状态仅在 LangGraph 内存 state 中传递；线程安全（无共享记事本）。
     返回 dict 字段与 DHMF.query 对齐，并含 plan / steps。
     """

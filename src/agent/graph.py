@@ -4,8 +4,9 @@ LangGraph 编排：
     START → plan → execute ⟲ → synthesize → END
 
 依赖图在 plan 后自动并行加入纯 LLM 步（depends_on=[]）。
-单跳：1 次检索作答 + 纯 LLM 作答 → synthesize 对照两者。
-多跳：全部检索子步 + 纯 LLM → synthesize。
+开启 enable_direct_retrieve 且为多跳时，再并行加入原问题直检步。
+单跳：1 次检索作答 + 纯 LLM 作答 → synthesize 对照两者（不重复直检）。
+多跳：全部检索子步 + 纯 LLM（+ 可选原问题直检）→ synthesize。
 """
 
 from __future__ import annotations

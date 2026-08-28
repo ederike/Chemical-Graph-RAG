@@ -9,13 +9,15 @@ from typing import Any, Dict, List, Optional, TypedDict
 LLM_STEP_ID = 'llm'
 LLM_STEP_KIND = 'llm'
 RETRIEVE_STEP_KIND = 'retrieve'
+DIRECT_STEP_ID = 'direct'
+DIRECT_STEP_KIND = 'direct'
 
 
 class PlanStep(TypedDict, total=False):
     id: str
     question: str
     depends_on: List[str]
-    kind: str  # retrieve | llm
+    kind: str  # retrieve | llm | direct
 
 class StepResult(TypedDict, total=False):
     id: str
@@ -191,8 +193,23 @@ def is_llm_step(step: Optional[PlanStep]) -> bool:
     return (step.get('kind') == LLM_STEP_KIND) or (str(step.get('id') or '') == LLM_STEP_ID)
 
 
+def is_direct_step(step: Optional[PlanStep]) -> bool:
+    if not step:
+        return False
+    kind = step.get('kind')
+    if kind == DIRECT_STEP_KIND:
+        return True
+    if kind:
+        return False
+    return str(step.get('id') or '') == DIRECT_STEP_ID
+
+
 def retrieve_plan(plan: List[PlanStep]) -> List[PlanStep]:
-    return [s for s in (plan or []) if not is_llm_step(s)]
+    """规划出的检索子步（不含纯 LLM、不含原问题直检）。"""
+    return [
+        s for s in (plan or [])
+        if not is_llm_step(s) and not is_direct_step(s)
+    ]
 
 
 def inject_llm_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
@@ -208,11 +225,17 @@ def inject_llm_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
             new_id = 'r-llm'
             renames[sid] = new_id
             sid = new_id
+        existing_kind = s.get('kind')
+        kind = (
+            DIRECT_STEP_KIND
+            if existing_kind == DIRECT_STEP_KIND
+            else RETRIEVE_STEP_KIND
+        )
         out.append(PlanStep(
             id=sid,
             question=(s.get('question') or '').strip(),
             depends_on=list(s.get('depends_on') or []),
-            kind=RETRIEVE_STEP_KIND,
+            kind=kind,
         ))
     if renames:
         for s in out:
@@ -224,6 +247,44 @@ def inject_llm_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
         question=q,
         depends_on=[],
         kind=LLM_STEP_KIND,
+    ))
+    return out
+
+
+def inject_direct_retrieve_step(plan: List[PlanStep], query: str) -> List[PlanStep]:
+    """
+    并行加入「用原始总问题直接检索作答」步（depends_on=[]，不计入 max_steps）。
+
+    仅应在多跳（规划检索子步 > 1）时调用；单跳本身就是原问题直检。
+    """
+    q = (query or '').strip()
+    if any(is_direct_step(s) for s in (plan or [])):
+        return list(plan or [])
+
+    out: List[PlanStep] = []
+    renames: Dict[str, str] = {}
+    for s in plan or []:
+        sid = str(s.get('id') or '').strip() or str(len(out) + 1)
+        if sid == DIRECT_STEP_ID and not is_direct_step(s):
+            new_id = 'r-direct'
+            renames[sid] = new_id
+            sid = new_id
+        out.append(PlanStep(
+            id=sid,
+            question=(s.get('question') or '').strip(),
+            depends_on=list(s.get('depends_on') or []),
+            kind=s.get('kind') or RETRIEVE_STEP_KIND,
+        ))
+    if renames:
+        for s in out:
+            s['depends_on'] = [
+                renames.get(d, d) for d in (s.get('depends_on') or [])
+            ]
+    out.append(PlanStep(
+        id=DIRECT_STEP_ID,
+        question=q,
+        depends_on=[],
+        kind=DIRECT_STEP_KIND,
     ))
     return out
 
@@ -297,6 +358,19 @@ def format_llm_answer(plan: List[PlanStep], results: Dict[str, StepResult]) -> s
         a = (r.get('answer') or '').strip()
         return a or '（纯 LLM 无结论）'
     return '（无纯 LLM 回答）'
+
+
+def format_direct_answer(plan: List[PlanStep], results: Dict[str, StepResult]) -> str:
+    for s in plan or []:
+        if not is_direct_step(s):
+            continue
+        r = results.get(s['id']) or {}
+        a = (r.get('answer') or '').strip()
+        src = ' / '.join(r.get('sources') or []) or '（无）'
+        if a:
+            return f'来源：{src}\n{a}'
+        return '（原问题直检无结论）'
+    return '（无。本题未做原问题直检，忽略本段。）'
 
 def step_result_from_skill(
     *,

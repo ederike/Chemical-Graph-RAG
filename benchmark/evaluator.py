@@ -321,8 +321,15 @@ class QueryEvaluator:
                 ans = (r.get("answer") or "").strip()
                 src = r.get("sources") or []
                 status = r.get("status")
+                kind_raw = str(s.get("kind") or "").strip().lower()
+                if kind_raw == "llm" or sid == "llm":
+                    kind_label = "纯LLM"
+                elif kind_raw == "direct" or sid == "direct":
+                    kind_label = "原问题直检"
+                else:
+                    kind_label = "检索"
 
-                lines.append(f"### Step {sid}  ·  deps: {deps_s}")
+                lines.append(f"### Step {sid}  ·  {kind_label}  ·  deps: {deps_s}")
                 lines.append(f"planned:  {planned}")
                 if resolved and resolved != planned:
                     lines.append(f"resolved: {resolved}")

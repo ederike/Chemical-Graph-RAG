@@ -623,6 +623,9 @@ class AgentConfig(BaseModel):
     use_cache: bool = True
     max_steps: int = 12
     enable_query_rewrite: bool = False
+    # 多跳时额外用原始总问题检索作答一次，结果只给 synthesize 做对照。
+    # 单跳本身就是原问题直检，即使打开也会跳过，避免重复检索。
+    enable_direct_retrieve: bool = False
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
 
@@ -639,6 +642,20 @@ class AgentConfig(BaseModel):
         except (TypeError, ValueError):
             return 12
         return max(1, n)
+
+    @field_validator("enable_direct_retrieve", mode="before")
+    @classmethod
+    def _coerce_direct_retrieve(cls, v):
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        s = str(v).strip().lower()
+        if s in ("true", "1", "yes", "on"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        return bool(v)
 
 class MysqlConfig(BaseModel):
     """Generic MySQL connection block (e.g. dm_data_mysql)."""

@@ -127,6 +127,7 @@ retrieve:
 
 agent:
   max_steps: 12
+  enable_direct_retrieve: false  # 多跳时用原问题再检索一次给 synthesize 参考；单跳跳过。默认关
 ```
 
 4. 把 PDF 放到 `example/a/doc/`。若走 OSS，在 YAML 中配置 `oss_download` / `dm_data_mysql` / `ali_oss`，并在 `main.py` 中打开 `graph.download_from_oss()`（以及按需的 `graph.dedupe_downloaded_docs()`）。
@@ -183,7 +184,7 @@ graph.vectorization()
 print(graph.query('该产品的相对密度是多少？', mode='dual_path', pretty=True))
 ```
 
-**多跳 Agent**（规划检索步，单跳可一次检索作答，多跳按中间结论继续检索，最多 `agent.max_steps` 步）：
+**多跳 Agent**（规划检索步，单跳可一次检索作答，多跳按中间结论继续检索，最多 `agent.max_steps` 步；`agent.enable_direct_retrieve: true` 时多跳会再用原问题直检一次给最终汇总参考，单跳自动跳过）：
 
 ```python
 print(graph.agent_query(
