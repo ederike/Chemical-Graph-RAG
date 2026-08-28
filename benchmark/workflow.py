@@ -271,10 +271,16 @@ class TestQueryWorkflow:
         print(f"[loaded] eval_results <- {path}", file=sys.stderr)
         return data
 
-    def generate_questions(self, save: bool = True) -> Dict[str, Any]:
+    def generate_questions(
+        self,
+        save: bool = True,
+        *,
+        max_doc_id: int = 0,
+    ) -> Dict[str, Any]:
         """
         步骤 1：生成多跳问题集。
         写出路径：paths.questions_filename / questions_path
+        max_doc_id>0 时只从 id<=该值的文档抽样（TDS 范围）。
         """
         self.setup_llm()
         gen = QuestionGenerator(
@@ -289,6 +295,7 @@ class TestQueryWorkflow:
             sleep_between=self.cfg.gen_sleep_between,
             num_thread=self.cfg.gen_num_thread,
             question_gen_prompt=self.cfg.question_gen_prompt,
+            max_doc_id=max_doc_id,
         )
         dataset = gen.generate_all()
         dataset.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()

@@ -234,10 +234,10 @@ class BaseVDB:
     After each vectorization checkpoint the active shard is saved, sealed,
     unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
     (shard_max_vectors × dim × 4B, or × 2B when index_quant=fp16).
-    Search merges sealed + active; sealed shards are loaded one-by-one.
-    search(..., max_vectors=N) only walks a prefix of shards (write order)
-    and keeps FAISS ids <= N, so an early-ingested slice (e.g. TDS) can
-    skip later patent shards.
+    Search merges sealed + active. Default: sealed shards load one-by-one
+    and unload (build-friendly). pin_shards(max_vectors=N) keeps that prefix
+    in RAM; search uses resident handles and falls back to load/unload for
+    anything not pinned. unpin_shards() releases them.
 
     index_type:
       flat_l2 — IndexFlatL2 (exact, full scan)
@@ -298,6 +298,9 @@ class BaseVDB:
         self.index_add_seconds = 0.0
         self.index_add_count = 0
         self.last_search_stats = {}
+        self._resident = {}            # name -> FassiVDB (search pin)
+        self._resident_lock = threading.RLock()
+        self._resident_max_vectors = 0
         self._deleted = set()
         self._deleted_lock = threading.Lock()
 
@@ -770,6 +773,107 @@ class BaseVDB:
         names.sort(key=self._shard_index)
         return names
 
+    def pin_shards(self, *, max_vectors: int = 0) -> dict:
+        """
+        Load a search prefix into RAM and keep the handles.
+
+        max_vectors: same meaning as search() (0 = all sealed shards).
+        Idempotent when already pinned with the same cap.
+        """
+        t0 = time.perf_counter()
+        try:
+            cap = int(max_vectors or 0)
+        except (TypeError, ValueError):
+            cap = 0
+        if cap < 0:
+            cap = 0
+
+        if not self._sharding:
+            n = int(self.vdb.ntotal or 0) if self.vdb is not None else 0
+            return {
+                'sharding': False,
+                'pinned': True,
+                'already': True,
+                'max_vectors': cap,
+                'shards': ['mono'] if n else [],
+                'ntotal': n,
+                'bytes': 0,
+                'seconds': round(time.perf_counter() - t0, 3),
+            }
+
+        with self._resident_lock:
+            if self._resident and int(self._resident_max_vectors or 0) == cap:
+                ntotal = sum(int(h.ntotal or 0) for h in self._resident.values())
+                return {
+                    'sharding': True,
+                    'pinned': True,
+                    'already': True,
+                    'max_vectors': cap,
+                    'shards': list(self._resident.keys()),
+                    'ntotal': ntotal,
+                    'bytes': 0,
+                    'seconds': round(time.perf_counter() - t0, 3),
+                }
+
+            self._unpin_unlocked()
+            loaded = []
+            scanned = 0
+            nbytes = 0
+            for name in self._ordered_sealed_names():
+                if cap > 0 and scanned >= cap:
+                    break
+                path = self.shards_dir / name
+                if not path.exists() or path.stat().st_size < 1024:
+                    continue
+                handle = self._make_faiss(path, create_empty=False)
+                n = int(handle.ntotal or 0)
+                if n <= 0:
+                    handle.unload()
+                    continue
+                self._resident[name] = handle
+                scanned += n
+                nbytes += int(path.stat().st_size)
+                loaded.append(name)
+
+            self._resident_max_vectors = cap
+            return {
+                'sharding': True,
+                'pinned': bool(loaded),
+                'already': False,
+                'max_vectors': cap,
+                'shards': loaded,
+                'ntotal': scanned,
+                'bytes': nbytes,
+                'seconds': round(time.perf_counter() - t0, 3),
+            }
+
+    def unpin_shards(self) -> dict:
+        """Unload all pin_shards handles. No-op if nothing is pinned."""
+        with self._resident_lock:
+            n = len(self._resident)
+            self._unpin_unlocked()
+            return {'unpinned': n}
+
+    def _unpin_unlocked(self):
+        for handle in self._resident.values():
+            try:
+                handle.unload()
+            except Exception:
+                pass
+        self._resident = {}
+        self._resident_max_vectors = 0
+
+    def resident_stats(self) -> dict:
+        with self._resident_lock:
+            names = list(self._resident.keys())
+            ntotal = sum(int(h.ntotal or 0) for h in self._resident.values())
+            return {
+                'pinned': bool(names),
+                'max_vectors': int(self._resident_max_vectors or 0),
+                'shards': names,
+                'ntotal': ntotal,
+            }
+
     def search(self, vector: list, topk: int = 10, *, max_vectors: int = 0):
         """
         ANN search. max_vectors>0 keeps FAISS ids <= N and, in sharded mode,
@@ -846,6 +950,8 @@ class BaseVDB:
         opened = 0
         scanned = 0
         skipped_tail = False
+        resident_hits = 0
+        resident_misses = 0
 
         def _consume(distances, ids):
             if ids is None:
@@ -867,14 +973,27 @@ class BaseVDB:
             path = self.shards_dir / name
             if not path.exists():
                 continue
-            tmp = self._make_faiss(path, create_empty=False)
+            handle = None
+            owned = False
+            with self._resident_lock:
+                pinned = self._resident.get(name)
+                if pinned is not None and pinned.vdb is not None:
+                    handle = pinned
+                else:
+                    handle = self._make_faiss(path, create_empty=False)
+                    owned = True
             try:
-                distances, ids = tmp.search(vector, fetch_k)
+                distances, ids = handle.search(vector, fetch_k)
                 _consume(distances, ids)
-                scanned += int(tmp.ntotal or 0)
+                scanned += int(handle.ntotal or 0)
                 opened += 1
+                if owned:
+                    resident_misses += 1
+                else:
+                    resident_hits += 1
             finally:
-                tmp.unload()
+                if owned:
+                    handle.unload()
 
         if not (cap > 0 and scanned >= cap):
             if self.vdb is not None and self.vdb.vdb is not None:
@@ -891,6 +1010,8 @@ class BaseVDB:
             'shards_total': n_total,
             'ntotal_scanned': scanned,
             'skipped_tail': skipped_tail,
+            'resident_hits': resident_hits,
+            'resident_misses': resident_misses,
         }
         pairs = [(-neg_d, i) for neg_d, i in heap]
         return self._dedupe_hits(pairs, topk)

@@ -101,17 +101,34 @@ def resolve_path(path: str | Path, base: Optional[Path] = None) -> Path:
     root = base or project_root()
     return (root / p).resolve()
 
-def load_docs_from_db(db_path: str | Path) -> List[Dict[str, Any]]:
-    """读取 main.db 的 doc 表，返回 id/name/content 列表。"""
+def load_docs_from_db(
+    db_path: str | Path,
+    *,
+    max_doc_id: int = 0,
+) -> List[Dict[str, Any]]:
+    """读取 main.db 的 doc 表，返回 id/name/content 列表。
+
+    max_doc_id>0 时只取 id <= max_doc_id（例如 TDS 范围）。
+    """
     db_path = resolve_path(db_path)
     if not db_path.exists():
         raise FileNotFoundError(f"数据库不存在: {db_path}")
+    try:
+        cap = int(max_doc_id or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    sql = (
+        "SELECT id, name, content FROM doc "
+        "WHERE content IS NOT NULL AND TRIM(content) != ''"
+    )
+    params: list = []
+    if cap > 0:
+        sql += " AND id <= ?"
+        params.append(cap)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT id, name, content FROM doc WHERE content IS NOT NULL AND TRIM(content) != ''"
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     finally:
         conn.close()
     docs = []

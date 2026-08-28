@@ -53,6 +53,7 @@ class QuestionGenerator:
         sleep_between: float = 0.0,
         num_thread: int = 1,
         question_gen_prompt: str = "QUESTION_GEN_USER",
+        max_doc_id: int = 0,
     ):
         self.llm = llm
         self.model_args = dict(model_args or {})
@@ -77,6 +78,10 @@ class QuestionGenerator:
             nt = 1
         self.num_thread = max(1, nt)
         self.question_gen_prompt = self._resolve_prompt_key(question_gen_prompt)
+        try:
+            self.max_doc_id = max(0, int(max_doc_id or 0))
+        except (TypeError, ValueError):
+            self.max_doc_id = 0
 
         self._rng = random.Random(self.seed)
         self.docs: List[Dict[str, Any]] = []
@@ -103,7 +108,7 @@ class QuestionGenerator:
 
     def load_docs(self, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
         path = db_path or self.db_path
-        self.docs = load_docs_from_db(path)
+        self.docs = load_docs_from_db(path, max_doc_id=self.max_doc_id)
         self.db_path = str(resolve_path(path))
         return self.docs
 
@@ -332,6 +337,8 @@ class QuestionGenerator:
                 "hop_counts": {str(k): v for k, v in self.hop_counts.items()},
                 "seed": self.seed,
                 "question_gen_prompt": self.question_gen_prompt,
+                "max_doc_id": self.max_doc_id,
+                "n_source_docs": len(self.docs),
                 "num_thread": workers,
                 "model": (self.model_args or {}).get("model"),
                 "total": len(out_questions),

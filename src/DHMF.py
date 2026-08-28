@@ -817,6 +817,33 @@ class DHMF:
             self.retrieve_module._precomputed = False
         return out
 
+    def pin_retrieve_indexes(self, db_name=None):
+        """
+        检索前常驻：按 retrieve.chunk_max_vectors / node_max_vectors
+        把对应 FAISS 分片 load 进当前进程内存。
+
+        与 vectorization 一样是流水线独立一步；不 pin 时检索仍走按片
+        load/unload。评测/批量查询前调用一次，结束后 unpin_retrieve_indexes。
+        须与检索在同一进程、同一 DHMF 实例。构建/vectorization 期间不要 pin。
+        """
+        self.logger.info(
+            f"Start pin_retrieve_indexes "
+            f"chunk_max={getattr(self.config.retrieve, 'chunk_max_vectors', 0)} "
+            f"node_max={getattr(self.config.retrieve, 'node_max_vectors', 0)}"
+        )
+        out = self.retrieve_module.pin_indexes(db_name)
+        for name, stats in (out or {}).items():
+            self.logger.info(f"Finish pin_retrieve_indexes {name}: {stats}")
+        return out
+
+    def unpin_retrieve_indexes(self, db_name=None):
+        """卸载 pin_retrieve_indexes 常驻的分片，RAM 回到按片检索。"""
+        self.logger.info('Start unpin_retrieve_indexes')
+        out = self.retrieve_module.unpin_indexes(db_name)
+        for name, stats in (out or {}).items():
+            self.logger.info(f"Finish unpin_retrieve_indexes {name}: {stats}")
+        return out
+
     @staticmethod
     def parse_query_answer(text: str) -> dict:
         """

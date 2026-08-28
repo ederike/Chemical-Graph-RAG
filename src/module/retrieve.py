@@ -82,6 +82,9 @@ class Retrieve:
       chunk_max_vectors / node_max_vectors（0=全库）：
         只搜先写入的前 N 条（FAISS id ≤ N，从 0.vdb 起打开分片直到 ntotal≥N）。
         chunk_max_vectors 同时限制预加载的 chunk/doc/hyperedge 与关键词 FTS。
+      pin_indexes / unpin_indexes：
+        独立两步，把上述范围内的 FAISS 分片常驻进程内存；检索优先用常驻，
+        未 pin 时回退为按片 load/unload。
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
       5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
          false：每文档头块 + 命中索引块（原文序、块去重）
@@ -102,6 +105,44 @@ class Retrieve:
         except (TypeError, ValueError):
             return 0
 
+    def pin_indexes(self, db_name=None) -> dict:
+        """
+        按 retrieve.chunk_max_vectors / node_max_vectors 把分片读进 RAM。
+        db_name: 'chunk' / 'node' / None（两路都 pin）。
+        """
+        names = ['chunk', 'node'] if db_name is None else [db_name]
+        out = {}
+        for name in names:
+            vdb = self.vdb.get(name)
+            if vdb is None or not hasattr(vdb, 'pin_shards'):
+                continue
+            cap = self._scope_max_vectors(name)
+            stats = vdb.pin_shards(max_vectors=cap)
+            mb = float(stats.get('bytes') or 0) / (1024 * 1024)
+            self.logger.info(
+                f"[retrieve] pin {name} max_vectors={cap} "
+                f"shards={len(stats.get('shards') or [])} "
+                f"ntotal={stats.get('ntotal')} ~{mb:.0f}MB "
+                f"already={stats.get('already')} dt={stats.get('seconds')}s"
+            )
+            out[name] = stats
+        return out
+
+    def unpin_indexes(self, db_name=None) -> dict:
+        """释放 pin_indexes 常驻的 FAISS 分片。"""
+        names = ['chunk', 'node'] if db_name is None else [db_name]
+        out = {}
+        for name in names:
+            vdb = self.vdb.get(name)
+            if vdb is None or not hasattr(vdb, 'unpin_shards'):
+                continue
+            stats = vdb.unpin_shards()
+            self.logger.info(
+                f"[retrieve] unpin {name} unpinned={stats.get('unpinned')}"
+            )
+            out[name] = stats
+        return out
+
     def vector_match(self, db_name, vector, topk=10, max_vectors=None):
         vdb = self.vdb[db_name]
         db = self.db[db_name]
@@ -120,6 +161,8 @@ class Retrieve:
                 f"shards={stats.get('shards_opened')}/{stats.get('shards_total')} "
                 f"ntotal_scanned={stats.get('ntotal_scanned')} "
                 f"skipped_tail={stats.get('skipped_tail')} "
+                f"resident={stats.get('resident_hits')}/"
+                f"{(stats.get('resident_hits') or 0) + (stats.get('resident_misses') or 0)} "
                 f"hits={len(vdb_res or [])}"
             )
         res = []
