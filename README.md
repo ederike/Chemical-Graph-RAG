@@ -122,6 +122,8 @@ retrieve:
   enable_keyword_minority: true   # 少数词（牌号/CAS/货号），默认开
   enable_keyword_majority: false  # 多数词（字段名），默认关
   enable_slice_family_expand: false  # 扩到同源全部切开文档；开则忽略全文扩展
+  chunk_max_vectors: 0          # 标量 N=0..N；[a, b]=id 闭区间
+  node_max_vectors: 0
   enable_rerank: true
   rerank_top_k: 10
   embedding_base_url: 'http://<Embedding网关>/v1'

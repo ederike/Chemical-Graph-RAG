@@ -67,6 +67,7 @@ from benchmark.config import BenchmarkConfig
 from benchmark.evaluator import QueryEvaluator
 from benchmark.utils import resolve_path
 from benchmark.workflow import TestQueryWorkflow
+from src.utils.config import parse_vector_id_range
 
 _TOPK_DIR_RE = re.compile(r"^benchmark_result_topk=(\d+)$")
 
@@ -96,20 +97,33 @@ def _find_evals_file(folder: Path, preferred: str) -> Optional[Path]:
     return hits[0] if hits else None
 
 
-def _tds_max_doc_id(db_path: Path, chunk_max_vectors: int) -> int:
-    """TDS 文档上界：chunk.id <= chunk_max_vectors 的 max(doc_id)。"""
+def _tds_max_doc_id(
+    db_path: Path,
+    chunk_max_vectors: int,
+    chunk_lo: int = 0,
+) -> int:
+    """范围内 chunk 的 max(doc_id)。lo/hi 为 0 表示该端不限制。"""
     try:
         cap = int(chunk_max_vectors or 0)
     except (TypeError, ValueError):
         cap = 0
-    if cap <= 0:
+    try:
+        lo = int(chunk_lo or 0)
+    except (TypeError, ValueError):
+        lo = 0
+    if cap <= 0 and lo <= 0:
         return 0
+    sql = "SELECT MAX(doc_id) FROM chunk WHERE 1=1"
+    params = []
+    if lo > 0:
+        sql += " AND id >= ?"
+        params.append(lo)
+    if cap > 0:
+        sql += " AND id <= ?"
+        params.append(cap)
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        row = conn.execute(
-            "SELECT MAX(doc_id) FROM chunk WHERE id <= ?",
-            (cap,),
-        ).fetchone()
+        row = conn.execute(sql, tuple(params)).fetchone()
     finally:
         conn.close()
     if not row or row[0] is None:
@@ -146,21 +160,24 @@ def _run_generate(
 
     wf = TestQueryWorkflow(cfg)
     dcfg = wf._load_dhmf_config()
-    chunk_max = int(getattr(dcfg.retrieve, "chunk_max_vectors", 0) or 0)
+    chunk_lo, chunk_hi = parse_vector_id_range(
+        getattr(dcfg.retrieve, "chunk_max_vectors", 0)
+    )
     db_path = Path(cfg.db_path)
-    max_doc_id = _tds_max_doc_id(db_path, chunk_max)
+    max_doc_id = _tds_max_doc_id(db_path, chunk_hi, chunk_lo)
     out = wf.cfg.questions_file()
 
     print(
-        f"[sweep] generate TDS pool chunk_max_vectors={chunk_max} "
-        f"max_doc_id={max_doc_id} hop_counts={wf.cfg.hop_counts} "
-        f"seed={wf.cfg.seed} → {out}",
+        f"[sweep] generate TDS pool chunk_max_vectors="
+        f"{getattr(dcfg.retrieve, 'chunk_max_vectors', 0)!r} "
+        f"id_range={chunk_lo}..{chunk_hi} max_doc_id={max_doc_id} "
+        f"hop_counts={wf.cfg.hop_counts} seed={wf.cfg.seed} → {out}",
         file=sys.stderr,
     )
     dataset = wf.generate_questions(save=True, max_doc_id=max_doc_id)
     meta = dataset.setdefault("meta", {})
     meta["scope"] = "tds"
-    meta["chunk_max_vectors"] = chunk_max
+    meta["chunk_max_vectors"] = getattr(dcfg.retrieve, "chunk_max_vectors", 0)
     meta["max_doc_id"] = max_doc_id
     wf.save_json(dataset, out)
     n = len(dataset.get("questions") or [])

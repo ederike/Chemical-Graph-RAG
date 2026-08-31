@@ -819,7 +819,7 @@ class DHMF:
 
     def pin_retrieve_indexes(self, db_name=None):
         """
-        检索前常驻：按 retrieve.chunk_max_vectors / node_max_vectors
+        检索前常驻：按 retrieve.chunk/node_max_vectors
         把对应 FAISS 分片 load 进当前进程内存。
 
         与 vectorization 一样是流水线独立一步；不 pin 时检索仍走按片
@@ -828,8 +828,8 @@ class DHMF:
         """
         self.logger.info(
             f"Start pin_retrieve_indexes "
-            f"chunk_max={getattr(self.config.retrieve, 'chunk_max_vectors', 0)} "
-            f"node_max={getattr(self.config.retrieve, 'node_max_vectors', 0)}"
+            f"chunk_max_vectors={getattr(self.config.retrieve, 'chunk_max_vectors', 0)} "
+            f"node_max_vectors={getattr(self.config.retrieve, 'node_max_vectors', 0)}"
         )
         out = self.retrieve_module.pin_indexes(db_name)
         for name, stats in (out or {}).items():

@@ -156,12 +156,13 @@ class ChunkDB(BaseDB):
         keywords,
         *,
         max_id: int = 0,
+        min_id: int = 0,
         limit: int = 0,
     ) -> set:
         """
         对已小写入库的 chunk_fts 做子串检索，返回 chunk id 集合。
         词长 >= 3：FTS5 MATCH（trigram）；更短：instr（C 层扫描小写正文）。
-        max_id>0 时只返回 rowid <= max_id（范围检索）。
+        min_id/max_id>0 时限制 rowid 闭区间。
         limit>0 时最多返回 limit 条（instr 全表扫描可提前停）。
         """
         out = set()
@@ -172,7 +173,11 @@ class ChunkDB(BaseDB):
         if not self.fts_schema_ok():
             self.ensure_fts()
         try:
-            cap = int(max_id or 0)
+            lo = max(0, int(min_id or 0))
+        except (TypeError, ValueError):
+            lo = 0
+        try:
+            cap = max(0, int(max_id or 0))
         except (TypeError, ValueError):
             cap = 0
         try:
@@ -180,7 +185,9 @@ class ChunkDB(BaseDB):
         except (TypeError, ValueError):
             lim = 0
         for kw in kws:
-            out.update(self._fts_match_one(kw, max_id=cap, limit=lim))
+            out.update(self._fts_match_one(
+                kw, min_id=lo, max_id=cap, limit=lim,
+            ))
         return out
 
     def _fts_match_one(
@@ -188,12 +195,17 @@ class ChunkDB(BaseDB):
         kw_cf: str,
         *,
         max_id: int = 0,
+        min_id: int = 0,
         limit: int = 0,
     ) -> set:
         if not kw_cf:
             return set()
         try:
-            cap = int(max_id or 0)
+            lo = max(0, int(min_id or 0))
+        except (TypeError, ValueError):
+            lo = 0
+        try:
+            cap = max(0, int(max_id or 0))
         except (TypeError, ValueError):
             cap = 0
         try:
@@ -202,6 +214,9 @@ class ChunkDB(BaseDB):
             lim = 0
         extra = ""
         params: list = []
+        if lo > 0:
+            extra += " AND rowid >= ?"
+            params.append(lo)
         if cap > 0:
             extra += " AND rowid <= ?"
             params.append(cap)

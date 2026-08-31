@@ -28,6 +28,39 @@ def _none_to_empty(v):
     """YAML empty keys often load as None; treat as empty string."""
     return "" if v is None else v
 
+
+def _nonneg_int(v, default: int = 0) -> int:
+    if v is None or v == "":
+        return default
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_vector_id_range(raw=0) -> tuple:
+    """
+    解析 *_max_vectors：(lo, hi)，0 表示该端不限制。
+
+      N        → (0, N)     从 0 到 N
+      [a, b]   → (a, b)     id 闭区间
+    a>b 时对调。
+    """
+    if isinstance(raw, (list, tuple)):
+        vals = [x for x in raw if x is not None and x != ""]
+        if len(vals) >= 2:
+            lo = _nonneg_int(vals[0], 0)
+            hi = _nonneg_int(vals[1], 0)
+        elif len(vals) == 1:
+            lo, hi = 0, _nonneg_int(vals[0], 0)
+        else:
+            lo, hi = 0, 0
+    else:
+        lo, hi = 0, _nonneg_int(raw, 0)
+    if lo > 0 and hi > 0 and lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
 class SettingsConfig(BaseModel):
     working_path: str
     debug: bool = False
@@ -504,10 +537,12 @@ class RetrieveConfig(BaseModel):
     # 三路检索（chunk / node / keyword）是否并行。
     # true / parallel：墙钟 ≈ max；false / serial：串行，峰值内存更低。
     enable_parallel_paths: bool = True
-    # 范围检索：0=全库。>0 只搜 FAISS id / SQL id ≤ N 的前缀分片
-    #（按写入顺序，从 0.vdb 起），并限制预加载的 chunk/doc/hyperedge 与 FTS。
-    node_max_vectors: int = 0
-    chunk_max_vectors: int = 0
+    # 范围检索：按 FAISS / SQL id（写入顺序）。0=全库。
+    #   标量 N     → 0..N
+    #   [a, b]     → a..b（闭区间）
+    # 同时限制预加载的 chunk/doc/hyperedge 与关键词 FTS。
+    node_max_vectors: Union[int, List[int]] = 0
+    chunk_max_vectors: Union[int, List[int]] = 0
     keyword_candidate_k: int = 50
     keyword_top_k: int = 10
     # 关键词 FTS 文档频率上限。命中超过该值视为停用词（如「产品」「方法」），
@@ -581,12 +616,35 @@ class RetrieveConfig(BaseModel):
     @field_validator(
         "node_max_vectors",
         "chunk_max_vectors",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_vector_id_range(cls, v):
+        """N → 0..N；[a, b] → a..b。0=全库。"""
+        if v is None or v == "":
+            return 0
+        if isinstance(v, (list, tuple)):
+            vals = [_nonneg_int(x, 0) for x in v if x is not None and x != ""]
+            if len(vals) >= 2:
+                lo, hi = vals[0], vals[1]
+                if lo > 0 and hi > 0 and lo > hi:
+                    lo, hi = hi, lo
+                return [lo, hi]
+            if len(vals) == 1:
+                return vals[0]
+            return 0
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator(
         "keyword_max_df",
         mode="before",
     )
     @classmethod
     def _coerce_max_vectors(cls, v):
-        """0 = 不限制（全库）；负数钳到 0。"""
+        """0 = 不限制；负数钳到 0。"""
         if v is None or v == "":
             return 0
         try:

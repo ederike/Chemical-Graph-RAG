@@ -37,6 +37,53 @@ def faiss_lock_for(vdb_path) -> threading.Lock:
     return _lock_for(_faiss_locks, _faiss_locks_guard, vdb_path)
 
 
+def normalize_id_range(min_vectors=0, max_vectors=0) -> tuple:
+    """Inclusive FAISS/SQL id range (lo, hi). 0 on a side = unbounded."""
+    try:
+        lo = max(0, int(min_vectors or 0))
+    except (TypeError, ValueError):
+        lo = 0
+    try:
+        hi = max(0, int(max_vectors or 0))
+    except (TypeError, ValueError):
+        hi = 0
+    if lo > 0 and hi > 0 and lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def _id_in_range(i, lo: int, hi: int) -> bool:
+    try:
+        n = int(i)
+    except (TypeError, ValueError):
+        return False
+    if lo > 0 and n < lo:
+        return False
+    if hi > 0 and n > hi:
+        return False
+    return True
+
+
+def _shard_overlaps_range(id_start: int, ntotal: int, lo: int, hi: int) -> str:
+    """
+    Shard covering ids [id_start, id_start+ntotal-1] vs [lo, hi].
+    Return 'before' / 'after' / 'overlap' / 'empty'.
+    """
+    try:
+        n = int(ntotal or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 'empty'
+    shard_lo = int(id_start)
+    shard_hi = shard_lo + n - 1
+    if hi > 0 and shard_lo > hi:
+        return 'after'
+    if lo > 0 and shard_hi < lo:
+        return 'before'
+    return 'overlap'
+
+
 def normalize_index_quant(v) -> str:
     """none (float32) | fp16 (FAISS ScalarQuantizer QT_fp16)."""
     if isinstance(v, bool):
@@ -172,24 +219,59 @@ class BaseDB:
             params.append(int(limit))
         return self.db.execute(sql, tuple(params))
 
-    def search_all(self, *, max_id: int = 0):
-        """Load the table. max_id>0 → only rows with id <= max_id."""
+    def search_all(self, *, max_id: int = 0, min_id: int = 0):
+        """Load the table. min_id/max_id>0 限制 id >= min / id <= max。"""
         try:
-            cap = int(max_id or 0)
+            lo = max(0, int(min_id or 0))
         except (TypeError, ValueError):
-            cap = 0
-        if cap > 0:
-            sql = f"SELECT * FROM {self.table} WHERE id <= ?"
-            return self.db.execute(sql, (cap,))
+            lo = 0
+        try:
+            hi = max(0, int(max_id or 0))
+        except (TypeError, ValueError):
+            hi = 0
+        clauses = []
+        params = []
+        if lo > 0:
+            clauses.append("id >= ?")
+            params.append(lo)
+        if hi > 0:
+            clauses.append("id <= ?")
+            params.append(hi)
         sql = f"SELECT * FROM {self.table}"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+            return self.db.execute(sql, tuple(params))
         return self.db.execute(sql)
 
     def search_lte(self, key: str, value):
         """SELECT * WHERE key <= value. Unknown key → empty list."""
+        return self.search_range(key, max_value=value)
+
+    def search_range(self, key: str, *, min_value=0, max_value=0):
+        """SELECT * WHERE min_value <= key <= max_value。0=该端不限制。"""
         if key not in self.table_columns:
             return []
-        sql = f"SELECT * FROM {self.table} WHERE {key} <= ?"
-        return self.db.execute(sql, (value,))
+        try:
+            lo = max(0, int(min_value or 0))
+        except (TypeError, ValueError):
+            lo = 0
+        try:
+            hi = max(0, int(max_value or 0))
+        except (TypeError, ValueError):
+            hi = 0
+        clauses = []
+        params = []
+        if lo > 0:
+            clauses.append(f"{key} >= ?")
+            params.append(lo)
+        if hi > 0:
+            clauses.append(f"{key} <= ?")
+            params.append(hi)
+        sql = f"SELECT * FROM {self.table}"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+            return self.db.execute(sql, tuple(params))
+        return self.db.execute(sql)
 
     def list_ids(self):
         """Primary-key ids only (compact / reconcile)."""
@@ -235,9 +317,10 @@ class BaseVDB:
     unloaded, and a fresh empty active is opened. Peak RAM ≈ one shard
     (shard_max_vectors × dim × 4B, or × 2B when index_quant=fp16).
     Search merges sealed + active. Default: sealed shards load one-by-one
-    and unload (build-friendly). pin_shards(max_vectors=N) keeps that prefix
-    in RAM; search uses resident handles and falls back to load/unload for
-    anything not pinned. unpin_shards() releases them.
+    and unload (build-friendly). pin_shards(min_vectors=A, max_vectors=B)
+    keeps shards overlapping that id range in RAM; search uses resident
+    handles and falls back to load/unload for anything not pinned.
+    unpin_shards() releases them.
 
     index_type:
       flat_l2 — IndexFlatL2 (exact, full scan)
@@ -300,6 +383,7 @@ class BaseVDB:
         self.last_search_stats = {}
         self._resident = {}            # name -> FassiVDB (search pin)
         self._resident_lock = threading.RLock()
+        self._resident_min_vectors = 0
         self._resident_max_vectors = 0
         self._deleted = set()
         self._deleted_lock = threading.Lock()
@@ -773,20 +857,15 @@ class BaseVDB:
         names.sort(key=self._shard_index)
         return names
 
-    def pin_shards(self, *, max_vectors: int = 0) -> dict:
+    def pin_shards(self, *, max_vectors: int = 0, min_vectors: int = 0) -> dict:
         """
-        Load a search prefix into RAM and keep the handles.
+        Load overlapping shards into RAM and keep the handles.
 
-        max_vectors: same meaning as search() (0 = all sealed shards).
-        Idempotent when already pinned with the same cap.
+        min_vectors / max_vectors: same meaning as search() (0 = unbounded).
+        Idempotent when already pinned with the same range.
         """
         t0 = time.perf_counter()
-        try:
-            cap = int(max_vectors or 0)
-        except (TypeError, ValueError):
-            cap = 0
-        if cap < 0:
-            cap = 0
+        lo, hi = normalize_id_range(min_vectors, max_vectors)
 
         if not self._sharding:
             n = int(self.vdb.ntotal or 0) if self.vdb is not None else 0
@@ -794,7 +873,8 @@ class BaseVDB:
                 'sharding': False,
                 'pinned': True,
                 'already': True,
-                'max_vectors': cap,
+                'min_vectors': lo,
+                'max_vectors': hi,
                 'shards': ['mono'] if n else [],
                 'ntotal': n,
                 'bytes': 0,
@@ -802,13 +882,18 @@ class BaseVDB:
             }
 
         with self._resident_lock:
-            if self._resident and int(self._resident_max_vectors or 0) == cap:
+            if (
+                self._resident
+                and int(self._resident_min_vectors or 0) == lo
+                and int(self._resident_max_vectors or 0) == hi
+            ):
                 ntotal = sum(int(h.ntotal or 0) for h in self._resident.values())
                 return {
                     'sharding': True,
                     'pinned': True,
                     'already': True,
-                    'max_vectors': cap,
+                    'min_vectors': lo,
+                    'max_vectors': hi,
                     'shards': list(self._resident.keys()),
                     'ntotal': ntotal,
                     'bytes': 0,
@@ -819,9 +904,8 @@ class BaseVDB:
             loaded = []
             scanned = 0
             nbytes = 0
+            id_start = 0
             for name in self._ordered_sealed_names():
-                if cap > 0 and scanned >= cap:
-                    break
                 path = self.shards_dir / name
                 if not path.exists() or path.stat().st_size < 1024:
                     continue
@@ -830,17 +914,28 @@ class BaseVDB:
                 if n <= 0:
                     handle.unload()
                     continue
+                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                if rel == 'after':
+                    handle.unload()
+                    break
+                if rel == 'before':
+                    handle.unload()
+                    id_start += n
+                    continue
                 self._resident[name] = handle
                 scanned += n
                 nbytes += int(path.stat().st_size)
                 loaded.append(name)
+                id_start += n
 
-            self._resident_max_vectors = cap
+            self._resident_min_vectors = lo
+            self._resident_max_vectors = hi
             return {
                 'sharding': True,
                 'pinned': bool(loaded),
                 'already': False,
-                'max_vectors': cap,
+                'min_vectors': lo,
+                'max_vectors': hi,
                 'shards': loaded,
                 'ntotal': scanned,
                 'bytes': nbytes,
@@ -861,6 +956,7 @@ class BaseVDB:
             except Exception:
                 pass
         self._resident = {}
+        self._resident_min_vectors = 0
         self._resident_max_vectors = 0
 
     def resident_stats(self) -> dict:
@@ -869,61 +965,67 @@ class BaseVDB:
             ntotal = sum(int(h.ntotal or 0) for h in self._resident.values())
             return {
                 'pinned': bool(names),
+                'min_vectors': int(self._resident_min_vectors or 0),
                 'max_vectors': int(self._resident_max_vectors or 0),
                 'shards': names,
                 'ntotal': ntotal,
             }
 
-    def search(self, vector: list, topk: int = 10, *, max_vectors: int = 0):
+    def search(
+        self,
+        vector: list,
+        topk: int = 10,
+        *,
+        max_vectors: int = 0,
+        min_vectors: int = 0,
+    ):
         """
-        ANN search. max_vectors>0 keeps FAISS ids <= N and, in sharded mode,
-        only opens a prefix of shards (0.vdb, 1.vdb, …) until ntotal >= N.
-        0 / None = full corpus.
+        ANN search. min_vectors/max_vectors 限制 FAISS id 闭区间；
+        分片模式下只打开与该区间重叠的分片（跳过更前/更后的片）。
+        某一端 0 / None = 该端不限制。
         """
         vector = np.array(vector, dtype=np.float32).reshape(1, -1)
+        lo, hi = normalize_id_range(min_vectors, max_vectors)
         if topk <= 0:
             self.last_search_stats = {
-                'max_vectors': 0,
+                'min_vectors': lo,
+                'max_vectors': hi,
                 'shards_opened': 0,
                 'shards_total': 0,
                 'ntotal_scanned': 0,
+                'skipped_head': False,
                 'skipped_tail': False,
             }
             return []
-
-        try:
-            cap = int(max_vectors or 0)
-        except (TypeError, ValueError):
-            cap = 0
-        if cap < 0:
-            cap = 0
 
         fetch_k = self._search_fetch_k(topk)
 
         def _keep_id(i) -> bool:
             if not self._live_id(i):
                 return False
-            if cap > 0 and int(i) > cap:
-                return False
-            return True
+            return _id_in_range(i, lo, hi)
 
         if not self._sharding:
             if self.vdb is None:
                 self.last_search_stats = {
-                    'max_vectors': cap,
+                    'min_vectors': lo,
+                    'max_vectors': hi,
                     'shards_opened': 0,
                     'shards_total': 0,
                     'ntotal_scanned': 0,
+                    'skipped_head': False,
                     'skipped_tail': False,
                 }
                 return []
             distances, ids = self.vdb.search(vector, fetch_k)
             if ids is None:
                 self.last_search_stats = {
-                    'max_vectors': cap,
+                    'min_vectors': lo,
+                    'max_vectors': hi,
                     'shards_opened': 1,
                     'shards_total': 1,
                     'ntotal_scanned': int(self.vdb.ntotal or 0),
+                    'skipped_head': False,
                     'skipped_tail': False,
                 }
                 return []
@@ -933,15 +1035,16 @@ class BaseVDB:
                 if _keep_id(i)
             ]
             self.last_search_stats = {
-                'max_vectors': cap,
+                'min_vectors': lo,
+                'max_vectors': hi,
                 'shards_opened': 1,
                 'shards_total': 1,
                 'ntotal_scanned': int(self.vdb.ntotal or 0),
-                'skipped_tail': bool(cap > 0),
+                'skipped_head': bool(lo > 0),
+                'skipped_tail': bool(hi > 0),
             }
             return self._dedupe_hits(pairs, topk)
 
-        # Merge top-k across a prefix of sealed shards (+ active if needed).
         heap = []  # (distance, id) keep best topk (smallest L2)
         sealed_names = self._ordered_sealed_names()
         n_total = len(sealed_names) + (
@@ -949,9 +1052,11 @@ class BaseVDB:
         )
         opened = 0
         scanned = 0
+        skipped_head = False
         skipped_tail = False
         resident_hits = 0
         resident_misses = 0
+        id_start = 0
 
         def _consume(distances, ids):
             if ids is None:
@@ -962,14 +1067,22 @@ class BaseVDB:
                 i = int(i)
                 d = float(d)
                 if len(heap) < topk:
-                    heapq.heappush(heap, (-d, i))  # max-heap via negation
+                    heapq.heappush(heap, (-d, i))
                 elif d < -heap[0][0]:
                     heapq.heapreplace(heap, (-d, i))
 
+        def _search_handle(handle, *, owned: bool):
+            nonlocal opened, scanned, resident_hits, resident_misses
+            distances, ids = handle.search(vector, fetch_k)
+            _consume(distances, ids)
+            scanned += int(handle.ntotal or 0)
+            opened += 1
+            if owned:
+                resident_misses += 1
+            else:
+                resident_hits += 1
+
         for name in sealed_names:
-            if cap > 0 and scanned >= cap:
-                skipped_tail = True
-                break
             path = self.shards_dir / name
             if not path.exists():
                 continue
@@ -983,32 +1096,41 @@ class BaseVDB:
                     handle = self._make_faiss(path, create_empty=False)
                     owned = True
             try:
-                distances, ids = handle.search(vector, fetch_k)
-                _consume(distances, ids)
-                scanned += int(handle.ntotal or 0)
-                opened += 1
-                if owned:
-                    resident_misses += 1
-                else:
-                    resident_hits += 1
+                n = int(handle.ntotal or 0)
+                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                if rel == 'after':
+                    skipped_tail = True
+                    break
+                if rel == 'before' or rel == 'empty':
+                    skipped_head = skipped_head or rel == 'before'
+                    id_start += max(0, n)
+                    continue
+                _search_handle(handle, owned=owned)
+                id_start += max(0, n)
             finally:
                 if owned:
                     handle.unload()
 
-        if not (cap > 0 and scanned >= cap):
+        if not skipped_tail:
             if self.vdb is not None and self.vdb.vdb is not None:
-                distances, ids = self.vdb.search(vector, fetch_k)
-                _consume(distances, ids)
-                scanned += int(self.vdb.ntotal or 0)
-                opened += 1
+                n = int(self.vdb.ntotal or 0)
+                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                if rel == 'overlap':
+                    _search_handle(self.vdb, owned=False)
+                elif rel == 'after':
+                    skipped_tail = True
+                elif rel == 'before':
+                    skipped_head = True
         else:
             skipped_tail = True
 
         self.last_search_stats = {
-            'max_vectors': cap,
+            'min_vectors': lo,
+            'max_vectors': hi,
             'shards_opened': opened,
             'shards_total': n_total,
             'ntotal_scanned': scanned,
+            'skipped_head': skipped_head,
             'skipped_tail': skipped_tail,
             'resident_hits': resident_hits,
             'resident_misses': resident_misses,

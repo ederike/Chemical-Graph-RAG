@@ -1,7 +1,7 @@
 from typing import Dict
 import logging
 from ..utils.database import BaseDB, BaseVDB
-from ..utils.config import Config
+from ..utils.config import Config, parse_vector_id_range
 
 from ..utils.OpenAIAPI import Embedding, LLM, Reranker
 from ..utils.prompt import PROMPT
@@ -82,8 +82,8 @@ class Retrieve:
               墙钟 ≈ max(关键词路, 改写+嵌入+max(chunk, node))
         串行：chunk → node → keyword，峰值内存更低（分片向量检索不同时驻留）
       chunk_max_vectors / node_max_vectors（0=全库）：
-        只搜先写入的前 N 条（FAISS id ≤ N，从 0.vdb 起打开分片直到 ntotal≥N）。
-        chunk_max_vectors 同时限制预加载的 chunk/doc/hyperedge 与关键词 FTS。
+        标量 N：只搜 id ≤ N；[a, b]：只搜 a ≤ id ≤ b。
+        分片按 id 区间打开重叠片。chunk 范围同时限制预加载与关键词 FTS。
       pin_indexes / unpin_indexes：
         独立两步，把上述范围内的 FAISS 分片常驻进程内存；检索优先用常驻，
         未 pin 时回退为按片 load/unload。
@@ -97,23 +97,25 @@ class Retrieve:
            simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
            true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
     """
-    def _scope_max_vectors(self, db_name) -> int:
-        """0 = 全库。chunk/node 各自读 retrieve.*_max_vectors。"""
+    def _scope_vector_range(self, db_name) -> tuple:
+        """返回 (lo, hi)。标量 N → (0, N)；[a, b] → (a, b)。0 = 该端不限制。"""
         cfg = self.config.retrieve
         if db_name == 'node':
             raw = getattr(cfg, 'node_max_vectors', 0)
         elif db_name == 'chunk':
             raw = getattr(cfg, 'chunk_max_vectors', 0)
         else:
-            return 0
-        try:
-            return max(0, int(raw or 0))
-        except (TypeError, ValueError):
-            return 0
+            return 0, 0
+        return parse_vector_id_range(raw)
+
+    def _scope_max_vectors(self, db_name) -> int:
+        """兼容旧调用：只返回上界。0 = 不限制。"""
+        _, hi = self._scope_vector_range(db_name)
+        return hi
 
     def pin_indexes(self, db_name=None) -> dict:
         """
-        按 retrieve.chunk_max_vectors / node_max_vectors 把分片读进 RAM。
+        按 retrieve.chunk/node_max_vectors 把重叠分片读进 RAM。
         db_name: 'chunk' / 'node' / None（两路都 pin）。
         """
         names = ['chunk', 'node'] if db_name is None else [db_name]
@@ -122,11 +124,11 @@ class Retrieve:
             vdb = self.vdb.get(name)
             if vdb is None or not hasattr(vdb, 'pin_shards'):
                 continue
-            cap = self._scope_max_vectors(name)
-            stats = vdb.pin_shards(max_vectors=cap)
+            lo, hi = self._scope_vector_range(name)
+            stats = vdb.pin_shards(min_vectors=lo, max_vectors=hi)
             mb = float(stats.get('bytes') or 0) / (1024 * 1024)
             self.logger.info(
-                f"[retrieve] pin {name} max_vectors={cap} "
+                f"[retrieve] pin {name} id_range={lo}..{hi} "
                 f"shards={len(stats.get('shards') or [])} "
                 f"ntotal={stats.get('ntotal')} ~{mb:.0f}MB "
                 f"already={stats.get('already')} dt={stats.get('seconds')}s"
@@ -150,23 +152,34 @@ class Retrieve:
             out[name] = stats
         return out
 
-    def vector_match(self, db_name, vector, topk=10, max_vectors=None):
+    def vector_match(
+        self, db_name, vector, topk=10, max_vectors=None, min_vectors=None,
+    ):
         vdb = self.vdb[db_name]
         db = self.db[db_name]
-        if max_vectors is None:
-            max_vectors = self._scope_max_vectors(db_name)
-        try:
-            cap = max(0, int(max_vectors or 0))
-        except (TypeError, ValueError):
-            cap = 0
-        vdb_res = vdb.search(vector, topk, max_vectors=cap)
+        lo, hi = self._scope_vector_range(db_name)
+        if min_vectors is not None:
+            try:
+                lo = max(0, int(min_vectors or 0))
+            except (TypeError, ValueError):
+                lo = 0
+        if max_vectors is not None:
+            try:
+                hi = max(0, int(max_vectors or 0))
+            except (TypeError, ValueError):
+                hi = 0
+        vdb_res = vdb.search(
+            vector, topk, min_vectors=lo, max_vectors=hi,
+        )
         stats = getattr(vdb, 'last_search_stats', None) or {}
         if stats:
             self.logger.info(
                 f"[retrieve] {db_name} vdb search "
-                f"max_vectors={stats.get('max_vectors', cap)} "
+                f"min_vectors={stats.get('min_vectors', lo)} "
+                f"max_vectors={stats.get('max_vectors', hi)} "
                 f"shards={stats.get('shards_opened')}/{stats.get('shards_total')} "
                 f"ntotal_scanned={stats.get('ntotal_scanned')} "
+                f"skipped_head={stats.get('skipped_head')} "
                 f"skipped_tail={stats.get('skipped_tail')} "
                 f"resident={stats.get('resident_hits')}/"
                 f"{(stats.get('resident_hits') or 0) + (stats.get('resident_misses') or 0)} "
@@ -300,12 +313,13 @@ class Retrieve:
         else:
             self.last_fts_info = {}
 
-        chunk_max = self._scope_max_vectors('chunk')
+        chunk_lo, chunk_hi = self._scope_vector_range('chunk')
         self.all_chunks = list(
-            self.db['chunk'].search_all(max_id=chunk_max) or []
+            self.db['chunk'].search_all(min_id=chunk_lo, max_id=chunk_hi) or []
         )
         self.chunk_dict = {c['id']: c for c in self.all_chunks}
 
+        min_doc_id = None
         max_doc_id = 0
         for c in self.all_chunks:
             did = c.get('doc_id')
@@ -315,18 +329,29 @@ class Retrieve:
                 did_i = int(did)
             except (TypeError, ValueError):
                 continue
-            if did_i > max_doc_id:
+            if max_doc_id == 0 or did_i > max_doc_id:
                 max_doc_id = did_i
+            if min_doc_id is None or did_i < min_doc_id:
+                min_doc_id = did_i
+        min_doc_id = 0 if min_doc_id is None else min_doc_id
 
         hyper_db = self.db.get('hyperedge')
-        if chunk_max > 0 and hyper_db is not None and hasattr(hyper_db, 'search_lte'):
-            if max_doc_id > 0:
+        scoped = chunk_lo > 0 or chunk_hi > 0
+        if scoped and hyper_db is not None:
+            if max_doc_id > 0 and hasattr(hyper_db, 'search_range'):
+                doc_lo = min_doc_id if chunk_lo > 0 else 0
+                self.all_hyperedges = list(
+                    hyper_db.search_range(
+                        'doc_id', min_value=doc_lo, max_value=max_doc_id,
+                    ) or []
+                )
+            elif max_doc_id > 0 and hasattr(hyper_db, 'search_lte'):
                 self.all_hyperedges = list(
                     hyper_db.search_lte('doc_id', max_doc_id) or []
                 )
             else:
                 self.all_hyperedges = list(
-                    hyper_db.search_all(max_id=chunk_max) or []
+                    hyper_db.search_all(min_id=chunk_lo, max_id=chunk_hi) or []
                 )
         else:
             self.all_hyperedges = list(
@@ -362,17 +387,22 @@ class Retrieve:
                 self.doc_head_chunk[did] = head
 
         doc_db = self.db.get('doc')
-        if chunk_max > 0 and max_doc_id > 0 and doc_db is not None:
-            docs = list(doc_db.search_all(max_id=max_doc_id) or [])
+        if scoped and max_doc_id > 0 and doc_db is not None:
+            doc_lo = min_doc_id if chunk_lo > 0 else 0
+            docs = list(
+                doc_db.search_all(min_id=doc_lo, max_id=max_doc_id) or []
+            )
         else:
             docs = list((doc_db.search_all() if doc_db is not None else None) or [])
         self.doc_dict = {d['id']: d for d in docs}
         self._index_slice_families()
 
         self.logger.info(
-            f"[retrieve] precompute scope chunk_max_vectors={chunk_max} "
+            f"[retrieve] precompute scope "
+            f"chunk_id_range={chunk_lo}..{chunk_hi} "
             f"chunks={len(self.all_chunks)} docs={len(self.doc_dict)} "
-            f"hyperedges={len(self.all_hyperedges)} max_doc_id={max_doc_id} "
+            f"hyperedges={len(self.all_hyperedges)} "
+            f"min_doc_id={min_doc_id} max_doc_id={max_doc_id} "
             f"slice_families={len(self.docs_by_family)}"
         )
 
@@ -910,7 +940,7 @@ class Retrieve:
         skipped_df = []
         chunk_db = self.db.get('chunk')
 
-        chunk_max = self._scope_max_vectors('chunk')
+        chunk_lo, chunk_hi = self._scope_vector_range('chunk')
         try:
             max_df = int(
                 getattr(self.config.retrieve, 'keyword_max_df', 2500) or 0
@@ -922,7 +952,7 @@ class Retrieve:
 
         def _fts_term(kw: str) -> set:
             return chunk_db.fts_match_keywords(
-                [kw], max_id=chunk_max, limit=fetch_lim,
+                [kw], min_id=chunk_lo, max_id=chunk_hi, limit=fetch_lim,
             ) or set()
 
         def _absorb_terms(kws) -> tuple:
@@ -2514,8 +2544,8 @@ class Retrieve:
             f"full_body={body_mode if not slice_family else 'off(slice_family)'} "
             f"slice_family={slice_family} "
             f"rerank={enable_rerank} rerank_k={rerank_top} "
-            f"chunk_max_v={self._scope_max_vectors('chunk')} "
-            f"node_max_v={self._scope_max_vectors('node')} "
+            f"chunk_range={self._scope_vector_range('chunk')} "
+            f"node_range={self._scope_vector_range('node')} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "
             f"merged_chunks={n_merged_chunks} "
             f"materials={n_mat} heads={n_head} index={n_index} "
