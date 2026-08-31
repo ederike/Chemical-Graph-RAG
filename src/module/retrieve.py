@@ -71,8 +71,10 @@ class Retrieve:
       1) 改写 query 向量 ↔ chunk 内容向量 → 取 chunk_candidate_k（0=跳过）
       2) 改写 query 向量 ↔ node 内容向量 → 取 node_candidate_k（0=跳过）→ 映射所属 chunk
       3) 关键词精确匹配（可选 enable_keyword_exact；candidate/top 任一为 0 则跳过）：
-         LLM 抽取 minority/majority 关键词
-         → FTS5 MATCH 小写正文（短词 instr）；minority 命中够 candidate_k 则不再查 majority
+         少数词 / 多数词两路可独立开关（enable_keyword_minority 默认开，
+         enable_keyword_majority 默认关）。只开一路时用对应专用抽取提示词，
+         只检索该类词；两路都开时用合并提示词，FTS 仍先 minority 再 majority。
+         → FTS5 MATCH 小写正文（短词 instr）；少数词命中够 candidate_k 则不再查多数词
          → 少数值优先、多数值命中数排序取 keyword_candidate_k
          → 文档级首轮 rerank → keyword_top_k（只截关键词路，不伤向量路）
       enable_parallel_paths（默认 true）：
@@ -241,6 +243,8 @@ class Retrieve:
         self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
         self.last_keyword = {
             'enabled': False,
+            'enable_minority': False,
+            'enable_majority': False,
             'minority': [],
             'majority': [],
             'pool_chunks': 0,
@@ -649,20 +653,47 @@ class Retrieve:
             out.append(s)
         return out
 
-    def extract_keywords(self, query: str) -> dict:
+    def _keyword_extract_prompt_key(self, enable_minority: bool, enable_majority: bool) -> str:
+        """按开关选抽取提示词：只开少数词 / 只开多数词用专用模板，两路都开用合并模板。"""
+        if enable_minority and not enable_majority:
+            return 'keyword_extract_minority'
+        if enable_majority and not enable_minority:
+            return 'keyword_extract_majority'
+        return 'keyword_extract'
+
+    def extract_keywords(
+        self,
+        query: str,
+        *,
+        enable_minority: bool = True,
+        enable_majority: bool = False,
+    ) -> dict:
         """
         LLM 抽取 minority / majority 关键词。
+        只开少数词时用专用提示词，只抽少数词、不抽多数词；
+        只开多数词时同理。关闭的一类保证返回空列表。
         返回 {'minority': [...], 'majority': [...]}；失败时空列表。
         """
         original = (query or '').strip()
         empty = {'minority': [], 'majority': []}
         if not original:
             return empty
-
-        prompt = PROMPT.get('keyword_extract', '').format(query=original)
-        if not prompt:
-            self.logger.warning('[retrieve] keyword_extract prompt missing')
+        if not enable_minority and not enable_majority:
             return empty
+
+        prompt_key = self._keyword_extract_prompt_key(
+            bool(enable_minority), bool(enable_majority)
+        )
+        prompt_tpl = PROMPT.get(prompt_key) or ''
+        if not prompt_tpl:
+            # 专用模板缺失时回退到合并模板，再按开关丢弃未启用一类
+            prompt_tpl = PROMPT.get('keyword_extract') or ''
+        if not prompt_tpl:
+            self.logger.warning(
+                f"[retrieve] keyword extract prompt missing key={prompt_key!r}"
+            )
+            return empty
+        prompt = prompt_tpl.format(query=original)
 
         model_args = self._keyword_extract_model_args()
         t0 = time.perf_counter()
@@ -697,19 +728,25 @@ class Retrieve:
                 )
                 return empty
 
-            minority = self._normalize_keyword_list(
-                data.get('minority') or data.get('rare') or data.get('values')
-            )
-            majority = self._normalize_keyword_list(
-                data.get('majority') or data.get('common') or data.get('keys')
-            )
+            minority = []
+            majority = []
+            if enable_minority:
+                minority = self._normalize_keyword_list(
+                    data.get('minority') or data.get('rare') or data.get('values')
+                )
+            if enable_majority:
+                majority = self._normalize_keyword_list(
+                    data.get('majority') or data.get('common') or data.get('keys')
+                )
             # 同一词同时出现在两类时保留 minority（高区分度优先）
-            min_cf = {k.casefold() for k in minority}
-            majority = [k for k in majority if k.casefold() not in min_cf]
+            if minority and majority:
+                min_cf = {k.casefold() for k in minority}
+                majority = [k for k in majority if k.casefold() not in min_cf]
 
             dt = time.perf_counter() - t0
             self.logger.info(
                 f"[retrieve] keyword extract dt={dt:.3f}s "
+                f"prompt={prompt_key} "
                 f"cache_hit={bool(response.get('_cache_hit'))} "
                 f"minority={minority!r} majority={majority!r}"
             )
@@ -732,6 +769,7 @@ class Retrieve:
     ) -> list:
         """
         FTS5 MATCH（小写正文）精确包含匹配，构造候选池：
+          传入空列表的一类直接跳过（例如只开少数词时 majority=[]，只检索少数词）。
           1) 先查 minority；命中块数 >= candidate_k 则提前收束，不再查 majority
           2) 否则并上 majority 命中
           3) 少数值优先、多数值命中数排序，截到 candidate_k
@@ -996,11 +1034,14 @@ class Retrieve:
         *,
         candidate_k: int = 50,
         top_k: int = 10,
+        enable_minority: bool = True,
+        enable_majority: bool = False,
     ) -> dict:
         """
         关键词精确匹配整条支路：
           extract → content 精确匹配 → 候选池排序截断
           → 文档级首轮 rerank → keyword_top_k 文档
+        enable_minority / enable_majority 控制抽哪类词、检索哪类词。
         返回 {
           hits_by_chunk: {cid: hit},
           doc_ids: set,
@@ -1025,18 +1066,31 @@ class Retrieve:
                 f"(candidate_k={candidate_k}, top_k={top_k})"
             )
             return empty
+        if not enable_minority and not enable_majority:
+            self.logger.info(
+                '[retrieve] keyword path skipped '
+                '(enable_keyword_minority=false, enable_keyword_majority=false)'
+            )
+            return empty
 
         q = (query or '').strip()
         if not q:
             return empty
 
         t_ex = time.perf_counter()
-        kw = self.extract_keywords(q)
+        kw = self.extract_keywords(
+            q,
+            enable_minority=bool(enable_minority),
+            enable_majority=bool(enable_majority),
+        )
         extract_dt = time.perf_counter() - t_ex
-        minority = kw.get('minority') or []
-        majority = kw.get('majority') or []
+        minority = (kw.get('minority') or []) if enable_minority else []
+        majority = (kw.get('majority') or []) if enable_majority else []
         if not minority and not majority:
-            self.logger.info('[retrieve] keyword path: no keywords extracted')
+            self.logger.info(
+                '[retrieve] keyword path: no keywords extracted '
+                f'(minority={bool(enable_minority)} majority={bool(enable_majority)})'
+            )
             return {**empty, 'minority': minority, 'majority': majority}
 
         t_match = time.perf_counter()
@@ -1891,6 +1945,8 @@ class Retrieve:
         node_candidate_k=None,
         enable_query_rewrite=None,
         enable_keyword_exact=None,
+        enable_keyword_minority=None,
+        enable_keyword_majority=None,
         keyword_candidate_k=None,
         keyword_top_k=None,
         enable_parallel_paths=None,
@@ -1905,12 +1961,14 @@ class Retrieve:
           串行：chunk → node → keyword，峰值内存更低。
 
         关键词路只增加候选，不删减向量命中；同 chunk 合并 score/match_type。
+        少数词 / 多数词两路可独立开关；总开关 enable_keyword_exact 为 false 时两路都关。
 
         各路 topk：
           - >0：正常截断
           - 0：跳过该路（chunk / node / keyword 候选与 top / rerank_top_k）
 
-        enable_query_rewrite / enable_keyword_exact / enable_parallel_paths:
+        enable_query_rewrite / enable_keyword_exact / enable_keyword_minority /
+        enable_keyword_majority / enable_parallel_paths:
           None 用配置；True/False 仅本次覆盖（不改共享 config）。
 
         分阶段耗时写入 self.last_timing / get_last_timing()：
@@ -1954,6 +2012,20 @@ class Retrieve:
             )
         else:
             enable_kw = bool(enable_keyword_exact)
+        if enable_keyword_minority is None:
+            enable_min = bool(
+                getattr(self.config.retrieve, 'enable_keyword_minority', True)
+            )
+        else:
+            enable_min = bool(enable_keyword_minority)
+        if enable_keyword_majority is None:
+            enable_maj = bool(
+                getattr(self.config.retrieve, 'enable_keyword_majority', False)
+            )
+        else:
+            enable_maj = bool(enable_keyword_majority)
+        if not enable_min and not enable_maj:
+            enable_kw = False
         if kw_cand <= 0 or kw_top <= 0:
             enable_kw = False
 
@@ -1974,6 +2046,8 @@ class Retrieve:
 
         self.last_keyword = {
             'enabled': enable_kw,
+            'enable_minority': enable_min,
+            'enable_majority': enable_maj,
             'minority': [],
             'majority': [],
             'pool_chunks': 0,
@@ -1995,11 +2069,21 @@ class Retrieve:
             self.logger.info(
                 '[retrieve] node path skipped (node_candidate_k=0)'
             )
-        if not enable_kw and (kw_cand <= 0 or kw_top <= 0):
-            self.logger.info(
-                f"[retrieve] keyword path skipped "
-                f"(keyword_candidate_k={kw_cand}, keyword_top_k={kw_top})"
-            )
+        if not enable_kw:
+            if kw_cand <= 0 or kw_top <= 0:
+                self.logger.info(
+                    f"[retrieve] keyword path skipped "
+                    f"(keyword_candidate_k={kw_cand}, keyword_top_k={kw_top})"
+                )
+            elif not enable_min and not enable_maj:
+                self.logger.info(
+                    '[retrieve] keyword path skipped '
+                    '(enable_keyword_minority=false, enable_keyword_majority=false)'
+                )
+            else:
+                self.logger.info(
+                    '[retrieve] keyword path skipped (enable_keyword_exact=false)'
+                )
 
         def _rewrite_and_embed():
             t_rw0 = time.perf_counter()
@@ -2030,6 +2114,8 @@ class Retrieve:
         def _apply_keyword_meta(result):
             self.last_keyword = {
                 'enabled': True,
+                'enable_minority': enable_min,
+                'enable_majority': enable_maj,
                 'minority': list(result.get('minority') or []),
                 'majority': list(result.get('majority') or []),
                 'pool_chunks': int(result.get('pool_n') or 0),
@@ -2058,6 +2144,8 @@ class Retrieve:
                             query,
                             candidate_k=kw_cand,
                             top_k=kw_top,
+                            enable_minority=enable_min,
+                            enable_majority=enable_maj,
                         ),
                     )
 
@@ -2119,6 +2207,8 @@ class Retrieve:
                     query,
                     candidate_k=kw_cand,
                     top_k=kw_top,
+                    enable_minority=enable_min,
+                    enable_majority=enable_maj,
                 )
             t_keyword = time.perf_counter() - t0
 
@@ -2178,7 +2268,8 @@ class Retrieve:
             f"rewrite={rewritten!r} "
             f"query_instruct={self._query_instruct_enabled()} "
             f"chunk_k={chunk_cand} node_k={node_cand} "
-            f"keyword={enable_kw} kw_cand={kw_cand} kw_top={kw_top} "
+            f"keyword={enable_kw} kw_min={enable_min} kw_maj={enable_maj} "
+            f"kw_cand={kw_cand} kw_top={kw_top} "
             f"kw_minority={self.last_keyword.get('minority')!r} "
             f"kw_majority={self.last_keyword.get('majority')!r} "
             f"kw_pool={self.last_keyword.get('pool_chunks')} "

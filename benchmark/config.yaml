@@ -59,7 +59,7 @@ evaluate:
   max_source_chars: -1
   max_retries: 2
   sleep_between: 0.0
-  num_thread: 3
+  num_thread: 4
   use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null

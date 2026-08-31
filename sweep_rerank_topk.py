@@ -40,7 +40,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # generate | evaluate | summarize | all（可被命令行覆盖）
 STEP: str = "evaluate"
 
-RERANK_TOP_KS: List[int] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+# RERANK_TOP_KS: List[int] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+RERANK_TOP_KS: List[int] = [21,22,23,24,25,26,27,28,29,30]
 
 BENCHMARK_CONFIG: str = "benchmark/config.yaml"
 RESULTS_ROOT: str = "benchmark_results_sen-analysis-topk"
@@ -385,6 +386,47 @@ def _xy(rows: List[dict], key: str) -> Tuple[List[int], List[float]]:
     return xs, ys
 
 
+def _annotate_points(
+    ax,
+    xs: List[int],
+    ys: List[float],
+    *,
+    fmt: str,
+    dy: int,
+    color: Optional[str] = None,
+) -> None:
+    """在每个数据点旁水平标数值。"""
+    if not xs:
+        return
+    va = "bottom" if dy >= 0 else "top"
+    for x, y in zip(xs, ys):
+        ax.annotate(
+            fmt.format(y),
+            xy=(x, y),
+            xytext=(0, dy),
+            textcoords="offset points",
+            ha="center",
+            va=va,
+            fontsize=7,
+            color=color,
+            rotation=0,
+            clip_on=False,
+        )
+
+
+def _pad_ylim(ax, series: List[List[float]], *, lower: Optional[float] = None) -> None:
+    ys = [y for g in series for y in g]
+    if not ys:
+        return
+    lo = min(ys) if lower is None else lower
+    hi = max(ys)
+    span = max(hi - lo, 1e-6)
+    top = hi + 0.16 * span
+    if lower is not None and top < 1.08 and hi <= 1.0:
+        top = 1.08
+    ax.set_ylim(lo if lower is not None else lo - 0.08 * span, top)
+
+
 def _plot_curves(rows: List[dict], out_dir: Path) -> Dict[str, str]:
     import matplotlib
 
@@ -394,21 +436,31 @@ def _plot_curves(rows: List[dict], out_dir: Path) -> Dict[str, str]:
     _configure_chinese_font()
     out_dir.mkdir(parents=True, exist_ok=True)
     saved: Dict[str, str] = {}
+    n_pts = max(len(rows), 8)
+    fig_w = max(8.5, min(16.0, 0.55 * n_pts + 3.0))
 
-    def _style(ax) -> None:
+    def _style(ax, xs_all: List[int]) -> None:
         ax.grid(True, linestyle="--", alpha=0.4)
         ax.set_xlabel("rerank_top_k")
+        ticks = sorted(set(xs_all))
+        if ticks:
+            ax.set_xticks(ticks)
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.0))
+    fig, ax = plt.subplots(figsize=(fig_w, 5.4))
     x_acc, y_acc = _xy(rows, "accuracy")
     x_rec, y_rec = _xy(rows, "mean_recall")
+    xs_all: List[int] = []
     if x_acc:
-        ax.plot(x_acc, y_acc, marker="o", label="准确率")
+        line, = ax.plot(x_acc, y_acc, marker="o", label="准确率")
+        _annotate_points(ax, x_acc, y_acc, fmt="{:.3f}", dy=8, color=line.get_color())
+        xs_all.extend(x_acc)
     if x_rec:
-        ax.plot(x_rec, y_rec, marker="s", label="文档召回率")
-    _style(ax)
+        line, = ax.plot(x_rec, y_rec, marker="s", label="文档召回率")
+        _annotate_points(ax, x_rec, y_rec, fmt="{:.3f}", dy=-10, color=line.get_color())
+        xs_all.extend(x_rec)
+    _style(ax, xs_all)
     ax.set_ylabel("比例")
-    ax.set_ylim(0.0, 1.05)
+    _pad_ylim(ax, [y_acc, y_rec], lower=0.0)
     ax.set_title("准确率 / 召回率 vs rerank_top_k")
     ax.legend()
     fig.tight_layout()
@@ -417,21 +469,27 @@ def _plot_curves(rows: List[dict], out_dir: Path) -> Dict[str, str]:
     plt.close(fig)
     saved["acc_recall"] = str(p1)
 
-    fig, ax = plt.subplots(figsize=(8.5, 5.0))
+    fig, ax = plt.subplots(figsize=(fig_w, 5.4))
     series = (
-        ("mean_query_s", "问答耗时", "o"),
-        ("mean_retrieve_s", "检索耗时", "s"),
-        ("mean_rerank_s", "rerank 耗时", "^"),
+        ("mean_query_s", "问答耗时", "o", 8),
+        ("mean_retrieve_s", "检索耗时", "s", 8),
+        ("mean_rerank_s", "rerank 耗时", "^", 8),
     )
     any_line = False
-    for key, label, marker in series:
+    ys_all: List[List[float]] = []
+    xs_all = []
+    for key, label, marker, dy in series:
         xs, ys = _xy(rows, key)
         if not xs:
             continue
-        ax.plot(xs, ys, marker=marker, label=label)
+        line, = ax.plot(xs, ys, marker=marker, label=label)
+        _annotate_points(ax, xs, ys, fmt="{:.2f}", dy=dy, color=line.get_color())
         any_line = True
-    _style(ax)
+        ys_all.append(ys)
+        xs_all.extend(xs)
+    _style(ax, xs_all)
     ax.set_ylabel("秒")
+    _pad_ylim(ax, ys_all)
     ax.set_title("延迟 vs rerank_top_k")
     if any_line:
         ax.legend()

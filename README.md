@@ -22,15 +22,15 @@ pip install -r requirements.txt
 
 主要依赖：
 
-| 用途 | 包 |
-| --- | --- |
-| 配置与数据 | `pydantic`、`pyyaml`、`python-dotenv`、`numpy`、`tqdm`、`openpyxl` |
-| LLM 调用（OpenAI 兼容） | `openai`、`tiktoken`、`httpx` |
-| 多跳 Agent | `langgraph` |
-| 向量检索 | `faiss-cpu` |
-| PDF 渲染 | `pymupdf` |
-| 可选：对象存储与业务库 | `oss2`、`pymysql`、`cryptography` |
-| 可选：超图可视化 | `matplotlib`、`networkx` |
+| 用途                    | 包                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| 配置与数据              | `pydantic`、`pyyaml`、`python-dotenv`、`numpy`、`tqdm`、`openpyxl` |
+| LLM 调用（OpenAI 兼容） | `openai`、`tiktoken`、`httpx`                                            |
+| 多跳 Agent              | `langgraph`                                                                  |
+| 向量检索                | `faiss-cpu`                                                                  |
+| PDF 渲染                | `pymupdf`                                                                    |
+| 可选：对象存储与业务库  | `oss2`、`pymysql`、`cryptography`                                        |
+| 可选：超图可视化        | `matplotlib`、`networkx`                                                   |
 
 不需要 GPU。磁盘需能放下工作目录：SQLite 主库、FAISS 分片、LLM/嵌入缓存、原始 PDF。万级文档规模下库体可达数 GB。
 
@@ -119,6 +119,8 @@ retrieve:
   chunk_candidate_k: 30
   node_candidate_k: 30
   enable_keyword_exact: true
+  enable_keyword_minority: true   # 少数词（牌号/CAS/货号），默认开
+  enable_keyword_majority: false  # 多数词（字段名），默认关
   enable_rerank: true
   rerank_top_k: 10
   embedding_base_url: 'http://<Embedding网关>/v1'
@@ -146,14 +148,14 @@ python main.py
 
 各步含义：
 
-| 步骤 | 作用 |
-| --- | --- |
-| `insert_default` | PDF 按页渲染，VLM 转写为文本，写入 `doc`；超长 PDF 按 `max_pages_per_doc` 切成多条文档 |
-| `summary` | 对每篇文档生成摘要，写入该文档唯一超边 `hyperedge` |
-| `chunk` | 摘要作为 head 块，正文按 token 切 body 块（默认 512，重叠 10%） |
-| `extract` | 从块中抽取「实体名 → 描述」 |
-| `build` | 实体物化为 `node`（当前不建 pairwise `edge`） |
-| `vectorization` | 对 chunk、node 建分片 HNSW 索引 |
+| 步骤               | 作用                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------- |
+| `insert_default` | PDF 按页渲染，VLM 转写为文本，写入`doc`；超长 PDF 按 `max_pages_per_doc` 切成多条文档 |
+| `summary`        | 对每篇文档生成摘要，写入该文档唯一超边`hyperedge`                                       |
+| `chunk`          | 摘要作为 head 块，正文按 token 切 body 块（默认 512，重叠 10%）                           |
+| `extract`        | 从块中抽取「实体名 → 描述」                                                              |
+| `build`          | 实体物化为`node`（当前不建 pairwise `edge`）                                          |
+| `vectorization`  | 对 chunk、node 建分片 HNSW 索引                                                           |
 
 中断后直接再跑 `python main.py` 即可续跑。日志在 `{working_path}/log/`。构建耗时、token 累计写入 `DB/build_metrics.json`。
 
@@ -193,7 +195,7 @@ print(graph.agent_query(
 ))
 ```
 
-检索默认行为：chunk 向量与 node 向量各召回 30 条；LLM 抽取牌号/CAS 等少数值做 SQLite FTS5 精确匹配；三路按 chunk 并集后用 Reranker 保留 top-10 文档。可通过 `retrieve.enable_full_body_context`、`enable_keyword_exact`、`enable_rerank` 等开关调整。
+检索默认行为：chunk 向量与 node 向量各召回 30 条；LLM 抽取牌号/CAS 等少数值做 SQLite FTS5 精确匹配（多数词默认关闭）；三路按 chunk 并集后用 Reranker 保留 top-10 文档。可通过 `retrieve.enable_full_body_context`、`enable_keyword_exact`、`enable_keyword_minority`、`enable_keyword_majority`、`enable_rerank` 等开关调整。
 
 超图可视化（可选）：
 
@@ -216,7 +218,7 @@ python scripts/draw_hypergraph.py --db example/a/DB/main.db --max-hyperedges 12
 python benchmark.py
 ```
 
-`run.mode` 可选：`generate` | `evaluate` | `report` | `excel` | `all`。  
+`run.mode` 可选：`generate` | `evaluate` | `report` | `excel` | `all`。
 `dhmf.query_mode` 可选：`agent`（默认）或 `dual_path`。
 
 当前示例配置会生成 200 题（1/2/3-hop = 100/50/50），输出目录由 `paths.output_dir` 指定。
@@ -285,18 +287,18 @@ python benchmark2.py
 
 **存储**
 
-| 层 | 实现 | 内容 |
-| --- | --- | --- |
-| 结构化库 | SQLite `DB/main.db` | `doc` / `chunk` / `hyperedge` / `node` / `edge`，行级 status 断点 |
-| 向量库 | FAISS `DB/vdb/*.shards` | 默认 HNSW + fp16，按 `shard_max_vectors` 分片；删除打墓碑 |
-| 全文 | SQLite FTS5 trigram | 关键词精确匹配（少数值优先，足够则不再查多数值） |
-| 缓存 | `cache/OpenAI/*.db` | LLM、Embedding、PDF 识别结果 |
+| 层       | 实现                     | 内容                                                                        |
+| -------- | ------------------------ | --------------------------------------------------------------------------- |
+| 结构化库 | SQLite`DB/main.db`     | `doc` / `chunk` / `hyperedge` / `node` / `edge`，行级 status 断点 |
+| 向量库   | FAISS`DB/vdb/*.shards` | 默认 HNSW + fp16，按`shard_max_vectors` 分片；删除打墓碑                  |
+| 全文     | SQLite FTS5 trigram      | 关键词精确匹配（少数词 / 多数词可独立开关；少数词默认开，多数词默认关）     |
+| 缓存     | `cache/OpenAI/*.db`    | LLM、Embedding、PDF 识别结果                                                |
 
 **检索与问答**
 
 - **dual_path**：chunk 向量 + node 向量（+ 可选关键词）合并后生成答案。
 - **agent**：`src/agent/`，LangGraph 编排规划、检索 skill、纯 LLM 步与最终综合；单跳不强制多轮。
-- 关键词路由 LLM 抽取 minority（牌号、CAS、货号）和 majority（字段名），在预计算小写正文上 `MATCH`，避免全表 Python 扫描。
+- 关键词路可拆成少数词 / 多数词两路召回：`enable_keyword_minority`（默认开）只用少数词专用提示词抽取牌号、CAS、货号并只检索这些词；`enable_keyword_majority`（默认关）抽取字段名。总开关 `enable_keyword_exact` 为 false 时两路都关。匹配走预计算小写正文 FTS5 `MATCH`，避免全表 Python 扫描。
 
 **目录结构（源码）**
 

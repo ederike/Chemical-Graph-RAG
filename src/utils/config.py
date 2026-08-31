@@ -493,6 +493,10 @@ class RetrieveConfig(BaseModel):
     enable_full_body_context: Union[bool, str] = False
 
     enable_keyword_exact: bool = True
+    # 关键词路内两路精确匹配，可独立开关。总开关 enable_keyword_exact 为 false 时两路都关。
+    # 少数词：牌号 / CAS / 货号等标识值；多数词：NFPA、相对密度等字段名。
+    enable_keyword_minority: bool = True
+    enable_keyword_majority: bool = False
     # 三路检索（chunk / node / keyword）是否并行。
     # true / parallel：墙钟 ≈ max；false / serial：串行，峰值内存更低。
     enable_parallel_paths: bool = True
