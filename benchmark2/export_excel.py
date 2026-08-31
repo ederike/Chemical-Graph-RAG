@@ -283,9 +283,14 @@ def _write_table(
 # ---------------------------------------------------------------------------
 
 
-def _add_toc(wb: Workbook, items: Sequence[Tuple[str, str]]) -> None:
+def _add_toc(
+    wb: Workbook,
+    items: Sequence[Tuple[str, str]],
+    *,
+    title: str = "Benchmark2 评测报告",
+) -> None:
     ws = wb.create_sheet(_sheet_name("目录"), 0)
-    _write_title(ws, "Benchmark2 评测报告", 2)
+    _write_title(ws, title, 2)
     ws.cell(2, 1, "点击工作表名跳转。JSON 嵌套已摊平成表格。")
     ws.cell(2, 1).font = Font(name="微软雅黑", italic=True, size=10, color="666666")
     headers = ("工作表", "说明")
@@ -1312,6 +1317,7 @@ def write_report_workbook(
     out_path: Union[str, Path],
     *,
     eval_data: Optional[Dict[str, Any]] = None,
+    title: str = "Benchmark2 评测报告",
 ) -> Path:
     """把 report（及可选 evals）写成多 sheet 的 xlsx。"""
     out = Path(out_path)
@@ -1356,7 +1362,7 @@ def write_report_workbook(
         ws["A1"].font = _FONT_CELL
         toc.append((ws.title, "无逐题数据（缺少 evals）"))
 
-    _add_toc(wb, toc)
+    _add_toc(wb, toc, title=title)
     if "tmp" in wb.sheetnames:
         del wb["tmp"]
 

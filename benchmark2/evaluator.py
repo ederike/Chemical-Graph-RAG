@@ -174,8 +174,10 @@ class ExcelQueryEvaluator:
         sleep_between: float = 0.0,
         num_thread: int = 1,
         enable_llm_only: bool = True,
+        prompts: Optional[dict] = None,
     ):
         self.dhmf = dhmf
+        self.prompts = prompts or Benchmark2_PROMPT
         self.judge_llm = judge_llm or (
             getattr(dhmf, "llmmodel", None) if dhmf is not None else None
         )
@@ -225,14 +227,14 @@ class ExcelQueryEvaluator:
 
     def _run_llm_only(self, question: str) -> Dict[str, Any]:
         """不检索，直接用同一套生成模型回答。"""
-        user = Benchmark2_PROMPT["PURE_LLM_USER"].replace(
+        user = self.prompts["PURE_LLM_USER"].replace(
             "{question}", question or ""
         )
         last: Dict[str, Any] = {}
         for _attempt in range(1, self.max_llm_only_retries + 1):
             last = call_llm(
                 self.answer_llm,
-                system=Benchmark2_PROMPT.get("PURE_LLM_SYSTEM", ""),
+                system=self.prompts.get("PURE_LLM_SYSTEM", ""),
                 user=user,
                 model_args=self.answer_model_args,
                 use_cache=self.llm_only_use_cache,
@@ -388,7 +390,7 @@ class ExcelQueryEvaluator:
             score_dimensions, raw=score_dimensions_raw or ""
         )
         user = fill_prompt(
-            Benchmark2_PROMPT["JUDGE_USER_SINGLE"],
+            self.prompts["JUDGE_USER_SINGLE"],
             {
                 "question": question or "",
                 "expected_answer": expected_answer or "",
@@ -401,7 +403,7 @@ class ExcelQueryEvaluator:
         for _attempt in range(1, self.max_judge_retries + 1):
             resp = call_llm(
                 self.judge_llm,
-                system=Benchmark2_PROMPT.get("JUDGE_SYSTEM", ""),
+                system=self.prompts.get("JUDGE_SYSTEM", ""),
                 user=user,
                 model_args=self.judge_model_args,
                 use_cache=self.use_cache,
@@ -460,7 +462,7 @@ class ExcelQueryEvaluator:
         ans_a = (answers.get(a_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
         ans_b = (answers.get(b_sys) or "").strip() or EMPTY_ANSWER_PLACEHOLDER
         user = fill_prompt(
-            Benchmark2_PROMPT["JUDGE_USER"],
+            self.prompts["JUDGE_USER"],
             {
                 "question": question or "",
                 "expected_answer": expected_answer or "",
@@ -474,7 +476,7 @@ class ExcelQueryEvaluator:
         for _attempt in range(1, self.max_judge_retries + 1):
             resp = call_llm(
                 self.judge_llm,
-                system=Benchmark2_PROMPT.get("JUDGE_SYSTEM", ""),
+                system=self.prompts.get("JUDGE_SYSTEM", ""),
                 user=user,
                 model_args=self.judge_model_args,
                 use_cache=self.use_cache,

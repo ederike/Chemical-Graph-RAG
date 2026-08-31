@@ -41,7 +41,7 @@ from typing import Any, Dict, List, Optional, Tuple
 STEP: str = "evaluate"
 
 # RERANK_TOP_KS: List[int] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-RERANK_TOP_KS: List[int] = [21,22,23,24,25,26,27,28,29,30]
+RERANK_TOP_KS: List[int] = [23,24,25,26,27,28,29,30]
 
 BENCHMARK_CONFIG: str = "benchmark/config.yaml"
 RESULTS_ROOT: str = "benchmark_results_sen-analysis-topk"

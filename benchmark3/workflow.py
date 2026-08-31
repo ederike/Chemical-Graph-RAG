@@ -1,12 +1,12 @@
 """
-Excel 统计 JSON + RAG 评测 + 分类汇总。
+专利 CSV 测试集：超图问答 + 按得分维度评判 + Excel 汇总。
 
-全部参数写在 benchmark2/config.yaml，脚本入口::
+全部参数写在 benchmark3/config.yaml，脚本入口::
 
-    python benchmark2.py
-    python -m benchmark2.run
+    python benchmark3.py
+    python -m benchmark3.run
 
-run.mode: stats | evaluate | rejudge | report | excel | all
+run.mode: evaluate | rejudge | report | excel | all
 """
 
 from __future__ import annotations
@@ -18,19 +18,44 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from benchmark.utils import project_root, resolve_path
-
 from benchmark.config import merge_llm_only_model_args
+from benchmark2.evaluator import ExcelQueryEvaluator
+from benchmark2.report import build_report_document, format_summary_text
 
-from .config import DEFAULT_CONFIG_PATH, Benchmark2Config
-from .dataset import build_stats_document, load_excel_dataset
-from .evaluator import ExcelQueryEvaluator
-from .report import build_report_document, format_summary_text
+from .config import DEFAULT_CONFIG_PATH, Benchmark3Config
+from .dataset import load_csv_dataset
+from .prompts import Benchmark3_PROMPT
 
-logger = logging.getLogger("benchmark2.workflow")
+logger = logging.getLogger("benchmark3.workflow")
+
+EXTRA_ITEM_KEYS = (
+    "source_patent",
+    "source_file",
+    "source_ref",
+    "md_file",
+    "topic",
+)
 
 
-class Benchmark2Workflow:
-    def __init__(self, cfg: Benchmark2Config):
+class PatentQueryEvaluator(ExcelQueryEvaluator):
+    """沿用 benchmark2 的超图/裁判流水线，额外保留专利来源字段。"""
+
+    def evaluate_one(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        result = super().evaluate_one(item)
+        for k in EXTRA_ITEM_KEYS:
+            if k in item:
+                result[k] = item.get(k) or ""
+        return result
+
+    def rejudge_one(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        extras = {k: result.get(k) for k in EXTRA_ITEM_KEYS if k in result}
+        r = super().rejudge_one(result)
+        r.update(extras)
+        return r
+
+
+class Benchmark3Workflow:
+    def __init__(self, cfg: Benchmark3Config):
         self.cfg = cfg.resolve_paths()
         self.root = project_root()
 
@@ -42,9 +67,10 @@ class Benchmark2Workflow:
         self.judge_llm = None
         self.answer_llm = None
         self._dataset: Optional[Dict[str, Any]] = None
-        self._stats: Optional[Dict[str, Any]] = None
         self._eval_data: Optional[Dict[str, Any]] = None
         self._report: Optional[Dict[str, Any]] = None
+        self.prompts = Benchmark3_PROMPT
+        self.excel_report_title = "建筑涂料专利集超图评测"
 
         self._setup_logging(self.cfg.log_level)
 
@@ -52,12 +78,12 @@ class Benchmark2Workflow:
     def from_config(
         cls,
         config_path: Union[str, Path, None] = DEFAULT_CONFIG_PATH,
-    ) -> "Benchmark2Workflow":
-        cfg = Benchmark2Config.from_yaml(config_path)
+    ) -> "Benchmark3Workflow":
+        cfg = Benchmark3Config.from_yaml(config_path)
         return cls(cfg)
 
     def _setup_logging(self, level: int):
-        root_logger = logging.getLogger("benchmark2")
+        root_logger = logging.getLogger("benchmark3")
         if not root_logger.handlers:
             handler = logging.StreamHandler(sys.stderr)
             handler.setFormatter(
@@ -136,7 +162,6 @@ class Benchmark2Workflow:
         return merge_llm_only_model_args(base, user_ma)
 
     def setup_answer_llm(self, force: bool = False):
-        """初始化纯 LLM 对照客户端（timeout / thinking 走 evaluate.llm_only）。"""
         if self.answer_llm is not None and not force:
             return self.answer_llm
         if not self.cfg.enable_llm_only:
@@ -228,37 +253,23 @@ class Benchmark2Workflow:
         print(f"[resume] 已有 {len(rows)} 条 <- {path}", file=sys.stderr)
         return rows
 
-    def build_stats(self, save: bool = True) -> Dict[str, Any]:
-        """步骤 1：Excel 统计页 + 题目分类 → 结构化 stats.json，并写出 dataset.json。"""
-        dataset = load_excel_dataset(
-            excel_path=self.cfg.excel_path,
-            questions_sheet=self.cfg.questions_sheet,
-            stats_sheet=self.cfg.stats_sheet,
-            design_sheet=self.cfg.design_sheet,
+    def load_dataset(self, save: bool = True) -> Dict[str, Any]:
+        dataset = load_csv_dataset(
+            csv_path=self.cfg.csv_path,
             n_limit=self.cfg.n_limit,
             id_list=self.cfg.id_list,
         )
-        stats = dataset.get("stats") or build_stats_document(
-            excel_path=self.cfg.excel_path,
-            questions_sheet=self.cfg.questions_sheet,
-            stats_sheet=self.cfg.stats_sheet,
-            design_sheet=self.cfg.design_sheet,
-        )
         self._dataset = dataset
-        self._stats = stats
-
         if save:
-            self.save_json(stats, self.cfg.stats_file())
             self.save_json(dataset, self.cfg.dataset_file())
-            meta = stats.get("meta") or {}
+            meta = dataset.get("meta") or {}
             print(
-                f"[stats] schema={meta.get('schema')}  "
-                f"n={meta.get('n_questions')}  "
-                f"primary={((stats.get('category_fields') or {}).get('primary'))}",
+                f"[dataset] n={meta.get('n_questions')}  "
+                f"dims={meta.get('n_dimensions_min')}-{meta.get('n_dimensions_max')}  "
+                f"csv={meta.get('source_csv')}",
                 file=sys.stderr,
             )
-
-        return stats
+        return dataset
 
     def _ensure_dataset(self) -> Dict[str, Any]:
         if self._dataset is not None:
@@ -268,51 +279,18 @@ class Benchmark2Workflow:
             data = self.load_json(ds_path)
             if "questions" in data:
                 self._dataset = data
-                if isinstance(data.get("stats"), dict):
-                    self._stats = data["stats"]
                 print(f"[loaded] dataset <- {ds_path}", file=sys.stderr)
                 return data
-        dataset = load_excel_dataset(
-            excel_path=self.cfg.excel_path,
-            questions_sheet=self.cfg.questions_sheet,
-            stats_sheet=self.cfg.stats_sheet,
-            design_sheet=self.cfg.design_sheet,
-            n_limit=self.cfg.n_limit,
-            id_list=self.cfg.id_list,
-        )
-        self._dataset = dataset
-        self._stats = dataset.get("stats")
-        return dataset
+        return self.load_dataset(save=True)
 
-    def _ensure_stats(self) -> Optional[Dict[str, Any]]:
-        if self._stats is not None:
-            return self._stats
-        path = self.cfg.stats_file()
-        if path.is_file():
-            self._stats = self.load_json(path)
-            return self._stats
-        if self._dataset and isinstance(self._dataset.get("stats"), dict):
-            self._stats = self._dataset["stats"]
-            return self._stats
-        return None
-
-    def evaluate(
-        self,
-        dataset: Optional[Dict[str, Any]] = None,
-        save: bool = True,
-    ) -> Dict[str, Any]:
-        """步骤 2：逐题超图 / 纯LLM 问答 + 评判。"""
-        if dataset is None:
-            dataset = self._ensure_dataset()
-
-        self.setup_dhmf()
+    def _make_evaluator(self, *, with_dhmf: bool) -> PatentQueryEvaluator:
+        dhmf = self.setup_dhmf() if with_dhmf else None
         self.setup_judge_llm()
         answer_llm = (
             self.setup_answer_llm() if self.cfg.enable_llm_only else None
         )
-
-        evaluator = ExcelQueryEvaluator(
-            self.dhmf,
+        return PatentQueryEvaluator(
+            dhmf,
             judge_llm=self.judge_llm,
             judge_model_args=self.cfg.judge_model_args,
             answer_llm=answer_llm,
@@ -325,9 +303,19 @@ class Benchmark2Workflow:
             sleep_between=self.cfg.eval_sleep_between,
             num_thread=self.cfg.eval_num_thread,
             enable_llm_only=self.cfg.enable_llm_only,
-            prompts=getattr(self, "prompts", None),
+            prompts=self.prompts,
         )
 
+    def evaluate(
+        self,
+        dataset: Optional[Dict[str, Any]] = None,
+        save: bool = True,
+    ) -> Dict[str, Any]:
+        """逐题超图问答 + 按 CSV 预期回答/得分维度评判。"""
+        if dataset is None:
+            dataset = self._ensure_dataset()
+
+        evaluator = self._make_evaluator(with_dhmf=True)
         out = self.cfg.eval_results_file() if save else None
         existing = []
         if save and self.cfg.eval_resume and out is not None:
@@ -342,8 +330,6 @@ class Benchmark2Workflow:
                 "total": total,
                 "pct": round(100.0 * index / total, 1) if total else None,
             }
-            if dataset.get("stats"):
-                mid_report.setdefault("stats_meta", dataset["stats"].get("meta"))
             self.save_json(mid_report, out, quiet=True)
 
         eval_data = evaluator.evaluate_all(
@@ -352,8 +338,6 @@ class Benchmark2Workflow:
             on_progress=_on_progress if save else None,
         )
         eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
-        if dataset.get("stats"):
-            eval_data["stats"] = dataset["stats"]
         self._eval_data = eval_data
 
         if save and out is not None:
@@ -373,19 +357,7 @@ class Benchmark2Workflow:
                 "  请先 run.mode=evaluate。"
             )
         eval_data = self.load_eval_results(src)
-        self.setup_judge_llm()
-        evaluator = ExcelQueryEvaluator(
-            None,
-            judge_llm=self.judge_llm,
-            judge_model_args=self.cfg.judge_model_args,
-            query_mode=self.cfg.query_mode,
-            use_cache=self.cfg.eval_use_cache,
-            max_judge_retries=self.cfg.eval_max_retries,
-            sleep_between=self.cfg.eval_sleep_between,
-            num_thread=self.cfg.eval_num_thread,
-            enable_llm_only=self.cfg.enable_llm_only,
-            prompts=getattr(self, "prompts", None),
-        )
+        evaluator = self._make_evaluator(with_dhmf=False)
 
         out = src if save else None
 
@@ -419,7 +391,6 @@ class Benchmark2Workflow:
         source_path: Optional[Union[str, Path]] = None,
         save: bool = True,
     ) -> Dict[str, Any]:
-        """步骤 3：两路各自汇总 + 按统计分类切分。"""
         src_path: Optional[Path] = None
         if eval_data is None:
             if self._eval_data is not None and source_path is None:
@@ -453,15 +424,8 @@ class Benchmark2Workflow:
                 file=sys.stderr,
             )
 
-        stats = None
-        if isinstance(eval_data.get("stats"), dict):
-            stats = eval_data["stats"]
-        else:
-            stats = self._ensure_stats()
-
         report_doc = build_report_document(
             eval_data,
-            stats=stats,
             source_path=str(src_path) if src_path is not None else None,
         )
         meta = report_doc.setdefault("meta", {})
@@ -471,11 +435,13 @@ class Benchmark2Workflow:
             "judge_model",
             "config_file",
             "dhmf_config_path",
-            "excel_path",
+            "csv_path",
             "enable_llm_only",
         ):
             if meta.get(k) is None and snap.get(k) is not None:
                 meta[k] = snap[k]
+        if meta.get("excel_path") is None:
+            meta["csv_path"] = snap.get("csv_path")
         self._report = report_doc
 
         if save:
@@ -497,7 +463,6 @@ class Benchmark2Workflow:
         *,
         save: bool = True,
     ) -> Path:
-        """把 report / evals 摊成多 sheet 的 xlsx。"""
         if report_doc is None:
             if self._report is not None:
                 report_doc = self._report
@@ -514,19 +479,14 @@ class Benchmark2Workflow:
                         if ev.is_file():
                             eval_data = self.load_eval_results(ev)
                     if eval_data is not None:
-                        stats = None
-                        if isinstance(eval_data.get("stats"), dict):
-                            stats = eval_data["stats"]
-                        else:
-                            stats = self._ensure_stats()
-                        report_doc = build_report_document(eval_data, stats=stats)
+                        report_doc = build_report_document(eval_data)
                         self._report = report_doc
         if report_doc is None:
             raise FileNotFoundError(
                 "未找到 report / evals JSON，无法导出 Excel。\n"
                 f"  report: {self.cfg.report_file()}\n"
                 f"  evals:  {self.cfg.eval_results_file()}\n"
-                "  请先 run.mode=report，或 python -m benchmark2.export_excel。"
+                "  请先 run.mode=report，或 python -m benchmark3.export_excel。"
             )
 
         if eval_data is None:
@@ -548,22 +508,21 @@ class Benchmark2Workflow:
                 report_doc,
                 out,
                 eval_data=eval_data,
-                title=getattr(self, "excel_report_title", "Benchmark2 评测报告"),
+                title=self.excel_report_title,
             )
             print(f"[saved] {out}", file=sys.stderr)
         return out
 
     def run_all(self) -> Dict[str, Any]:
-        self.build_stats(save=True)
+        self.load_dataset(save=True)
         eval_data = self.evaluate(dataset=self._dataset, save=True)
         return self.report(eval_data=eval_data, save=True)
 
     def run(self) -> Any:
         mode = (self.cfg.run_mode or "all").strip().lower()
-        print(f"[benchmark2] mode={mode}", file=sys.stderr)
-        if mode == "stats":
-            return self.build_stats(save=True)
+        print(f"[benchmark3] mode={mode}", file=sys.stderr)
         if mode == "evaluate":
+            self.load_dataset(save=True)
             return self.evaluate(save=True)
         if mode == "rejudge":
             return self.rejudge(save=True)
@@ -575,6 +534,6 @@ class Benchmark2Workflow:
             return self.run_all()
         raise ValueError(
             f"Unknown run.mode={self.cfg.run_mode!r}. "
-            "Set run.mode in benchmark2/config.yaml: "
-            "stats | evaluate | rejudge | report | excel | all"
+            "Set run.mode in benchmark3/config.yaml: "
+            "evaluate | rejudge | report | excel | all"
         )
