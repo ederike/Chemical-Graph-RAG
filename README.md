@@ -121,6 +121,7 @@ retrieve:
   enable_keyword_exact: true
   enable_keyword_minority: true   # 少数词（牌号/CAS/货号），默认开
   enable_keyword_majority: false  # 多数词（字段名），默认关
+  enable_slice_family_expand: false  # 扩到同源全部切开文档；开则忽略全文扩展
   enable_rerank: true
   rerank_top_k: 10
   embedding_base_url: 'http://<Embedding网关>/v1'
@@ -195,7 +196,7 @@ print(graph.agent_query(
 ))
 ```
 
-检索默认行为：chunk 向量与 node 向量各召回 30 条；LLM 抽取牌号/CAS 等少数值做 SQLite FTS5 精确匹配（多数词默认关闭）；三路按 chunk 并集后用 Reranker 保留 top-10 文档。可通过 `retrieve.enable_full_body_context`、`enable_keyword_exact`、`enable_keyword_minority`、`enable_keyword_majority`、`enable_rerank` 等开关调整。
+检索默认行为：chunk 向量与 node 向量各召回 30 条；LLM 抽取牌号/CAS 等少数值做 SQLite FTS5 精确匹配（多数词默认关闭）；三路按 chunk 并集后用 Reranker 保留 top-10 文档。可通过 `retrieve.enable_full_body_context`、`enable_slice_family_expand`、`enable_keyword_exact`、`enable_keyword_minority`、`enable_keyword_majority`、`enable_rerank` 等开关调整。`enable_slice_family_expand` 默认关；开启后命中任一切片会按原序并入该 PDF 的全部切开文档，并覆盖 `enable_full_body_context`。
 
 超图可视化（可选）：
 
@@ -299,6 +300,7 @@ python benchmark2.py
 - **dual_path**：chunk 向量 + node 向量（+ 可选关键词）合并后生成答案。
 - **agent**：`src/agent/`，LangGraph 编排规划、检索 skill、纯 LLM 步与最终综合；单跳不强制多轮。
 - 关键词路可拆成少数词 / 多数词两路召回：`enable_keyword_minority`（默认开）只用少数词专用提示词抽取牌号、CAS、货号并只检索这些词；`enable_keyword_majority`（默认关）抽取字段名。总开关 `enable_keyword_exact` 为 false 时两路都关。匹配走预计算小写正文 FTS5 `MATCH`，避免全表 Python 扫描。
+- `enable_slice_family_expand`（默认关）：命中长 PDF 的任一切片后，把同源全部切开文档（`foo.pdf`、`foo.pdf_1`、…）按原切片顺序并入上下文。此开关优先于 `enable_full_body_context`，开启时后者不生效。
 
 **目录结构（源码）**
 

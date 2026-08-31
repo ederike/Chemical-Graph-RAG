@@ -88,10 +88,14 @@ class Retrieve:
         独立两步，把上述范围内的 FAISS 分片常驻进程内存；检索优先用常驻，
         未 pin 时回退为按片 load/unload。
       4) 关键词路 ∪ 双路（chunk∪node）按 chunk 并集合并（只增不减；score 取 max）
-      5) 文档扩展（enable_full_body_context）+ 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
-         false：每文档头块 + 命中索引块（原文序、块去重）
-         simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
-         true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
+      5) 文档扩展 + 文档级终轮 Reranker → rerank_top_k（0=跳过截断）
+         enable_slice_family_expand（默认关，优先于全文扩展）：
+           终轮 rerank 之后，命中任一切片则并入同源全部切开文档，
+           按 slice_index 原序输出每段全文；此时忽略 enable_full_body_context
+         enable_full_body_context（仅当切片族扩展关闭时生效）：
+           false：每文档头块 + 命中索引块（原文序、块去重）
+           simple：不扩未命中正文；命中 body 时在文首补超边头块；仅命中头块则不扩展
+           true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
     """
     def _scope_max_vectors(self, db_name) -> int:
         """0 = 全库。chunk/node 各自读 retrieve.*_max_vectors。"""
@@ -239,6 +243,8 @@ class Retrieve:
         self.chunks_by_doc = defaultdict(list)
         self.doc_head_chunk = {}
         self.doc_dict = {}
+        self.family_key_by_doc = {}
+        self.docs_by_family = {}
         self.last_rewrite = {'original': '', 'rewritten': ''}
         self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
         self.last_keyword = {
@@ -361,11 +367,13 @@ class Retrieve:
         else:
             docs = list((doc_db.search_all() if doc_db is not None else None) or [])
         self.doc_dict = {d['id']: d for d in docs}
+        self._index_slice_families()
 
         self.logger.info(
             f"[retrieve] precompute scope chunk_max_vectors={chunk_max} "
             f"chunks={len(self.all_chunks)} docs={len(self.doc_dict)} "
-            f"hyperedges={len(self.all_hyperedges)} max_doc_id={max_doc_id}"
+            f"hyperedges={len(self.all_hyperedges)} max_doc_id={max_doc_id} "
+            f"slice_families={len(self.docs_by_family)}"
         )
 
         self._precomputed = True
@@ -392,6 +400,111 @@ class Retrieve:
         except (TypeError, ValueError):
             slice_index = 0
         return slice_index > 0
+
+    _SLICE_SUFFIX_RE = re.compile(r'^(.+\.[A-Za-z0-9]+)_(\d+)$')
+
+    @staticmethod
+    def _doc_basename(name: str) -> str:
+        s = str(name or '').replace('\\', '/').strip()
+        if not s:
+            return ''
+        return s.rsplit('/', 1)[-1]
+
+    def _doc_slice_meta(self, doc: dict) -> dict:
+        """解析切片族：source_name / slice_index / n_slices / family_key。"""
+        extra = self._parse_extra((doc or {}).get('extra'))
+        name = self._doc_basename((doc or {}).get('name') or '')
+        try:
+            slice_index = int(extra.get('slice_index') or 0)
+        except (TypeError, ValueError):
+            slice_index = 0
+        try:
+            n_slices = int(extra.get('n_slices') or 1)
+        except (TypeError, ValueError):
+            n_slices = 1
+        source = self._doc_basename(
+            extra.get('source_name') or extra.get('source_pdf') or ''
+        )
+        m = self._SLICE_SUFFIX_RE.match(name)
+        inferred_base = m.group(1) if m else name
+        inferred_idx = int(m.group(2)) if m else 0
+        if not source:
+            source = inferred_base or name
+        if extra.get('slice_index') in (None, '') and inferred_idx > 0:
+            slice_index = inferred_idx
+        if extra.get('n_slices') in (None, '') and inferred_idx > 0:
+            n_slices = max(n_slices, inferred_idx + 1)
+        family_key = source or name or (
+            f"doc:{(doc or {}).get('id')}" if (doc or {}).get('id') is not None else ''
+        )
+        return {
+            'source_name': source or name,
+            'slice_index': max(0, slice_index),
+            'n_slices': max(1, n_slices, slice_index + 1),
+            'family_key': family_key,
+            'name': name,
+        }
+
+    def _index_slice_families(self):
+        """按同源切开文档建索引，成员按 slice_index（再 name / id）升序。"""
+        by_fam = defaultdict(list)
+        key_by_doc = {}
+        for did, doc in (self.doc_dict or {}).items():
+            meta = self._doc_slice_meta(doc)
+            key = meta['family_key']
+            if not key:
+                continue
+            key_by_doc[did] = key
+            by_fam[key].append((
+                meta['slice_index'],
+                meta['name'] or '',
+                did if did is not None else 0,
+            ))
+        ordered = {}
+        n_multi = 0
+        for key, rows in by_fam.items():
+            rows.sort(key=lambda t: (t[0], t[1], t[2]))
+            ids = [did for _, _, did in rows]
+            ordered[key] = ids
+            if len(ids) > 1:
+                n_multi += 1
+        self.docs_by_family = ordered
+        self.family_key_by_doc = key_by_doc
+        self.logger.info(
+            f"[retrieve] slice families indexed families={len(ordered)} "
+            f"multi_slice={n_multi}"
+        )
+
+    def _slice_family_expand_enabled(self) -> bool:
+        return bool(
+            getattr(self.config.retrieve, 'enable_slice_family_expand', False)
+        )
+
+    def _family_key_for_doc_id(self, doc_id) -> str:
+        if doc_id is None:
+            return ''
+        key = (self.family_key_by_doc or {}).get(doc_id)
+        if key:
+            return key
+        doc = (self.doc_dict or {}).get(doc_id)
+        if not doc:
+            return f'doc:{doc_id}'
+        meta = self._doc_slice_meta(doc)
+        return meta.get('family_key') or f'doc:{doc_id}'
+
+    def _ordered_family_doc_ids(self, family_key, *, fallback=None) -> list:
+        """同源切开文档 id，按原切片顺序。缺索引时回退 fallback。"""
+        ids = list((self.docs_by_family or {}).get(family_key) or [])
+        if ids:
+            return ids
+        out = []
+        seen = set()
+        for did in fallback or []:
+            if did is None or did in seen:
+                continue
+            seen.add(did)
+            out.append(did)
+        return out
 
     @staticmethod
     def _parse_extra(raw):
@@ -1415,6 +1528,195 @@ class Retrieve:
         raw = getattr(self.config.retrieve, 'enable_full_body_context', False)
         return normalize_full_body_mode(raw)
 
+    def _emit_doc_passages(
+        self,
+        g: dict,
+        mat_i: int,
+        *,
+        mode: str,
+        expand_match_type: str = 'full_body_expand',
+    ) -> list:
+        """把一份文档组写成 passages（头块 + 索引块，块按原文序）。"""
+        full_body = mode == 'full'
+        include_head = mode != 'full'
+        doc_id = g['doc_id']
+        he = g.get('hyperedge')
+        hid = he.get('id') if he else None
+        head = g.get('head')
+        source = self._source_label(head or {'doc_id': doc_id})
+        hit_body = bool(g.get('index_ids'))
+        sliced = self._is_sliced_doc(doc_id)
+        write_head = head is not None and (include_head or (full_body and sliced))
+        passages = []
+
+        if write_head:
+            head_hit = (g.get('hit_meta') or {}).get(head['id'], {})
+            if head_hit:
+                head_match = head_hit.get('match_type') or 'head'
+            elif (mode == 'simple' and hit_body) or (full_body and sliced):
+                head_match = 'head_expand'
+            else:
+                head_match = 'head'
+            passages.append({
+                'chunk': head,
+                'score': float(g.get('score') or 0.0),
+                'match_type': head_match,
+                'hyperedge_id': hid,
+                'doc_id': doc_id,
+                'role': 'head',
+                'material_id': mat_i,
+                'material_score': float(g.get('score') or 0.0),
+                'source': source,
+            })
+
+        index_chunks = []
+        hit_meta = g.get('hit_meta') or {}
+        for cid in g.get('index_ids') or []:
+            c = self.chunk_dict.get(cid) or (hit_meta.get(cid) or {}).get('chunk')
+            if c is None:
+                continue
+            if full_body and self._is_head_chunk(c):
+                continue
+            index_chunks.append(c)
+        index_chunks.sort(key=self._chunk_order_key)
+
+        seen = set()
+        if write_head and head is not None:
+            seen.add(head['id'])
+        for c in index_chunks:
+            cid = c.get('id')
+            if cid in seen:
+                continue
+            seen.add(cid)
+            hit = hit_meta.get(cid, {})
+            if hit:
+                match_type = hit.get('match_type') or 'index'
+                score = float(hit.get('score') or g.get('score') or 0.0)
+                node_id = hit.get('node_id')
+                node_name = hit.get('node_name')
+                he_id = hid or hit.get('hyperedge_id')
+            else:
+                match_type = expand_match_type if full_body else 'index'
+                score = float(g.get('score') or 0.0)
+                node_id = None
+                node_name = None
+                he_id = hid
+            passages.append({
+                'chunk': c,
+                'score': score,
+                'match_type': match_type,
+                'hyperedge_id': he_id,
+                'doc_id': doc_id,
+                'role': 'index',
+                'material_id': mat_i,
+                'material_score': float(g.get('score') or 0.0),
+                'source': source,
+                'node_id': node_id,
+                'node_name': node_name,
+            })
+        return passages
+
+    def _full_doc_group(self, doc_id, score, hit_meta=None) -> dict:
+        """一份文档的全文组：全部 body + 头块元数据，供切片族扩展。"""
+        body_ids = set()
+        for c in self._body_chunks_for_doc(doc_id):
+            cid = c.get('id')
+            if cid is not None:
+                body_ids.add(cid)
+        return {
+            'doc_id': doc_id,
+            'score': float(score or 0.0),
+            'index_ids': body_ids,
+            'head': self.doc_head_chunk.get(doc_id),
+            'hyperedge': self._hyperedge_for_doc(doc_id),
+            'hit_meta': dict(hit_meta or {}),
+        }
+
+    def _expand_slice_families(self, passages: list) -> list:
+        """
+        命中文档扩到同源全部切开文档。
+
+        终轮 rerank 之后调用：以 rerank 留下的文档为种子，
+        同一 PDF 的 foo.pdf / foo.pdf_1 / … 全部并入，按 slice_index 原序，
+        每段写全文。同一族只出现一次（取该族最先出现的位置）。
+        """
+        if not self._slice_family_expand_enabled():
+            return passages
+        groups = self._group_main_materials(passages)
+        if not groups:
+            return passages
+
+        family_seq = []
+        seen_family = set()
+        for g in groups:
+            did = g.get('doc_id')
+            fkey = self._family_key_for_doc_id(did)
+            if not fkey:
+                fkey = f'doc:{did}'
+            hit_meta = {}
+            for it in g.get('items') or []:
+                chunk = it.get('chunk') or {}
+                cid = chunk.get('id')
+                if cid is None:
+                    cid = it.get('chunk_id')
+                if cid is None:
+                    continue
+                hit_meta[cid] = it
+            if fkey not in seen_family:
+                seen_family.add(fkey)
+                family_seq.append({
+                    'key': fkey,
+                    'score': float(g.get('score') or 0.0),
+                    'hit_meta_by_doc': {did: hit_meta} if did is not None else {},
+                })
+            else:
+                for fam in family_seq:
+                    if fam['key'] != fkey:
+                        continue
+                    fam['score'] = max(fam['score'], float(g.get('score') or 0.0))
+                    if did is not None:
+                        fam['hit_meta_by_doc'].setdefault(did, {}).update(hit_meta)
+                    break
+
+        out = []
+        mat_i = 1
+        n_seed = 0
+        n_extra = 0
+        n_families = 0
+        for fam in family_seq:
+            seed_ids = [d for d in fam['hit_meta_by_doc'] if d is not None]
+            sibling_ids = self._ordered_family_doc_ids(
+                fam['key'], fallback=seed_ids
+            )
+            n_families += 1
+            for did in sibling_ids:
+                g = self._full_doc_group(
+                    did,
+                    fam['score'],
+                    fam['hit_meta_by_doc'].get(did) or {},
+                )
+                part = self._emit_doc_passages(
+                    g,
+                    mat_i,
+                    mode='full',
+                    expand_match_type='slice_family_expand',
+                )
+                if not part:
+                    continue
+                out.extend(part)
+                mat_i += 1
+                if did in fam['hit_meta_by_doc']:
+                    n_seed += 1
+                else:
+                    n_extra += 1
+
+        self.logger.info(
+            f"[retrieve] slice family expand families={n_families} "
+            f"seed_docs={n_seed} extra_slices={n_extra} "
+            f"materials={mat_i - 1} passages={len(out)}"
+        )
+        return out
+
     def _build_materials(self, hits_by_chunk: dict) -> list:
         """
         按文档聚合（不再做全局 top_k 截断）：
@@ -1426,12 +1728,17 @@ class Retrieve:
             —— 长 PDF 切片文档在文首补超边头块；未切开的不加头块
           文档组之间按组内最高分降序（仅排序，全部进入上下文）
 
+        enable_slice_family_expand 开启时本步忽略全文扩展（只组装命中文档
+        供 rerank）；切片族全文在终轮 rerank 之后由 _expand_slice_families 补入。
+
         召回宽度由双路各自的 chunk_candidate_k / node_candidate_k 决定。
         """
-        mode = self._full_body_mode()
+        slice_family = self._slice_family_expand_enabled()
+        if slice_family:
+            mode = 'off'
+        else:
+            mode = self._full_body_mode()
         full_body = mode == 'full'
-        # simple / off 都写头块；true 仅对切片文档写头块
-        include_head = mode != 'full'
 
         groups = {}
         for cid, hit in hits_by_chunk.items():
@@ -1463,7 +1770,6 @@ class Retrieve:
                 continue
             g['index_ids'].add(cid)
 
-        # 全篇 body 模式：无论命中 head 还是 body，索引集合 = 该文档全部 body
         if full_body:
             for g in groups.values():
                 body_ids = set()
@@ -1477,86 +1783,10 @@ class Retrieve:
             groups.values(),
             key=lambda g: (-float(g['score']), g['doc_id'] if g['doc_id'] is not None else 0),
         )
-        # 双路合并后的全部资料组均进入上下文（不按全局 top_k 再截）
 
         passages = []
         for mat_i, g in enumerate(ordered_docs, start=1):
-            doc_id = g['doc_id']
-            he = g['hyperedge']
-            hid = he.get('id') if he else None
-            head = g['head']
-            source = self._source_label(head or {'doc_id': doc_id})
-            hit_body = bool(g['index_ids'])
-            sliced = self._is_sliced_doc(doc_id)
-            # simple / off：每篇都写头块；true：只给被切开的长 PDF 切片补头块，放文首
-            write_head = head is not None and (include_head or (full_body and sliced))
-
-            if write_head:
-                head_hit = g['hit_meta'].get(head['id'], {})
-                if head_hit:
-                    head_match = head_hit.get('match_type') or 'head'
-                elif (mode == 'simple' and hit_body) or (full_body and sliced):
-                    head_match = 'head_expand'
-                else:
-                    head_match = 'head'
-                passages.append({
-                    'chunk': head,
-                    'score': float(g['score']),
-                    'match_type': head_match,
-                    'hyperedge_id': hid,
-                    'doc_id': doc_id,
-                    'role': 'head',
-                    'material_id': mat_i,
-                    'material_score': float(g['score']),
-                    'source': source,
-                })
-
-            index_chunks = []
-            for cid in g['index_ids']:
-                c = self.chunk_dict.get(cid) or (g['hit_meta'].get(cid) or {}).get('chunk')
-                if c is None:
-                    continue
-                if full_body and self._is_head_chunk(c):
-                    continue
-                index_chunks.append(c)
-            index_chunks.sort(key=self._chunk_order_key)
-
-            seen = set()
-            if write_head and head is not None:
-                seen.add(head['id'])
-            for c in index_chunks:
-                cid = c.get('id')
-                if cid in seen:
-                    continue
-                seen.add(cid)
-                hit = g['hit_meta'].get(cid, {})
-                if hit:
-                    match_type = hit.get('match_type') or 'index'
-                    score = float(hit.get('score') or g['score'])
-                    node_id = hit.get('node_id')
-                    node_name = hit.get('node_name')
-                    he_id = hid or hit.get('hyperedge_id')
-                else:
-                    # 非检索命中、由全篇 body 扩展补入
-                    match_type = 'full_body_expand' if full_body else 'index'
-                    score = float(g['score'])
-                    node_id = None
-                    node_name = None
-                    he_id = hid
-                passages.append({
-                    'chunk': c,
-                    'score': score,
-                    'match_type': match_type,
-                    'hyperedge_id': he_id,
-                    'doc_id': doc_id,
-                    'role': 'index',
-                    'material_id': mat_i,
-                    'material_score': float(g['score']),
-                    'source': source,
-                    'node_id': node_id,
-                    'node_name': node_name,
-                })
-
+            passages.extend(self._emit_doc_passages(g, mat_i, mode=mode))
         return passages
 
     def _format_retrieved_chunks(self, chunks_with_meta) -> str:
@@ -2230,6 +2460,7 @@ class Retrieve:
         else:
             merged = dual_merged
 
+        slice_family = self._slice_family_expand_enabled()
         t0 = time.perf_counter()
         passages = self._build_materials(merged)
         passages = self._enrich_passage_ids(passages)
@@ -2244,6 +2475,12 @@ class Retrieve:
             stage='final',
         )
         t_rerank = time.perf_counter() - t0
+
+        if slice_family:
+            t0 = time.perf_counter()
+            passages = self._expand_slice_families(passages)
+            passages = self._enrich_passage_ids(passages)
+            t_expand += time.perf_counter() - t0
 
         t_total = time.perf_counter() - t_all
         timing = {
@@ -2274,7 +2511,9 @@ class Retrieve:
             f"kw_majority={self.last_keyword.get('majority')!r} "
             f"kw_pool={self.last_keyword.get('pool_chunks')} "
             f"kw_docs={self.last_keyword.get('top_docs')} "
-            f"full_body={body_mode} rerank={enable_rerank} rerank_k={rerank_top} "
+            f"full_body={body_mode if not slice_family else 'off(slice_family)'} "
+            f"slice_family={slice_family} "
+            f"rerank={enable_rerank} rerank_k={rerank_top} "
             f"chunk_max_v={self._scope_max_vectors('chunk')} "
             f"node_max_v={self._scope_max_vectors('node')} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "

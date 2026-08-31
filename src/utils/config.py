@@ -490,7 +490,11 @@ class RetrieveConfig(BaseModel):
     # true / on / full：命中文档扩全部正文；切片文档在文首补超边头块，未切开的不加
     # false / off：头块 + 命中正文块（原关闭行为）
     # simple：只补超边头块，不扩未命中正文；仅命中头块时不扩展
+    # 被 enable_slice_family_expand 覆盖：后者开启时本项不生效。
     enable_full_body_context: Union[bool, str] = False
+    # 命中任一切片时，扩到同源 PDF 的全部切开文档（foo.pdf / foo.pdf_1 / …），
+    # 按 slice_index 原序输出全文。默认关。开启后忽略 enable_full_body_context。
+    enable_slice_family_expand: bool = False
 
     enable_keyword_exact: bool = True
     # 关键词路内两路精确匹配，可独立开关。总开关 enable_keyword_exact 为 false 时两路都关。
