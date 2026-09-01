@@ -64,24 +64,58 @@ def _id_in_range(i, lo: int, hi: int) -> bool:
     return True
 
 
-def _shard_overlaps_range(id_start: int, ntotal: int, lo: int, hi: int) -> str:
+def _shard_overlaps_range(shard_lo: int, shard_hi: int, lo: int, hi: int) -> str:
     """
-    Shard covering ids [id_start, id_start+ntotal-1] vs [lo, hi].
-    Return 'before' / 'after' / 'overlap' / 'empty'.
+    Shard covering inclusive ids [shard_lo, shard_hi] vs query [lo, hi].
+    0 on a query side = unbounded. Return 'before' / 'after' / 'overlap' / 'empty'.
     """
     try:
-        n = int(ntotal or 0)
+        s_lo = int(shard_lo)
+        s_hi = int(shard_hi)
+    except (TypeError, ValueError):
+        return 'empty'
+    if s_hi < s_lo:
+        return 'empty'
+    if hi > 0 and s_lo > hi:
+        return 'after'
+    if lo > 0 and s_hi < lo:
+        return 'before'
+    return 'overlap'
+
+
+def _handle_id_bounds(handle, fallback_lo: int = 1) -> tuple:
+    """
+    Inclusive (shard_lo, shard_hi, ntotal) for a loaded FAISS handle.
+
+    Prefer id_map min/max (SQL / add_with_ids start at 1). If the index
+    has no id_map, assume contiguous ids [fallback_lo, fallback_lo+n-1].
+    Starting fallback_lo at 0 would shift every shard left by 1 and treat
+    id==hi as belonging to the next shard.
+    """
+    try:
+        n = int(getattr(handle, 'ntotal', 0) or 0)
     except (TypeError, ValueError):
         n = 0
     if n <= 0:
-        return 'empty'
-    shard_lo = int(id_start)
-    shard_hi = shard_lo + n - 1
-    if hi > 0 and shard_lo > hi:
-        return 'after'
-    if lo > 0 and shard_hi < lo:
-        return 'before'
-    return 'overlap'
+        return 0, -1, 0
+    bounds = None
+    getter = getattr(handle, 'id_bounds', None)
+    if callable(getter):
+        try:
+            bounds = getter()
+        except Exception:
+            bounds = None
+    if bounds is not None:
+        try:
+            s_lo, s_hi = int(bounds[0]), int(bounds[1])
+            if s_hi >= s_lo:
+                return s_lo, s_hi, n
+        except (TypeError, ValueError, IndexError):
+            pass
+    lo = int(fallback_lo or 1)
+    if lo <= 0:
+        lo = 1
+    return lo, lo + n - 1, n
 
 
 def normalize_index_quant(v) -> str:
@@ -862,7 +896,9 @@ class BaseVDB:
         Load overlapping shards into RAM and keep the handles.
 
         min_vectors / max_vectors: same meaning as search() (0 = unbounded).
-        Idempotent when already pinned with the same range.
+        Overlap uses each shard's FAISS id_map (SQL ids start at 1), not
+        0-based ntotal accumulation. Idempotent when already pinned with
+        the same range.
         """
         t0 = time.perf_counter()
         lo, hi = normalize_id_range(min_vectors, max_vectors)
@@ -904,7 +940,7 @@ class BaseVDB:
             loaded = []
             scanned = 0
             nbytes = 0
-            id_start = 0
+            fallback_lo = 1
             for name in self._ordered_sealed_names():
                 path = self.shards_dir / name
                 if not path.exists() or path.stat().st_size < 1024:
@@ -914,19 +950,19 @@ class BaseVDB:
                 if n <= 0:
                     handle.unload()
                     continue
-                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                shard_lo, shard_hi, n = _handle_id_bounds(handle, fallback_lo)
+                rel = _shard_overlaps_range(shard_lo, shard_hi, lo, hi)
                 if rel == 'after':
                     handle.unload()
                     break
+                fallback_lo = shard_hi + 1
                 if rel == 'before':
                     handle.unload()
-                    id_start += n
                     continue
                 self._resident[name] = handle
                 scanned += n
                 nbytes += int(path.stat().st_size)
                 loaded.append(name)
-                id_start += n
 
             self._resident_min_vectors = lo
             self._resident_max_vectors = hi
@@ -1056,7 +1092,7 @@ class BaseVDB:
         skipped_tail = False
         resident_hits = 0
         resident_misses = 0
-        id_start = 0
+        fallback_lo = 1
 
         def _consume(distances, ids):
             if ids is None:
@@ -1096,25 +1132,26 @@ class BaseVDB:
                     handle = self._make_faiss(path, create_empty=False)
                     owned = True
             try:
-                n = int(handle.ntotal or 0)
-                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                shard_lo, shard_hi, n = _handle_id_bounds(handle, fallback_lo)
+                rel = _shard_overlaps_range(shard_lo, shard_hi, lo, hi)
                 if rel == 'after':
                     skipped_tail = True
                     break
                 if rel == 'before' or rel == 'empty':
                     skipped_head = skipped_head or rel == 'before'
-                    id_start += max(0, n)
+                    if n > 0:
+                        fallback_lo = shard_hi + 1
                     continue
                 _search_handle(handle, owned=owned)
-                id_start += max(0, n)
+                fallback_lo = shard_hi + 1
             finally:
                 if owned:
                     handle.unload()
 
         if not skipped_tail:
             if self.vdb is not None and self.vdb.vdb is not None:
-                n = int(self.vdb.ntotal or 0)
-                rel = _shard_overlaps_range(id_start, n, lo, hi)
+                shard_lo, shard_hi, n = _handle_id_bounds(self.vdb, fallback_lo)
+                rel = _shard_overlaps_range(shard_lo, shard_hi, lo, hi)
                 if rel == 'overlap':
                     _search_handle(self.vdb, owned=False)
                 elif rel == 'after':
@@ -1940,6 +1977,27 @@ class FassiVDB:
             return int(self.vdb.ntotal)
         except Exception:
             return 0
+
+    def id_bounds(self):
+        """Inclusive (min_id, max_id) from FAISS id_map, or None if unknown."""
+        if self.vdb is None:
+            return None
+        try:
+            n = int(self.vdb.ntotal or 0)
+        except Exception:
+            return None
+        if n <= 0:
+            return None
+        try:
+            id_map = faiss.vector_to_array(self.vdb.id_map)
+        except Exception:
+            return None
+        if id_map is None or len(id_map) == 0:
+            return None
+        live = id_map[id_map >= 0]
+        if live.size == 0:
+            return None
+        return int(live.min()), int(live.max())
 
     def _apply_hnsw_search_params(self):
         """Set efSearch on HNSW (wrapped or bare) after load / create."""
