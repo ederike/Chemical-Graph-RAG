@@ -25,7 +25,7 @@ from .config import (
 )
 from .evaluator import QueryEvaluator
 from .question_gen import QuestionGenerator
-from .utils import project_root, resolve_path
+from .utils import pin_retrieve_for_eval, project_root, resolve_path, unpin_retrieve_for_eval
 
 logger = logging.getLogger("benchmark.workflow")
 
@@ -337,6 +337,7 @@ class TestQueryWorkflow:
         answer_llm = (
             self.setup_answer_llm() if self.cfg.enable_llm_only else None
         )
+        pinned = pin_retrieve_for_eval(self.dhmf)
 
         evaluator = QueryEvaluator(
             self.dhmf,
@@ -371,10 +372,13 @@ class TestQueryWorkflow:
             }
             self.save_json(mid_report, out, quiet=True)
 
-        eval_data = evaluator.evaluate_all(
-            dataset,
-            on_progress=_on_progress if save else None,
-        )
+        try:
+            eval_data = evaluator.evaluate_all(
+                dataset,
+                on_progress=_on_progress if save else None,
+            )
+        finally:
+            unpin_retrieve_for_eval(self.dhmf, pinned)
         eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
         self._eval_data = eval_data
 

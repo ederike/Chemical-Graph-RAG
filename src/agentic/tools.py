@@ -189,7 +189,8 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
                 "name": "read_doc",
                 "description": (
                     "按 doc_id 阅读一份资料的摘要头块与正文。"
-                    "只对 search 或 graph_neighbors 返回过的 doc_id 使用。"
+                    "可对 search 命中的 doc_id，以及命中里 siblings 列出的同族切开文档使用。"
+                    "若返回 sliced=true，当前只是长 PDF 的一片，需要时按 slice_index 顺序再读 siblings。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -287,6 +288,64 @@ class ToolContext:
             except Exception:
                 pass
         return ""
+
+    def _slice_info(self, doc_id) -> Optional[dict]:
+        """切开 PDF 的同族切片。未切开返回 None。"""
+        if doc_id is None:
+            return None
+        retrieve = self.dhmf.retrieve_module
+        try:
+            retrieve._ensure_precompute()
+        except Exception:
+            return None
+        doc = (retrieve.doc_dict or {}).get(doc_id)
+        if not doc:
+            try:
+                rows = self.dhmf.db["doc"].search("id", doc_id) or []
+                doc = rows[0] if rows else None
+            except Exception:
+                doc = None
+        if not doc:
+            return None
+        try:
+            meta = retrieve._doc_slice_meta(doc)
+        except Exception:
+            return None
+        n_slices = int(meta.get("n_slices") or 1)
+        slice_index = int(meta.get("slice_index") or 0)
+        family_key = meta.get("family_key") or ""
+        sibling_ids = []
+        if family_key:
+            try:
+                sibling_ids = list(
+                    retrieve._ordered_family_doc_ids(
+                        family_key, fallback=[doc_id],
+                    ) or []
+                )
+            except Exception:
+                sibling_ids = [doc_id]
+        if n_slices <= 1 and len(sibling_ids) <= 1:
+            return None
+        siblings = []
+        for did in sibling_ids:
+            src = self._source_of(did)
+            sdoc = (retrieve.doc_dict or {}).get(did) or {}
+            try:
+                sm = retrieve._doc_slice_meta(sdoc) if sdoc else {}
+            except Exception:
+                sm = {}
+            siblings.append({
+                "doc_id": did,
+                "slice_index": int(sm.get("slice_index") or 0),
+                "source": src,
+            })
+        return {
+            "sliced": True,
+            "slice_index": slice_index,
+            "n_slices": max(n_slices, len(siblings)),
+            "family": meta.get("source_name") or family_key,
+            "siblings": siblings,
+        }
 
     def execute(self, name: str, arguments) -> str:
         args = _parse_args(arguments)
@@ -395,7 +454,7 @@ class ToolContext:
             cur = by_doc.get(key)
             if cur is None:
                 source = it.get("source") or self._source_of(doc_id, chunk)
-                by_doc[key] = {
+                hit = {
                     "doc_id": doc_id,
                     "chunk_id": chunk.get("id") or it.get("chunk_id"),
                     "source": source,
@@ -405,6 +464,10 @@ class ToolContext:
                     "node_name": it.get("node_name"),
                     "preview": _preview(content, preview_n),
                 }
+                sl = self._slice_info(doc_id)
+                if sl:
+                    hit.update(sl)
+                by_doc[key] = hit
                 order.append(key)
                 continue
             if score > float(cur.get("score") or 0.0):
@@ -462,6 +525,7 @@ class ToolContext:
 
         source = self._source_of(doc_id, chunks[0] if chunks else None)
         self._remember_ref(source, doc_id)
+        slice_info = self._slice_info(doc_id)
 
         he = None
         try:
@@ -475,6 +539,22 @@ class ToolContext:
 
         max_chars = int(self.cfg.read_doc_max_chars)
         parts = [f"doc_id={doc_id}", f"source={source or '未知'}"]
+        if slice_info:
+            nsl = slice_info.get("n_slices")
+            sidx = slice_info.get("slice_index")
+            fam = slice_info.get("family") or ""
+            parts.append(
+                f"sliced=true  这是长 PDF「{fam}」的第 {int(sidx) + 1}/{nsl} 片"
+                f"（slice_index={sidx}，从 0 计）。"
+                "当前正文只是这一段，后文可能在 siblings 的下一片。"
+            )
+            sibs = slice_info.get("siblings") or []
+            if sibs:
+                bits = [
+                    f"doc_id={s.get('doc_id')}[{s.get('slice_index')}] {s.get('source')}"
+                    for s in sibs
+                ]
+                parts.append("siblings: " + " | ".join(bits))
         if he:
             hid = he.get("id")
             hname = (he.get("name") or "").strip()
@@ -503,13 +583,16 @@ class ToolContext:
         if max_chars > 0 and len(text) > max_chars:
             text = text[:max_chars] + "\n…(truncated)"
             truncated = True
-        return {
+        out = {
             "doc_id": doc_id,
             "source": source,
             "n_chunks": len(chunks),
             "truncated": truncated,
             "content": text,
         }
+        if slice_info:
+            out.update(slice_info)
+        return out
 
     def graph_neighbors(self, args: dict) -> dict:
         name = str(args.get("name") or "").strip()

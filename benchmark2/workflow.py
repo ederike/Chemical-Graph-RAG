@@ -17,7 +17,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from benchmark.utils import project_root, resolve_path
+from benchmark.utils import (
+    pin_retrieve_for_eval,
+    project_root,
+    resolve_path,
+    unpin_retrieve_for_eval,
+)
 
 from benchmark.config import merge_llm_only_model_args
 
@@ -310,6 +315,7 @@ class Benchmark2Workflow:
         answer_llm = (
             self.setup_answer_llm() if self.cfg.enable_llm_only else None
         )
+        pinned = pin_retrieve_for_eval(self.dhmf)
 
         evaluator = ExcelQueryEvaluator(
             self.dhmf,
@@ -346,11 +352,14 @@ class Benchmark2Workflow:
                 mid_report.setdefault("stats_meta", dataset["stats"].get("meta"))
             self.save_json(mid_report, out, quiet=True)
 
-        eval_data = evaluator.evaluate_all(
-            dataset,
-            existing_results=existing,
-            on_progress=_on_progress if save else None,
-        )
+        try:
+            eval_data = evaluator.evaluate_all(
+                dataset,
+                existing_results=existing,
+                on_progress=_on_progress if save else None,
+            )
+        finally:
+            unpin_retrieve_for_eval(self.dhmf, pinned)
         eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
         if dataset.get("stats"):
             eval_data["stats"] = dataset["stats"]

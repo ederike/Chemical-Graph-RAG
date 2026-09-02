@@ -520,3 +520,24 @@ def match_doc_names(expected: Sequence[str], retrieved: Sequence[str]) -> Tuple[
         else:
             miss.append(e)
     return hit, miss, list(ret_norm.values())
+
+
+def pin_retrieve_for_eval(dhmf) -> bool:
+    """评测前常驻检索索引。成功返回 True，供 finally 里 unpin。"""
+    if dhmf is None or not hasattr(dhmf, "pin_retrieve_indexes"):
+        return False
+    print("[eval] pin_retrieve_indexes …", file=sys.stderr, flush=True)
+    dhmf.pin_retrieve_indexes()
+    print("[eval] pin_retrieve_indexes done", file=sys.stderr, flush=True)
+    return True
+
+
+def unpin_retrieve_for_eval(dhmf, pinned: bool) -> None:
+    if not pinned or dhmf is None or not hasattr(dhmf, "unpin_retrieve_indexes"):
+        return
+    print("[eval] unpin_retrieve_indexes …", file=sys.stderr, flush=True)
+    try:
+        dhmf.unpin_retrieve_indexes()
+        print("[eval] unpin_retrieve_indexes done", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[eval] unpin_retrieve_indexes failed: {e}", file=sys.stderr, flush=True)

@@ -17,7 +17,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from benchmark.utils import project_root, resolve_path
+from benchmark.utils import (
+    pin_retrieve_for_eval,
+    project_root,
+    resolve_path,
+    unpin_retrieve_for_eval,
+)
 from benchmark.config import merge_llm_only_model_args
 from benchmark2.evaluator import ExcelQueryEvaluator
 from benchmark2.report import build_report_document, format_summary_text
@@ -316,6 +321,7 @@ class Benchmark3Workflow:
             dataset = self._ensure_dataset()
 
         evaluator = self._make_evaluator(with_dhmf=True)
+        pinned = pin_retrieve_for_eval(self.dhmf)
         out = self.cfg.eval_results_file() if save else None
         existing = []
         if save and self.cfg.eval_resume and out is not None:
@@ -332,11 +338,14 @@ class Benchmark3Workflow:
             }
             self.save_json(mid_report, out, quiet=True)
 
-        eval_data = evaluator.evaluate_all(
-            dataset,
-            existing_results=existing,
-            on_progress=_on_progress if save else None,
-        )
+        try:
+            eval_data = evaluator.evaluate_all(
+                dataset,
+                existing_results=existing,
+                on_progress=_on_progress if save else None,
+            )
+        finally:
+            unpin_retrieve_for_eval(self.dhmf, pinned)
         eval_data.setdefault("meta", {})["config"] = self.cfg.to_meta_snapshot()
         self._eval_data = eval_data
 
