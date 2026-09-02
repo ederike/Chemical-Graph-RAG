@@ -28,3 +28,6 @@ cryptography>=42.0.0
 # Hypergraph visualization (scripts/)
 matplotlib>=3.8.0
 networkx>=3.0
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0

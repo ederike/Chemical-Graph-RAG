@@ -308,6 +308,7 @@ python benchmark2.py
 
 ```text
 main.py                 构建入口
+api/                    FastAPI 在线问答（query / agent / retrieve）
 src/DHMF.py             流水线门面
 src/module/             insert / summary / chunk / extract / build / vectorization / retrieve
 src/agent/              多跳 Agent（graph / nodes / skill / runner）
@@ -315,4 +316,5 @@ src/utils/              配置、SQLite/FAISS、LLM 客户端、OSS 下载、pro
 benchmark/              库内自生成评测
 benchmark2/             外部 Excel 评测
 scripts/                超图可视化、向量分片重打包
+docs/fastapi教程.md     FastAPI 写法与调用说明
 ```

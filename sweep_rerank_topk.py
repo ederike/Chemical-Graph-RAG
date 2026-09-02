@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 # generate | evaluate | summarize | all（可被命令行覆盖）
-STEP: str = "evaluate"
+STEP: str = "summarize"
 
 # RERANK_TOP_KS: List[int] = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
 RERANK_TOP_KS: List[int] = [23,24,25,26,27,28,29,30]
