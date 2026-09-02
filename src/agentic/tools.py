@@ -36,6 +36,95 @@ def _as_int(v) -> Optional[int]:
         return None
 
 
+SEARCH_MODES = ("hybrid", "chunk", "node", "keyword")
+_SEARCH_MODE_ALIASES = {
+    "hybrid": "hybrid",
+    "mix": "hybrid",
+    "mixed": "hybrid",
+    "all": "hybrid",
+    "default": "hybrid",
+    "union": "hybrid",
+    "chunk": "chunk",
+    "chunks": "chunk",
+    "passage": "chunk",
+    "text": "chunk",
+    "block": "chunk",
+    "node": "node",
+    "nodes": "node",
+    "entity": "node",
+    "entities": "node",
+    "keyword": "keyword",
+    "keywords": "keyword",
+    "exact": "keyword",
+    "fts": "keyword",
+    "kw": "keyword",
+}
+
+
+def normalize_search_mode(raw) -> str:
+    """hybrid / chunk / node / keyword。空或未知 → hybrid。"""
+    s = str(raw or "").strip().lower()
+    if not s:
+        return "hybrid"
+    return _SEARCH_MODE_ALIASES.get(s, "")
+
+
+def search_retrieve_kwargs(cfg: "AgenticConfig", mode: str) -> dict:
+    """
+    按 mode 打开/关闭三路。宽度仍用 agentic 配置，不读 retrieve:。
+    单路模式下若对应 k 配成 0，回落到该路默认宽度，避免模型显式选路却空跑。
+    """
+    chunk_k = int(cfg.chunk_candidate_k)
+    node_k = int(cfg.node_candidate_k)
+    kw_cand = int(cfg.keyword_candidate_k)
+    kw_top = int(cfg.keyword_top_k)
+    kw_on = bool(cfg.enable_keyword_exact)
+    kw_min = bool(cfg.enable_keyword_minority)
+    kw_maj = bool(cfg.enable_keyword_majority)
+
+    if mode == "chunk":
+        return {
+            "chunk_candidate_k": chunk_k if chunk_k > 0 else 30,
+            "node_candidate_k": 0,
+            "enable_keyword_exact": False,
+            "enable_keyword_minority": False,
+            "enable_keyword_majority": False,
+            "keyword_candidate_k": 0,
+            "keyword_top_k": 0,
+        }
+    if mode == "node":
+        return {
+            "chunk_candidate_k": 0,
+            "node_candidate_k": node_k if node_k > 0 else 30,
+            "enable_keyword_exact": False,
+            "enable_keyword_minority": False,
+            "enable_keyword_majority": False,
+            "keyword_candidate_k": 0,
+            "keyword_top_k": 0,
+        }
+    if mode == "keyword":
+        if not kw_min and not kw_maj:
+            kw_min = True
+        return {
+            "chunk_candidate_k": 0,
+            "node_candidate_k": 0,
+            "enable_keyword_exact": True,
+            "enable_keyword_minority": kw_min,
+            "enable_keyword_majority": kw_maj,
+            "keyword_candidate_k": kw_cand if kw_cand > 0 else 20,
+            "keyword_top_k": kw_top if kw_top > 0 else 10,
+        }
+    return {
+        "chunk_candidate_k": chunk_k,
+        "node_candidate_k": node_k,
+        "enable_keyword_exact": kw_on,
+        "enable_keyword_minority": kw_min,
+        "enable_keyword_majority": kw_maj,
+        "keyword_candidate_k": kw_cand,
+        "keyword_top_k": kw_top,
+    }
+
+
 def _parse_args(raw) -> dict:
     if isinstance(raw, dict):
         return dict(raw)
@@ -59,16 +148,34 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
             "function": {
                 "name": "search",
                 "description": (
-                    "在化工产品知识库中检索。返回若干条短摘要以及 doc_id / chunk_id。"
-                    "需要核对规格、配方或安全数据时，再用 read_doc 阅读命中文档。"
-                    "查询尽量具体，可含牌号、CAS、指标与数值；同一主体上的多项约束写在一次查询里。"
+                    "在化工产品知识库中检索。返回短摘要和 doc_id / chunk_id。"
+                    "query 必须是一句完整的自然语言问题或陈述，禁止只传几个关键词。"
+                    "mode=keyword：后端从问句抽取牌号/CAS/货号再精确匹配，问句里要带这些标识。"
+                    "mode=node：实体节点向量检索，问一个主体（产品/公司/物质）。"
+                    "mode=chunk：正文块语义检索，问用途/工艺/配方等段落内容。"
+                    "mode=hybrid 或省略：三路混合，拿不准或既有标识又有规格时用。"
+                    "核对数值或原文时再调用 read_doc。"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "检索语句",
+                            "description": (
+                                "一句完整问句。正确：「CAS 号 13463-67-7 对应什么产品」、"
+                                "「外墙乳胶漆提高耐沾污性常用哪些助剂」。"
+                                "错误：「R-902 13463-67-7」或「耐沾污 硅丙」。"
+                            ),
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["hybrid", "keyword", "node", "chunk"],
+                            "description": (
+                                "hybrid（默认）=块+节点+抽词精确匹配；"
+                                "keyword=从完整问句抽少数值再 FTS；"
+                                "node=实体节点向量；"
+                                "chunk=正文块向量。"
+                            ),
                         },
                     },
                     "required": ["query"],
@@ -144,6 +251,7 @@ class ToolContext:
     dhmf: "DHMF"
     cfg: "AgenticConfig"
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger(__name__))
+    trace: Any = None
     retrieve_latency_s: float = 0.0
     retrieve_timing: Dict[str, float] = field(default_factory=empty_retrieve_timing)
     sources: List[str] = field(default_factory=list)
@@ -206,24 +314,30 @@ class ToolContext:
         if not query:
             return {"error": "search 需要 query"}
 
+        raw_mode = args.get("mode")
+        if raw_mode is None or str(raw_mode).strip() == "":
+            mode = "hybrid"
+        else:
+            mode = normalize_search_mode(raw_mode)
+            if not mode:
+                return {
+                    "error": f"未知 search mode={raw_mode!r}",
+                    "allowed": list(SEARCH_MODES),
+                }
+
         cfg = self.cfg
         retrieve = self.dhmf.retrieve_module
+        path_kw = search_retrieve_kwargs(cfg, mode)
         t0 = time.perf_counter()
         items = retrieve.retrieve_items(
             query,
-            chunk_candidate_k=int(cfg.chunk_candidate_k),
-            node_candidate_k=int(cfg.node_candidate_k),
             enable_query_rewrite=bool(cfg.enable_query_rewrite),
-            enable_keyword_exact=bool(cfg.enable_keyword_exact),
-            enable_keyword_minority=bool(cfg.enable_keyword_minority),
-            enable_keyword_majority=bool(cfg.enable_keyword_majority),
-            keyword_candidate_k=int(cfg.keyword_candidate_k),
-            keyword_top_k=int(cfg.keyword_top_k),
             enable_parallel_paths=bool(cfg.enable_parallel_paths),
             rerank_top_k=int(cfg.rerank_top_k),
             enable_rerank=bool(cfg.enable_rerank),
             enable_full_body_context=cfg.enable_full_body_context,
             enable_slice_family_expand=bool(cfg.enable_slice_family_expand),
+            **path_kw,
         )
         dt = time.perf_counter() - t0
         self.retrieve_latency_s += dt
@@ -239,21 +353,19 @@ class ToolContext:
 
         last_kw = getattr(retrieve, "last_keyword", None) or {}
         last_rw = getattr(retrieve, "last_rewrite", None) or {}
-        if self.cfg.log_trace:
+        if self.trace is not None and getattr(self.trace, "enabled", False):
             try:
                 raw_ctx = retrieve._format_retrieved_chunks(items)
             except Exception:
                 raw_ctx = ""
-            self.logger.info("[agentic.trace] ----- search raw retrieval -----")
-            self.logger.info(
-                f"[agentic.trace] rewritten={last_rw.get('rewritten')!r} "
+            self.trace.line(
+                f"search raw  mode={mode} rewritten={last_rw.get('rewritten')!r} "
                 f"timing={timing} keyword={last_kw.get('minority')!r}"
             )
-            for line in str(raw_ctx).splitlines() or [""]:
-                self.logger.info(f"[agentic.trace] {line}")
-            self.logger.info("[agentic.trace] ----- end search raw -----")
+            self.trace.block("search raw retrieval", raw_ctx)
         return {
             "query": query,
+            "mode": mode,
             "rewritten": last_rw.get("rewritten") or None,
             "n_raw": len(items or []),
             "n_hits": len(hits),

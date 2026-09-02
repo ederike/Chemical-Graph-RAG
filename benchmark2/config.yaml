@@ -4,7 +4,7 @@ run:
 
 dhmf:
   config_path: example/a/config_open.yaml
-  query_mode: agent  # dual_path | agent
+  query_mode: agentic  # dual_path | agent | agentic
 
 dataset:
   excel_path: benchmark2/建筑涂料测试问题集2.xlsx

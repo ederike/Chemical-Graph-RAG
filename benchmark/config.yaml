@@ -4,7 +4,7 @@ run:
 
 dhmf:
   config_path: example/a/config_open.yaml
-  query_mode: agent  # dual_path | agent
+  query_mode: agentic  # dual_path | agent | agentic
 
 paths:
   db_path: example/a/DB/main.db

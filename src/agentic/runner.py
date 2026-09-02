@@ -9,7 +9,13 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
-from .loop import AgenticContext, build_agentic_llm, run_agentic_loop
+from .loop import (
+    AgenticContext,
+    TraceSink,
+    build_agentic_llm,
+    open_trace_file,
+    run_agentic_loop,
+)
 from .tools import ToolContext
 
 if TYPE_CHECKING:
@@ -25,6 +31,9 @@ def _format_pretty(respond: dict, *, query: str) -> str:
     proto = respond.get("protocol") or ""
     if proto:
         lines.append(f"protocol: {proto}")
+    trace_path = respond.get("trace_path") or ""
+    if trace_path:
+        lines.append(f"trace:    {trace_path}")
     if not turns:
         lines.append("(none)")
     else:
@@ -79,12 +88,24 @@ def run_agentic_query(
 
     logger = dhmf.logger
     llm = build_agentic_llm(config)
-    tools = ToolContext(dhmf=dhmf, cfg=agentic_cfg, logger=logger)
-    ctx = AgenticContext(cfg=agentic_cfg, llm=llm, tools=tools, logger=logger)
+    q = (query or "").strip()
+
+    trace = TraceSink()
+    trace_path = None
+    if bool(agentic_cfg.log_trace):
+        working = getattr(getattr(config, "settings", None), "working_path", "") or "."
+        trace_path = open_trace_file(str(working))
+        trace = TraceSink(trace_path)
+        trace.line(f"query: {q}")
+        logger.info(f"[agentic_query] trace file: {trace_path}")
+
+    tools = ToolContext(dhmf=dhmf, cfg=agentic_cfg, logger=logger, trace=trace)
+    ctx = AgenticContext(
+        cfg=agentic_cfg, llm=llm, tools=tools, logger=logger, trace=trace,
+    )
 
     t0 = time.perf_counter()
-    q = (query or "").strip()
-    logger.info(f"[agentic_query] start log_trace={bool(agentic_cfg.log_trace)} q={q!r}")
+    logger.info(f"[agentic_query] start q={q!r}")
     try:
         respond: Dict[str, Any] = run_agentic_loop(ctx, q)
     except Exception as e:
@@ -96,15 +117,22 @@ def run_agentic_query(
             "retrieval_sources": [],
             "retrieval_doc_ids": [],
         }
+        if trace.enabled:
+            trace.block("exception", str(e))
+    finally:
+        trace.close()
 
     respond["latency_s"] = time.perf_counter() - t0
     respond.setdefault("retrieval_sources", [])
     respond.setdefault("retrieval_doc_ids", [])
+    if trace_path is not None:
+        respond["trace_path"] = str(trace_path)
     logger.info(
         f"[agentic_query] done status={respond.get('status')} "
         f"turns={len(respond.get('turns') or [])} "
         f"latency={respond['latency_s']:.3f}s "
         f"retrieve={float(respond.get('retrieve_latency_s') or 0):.3f}s"
+        + (f" trace={trace_path}" if trace_path else "")
     )
     if pretty:
         return _format_pretty(respond, query=q)

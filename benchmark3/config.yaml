@@ -4,7 +4,7 @@ run:
 
 dhmf:
   config_path: example/a/config_open.yaml
-  query_mode: agent  # dual_path | agent
+  query_mode: agentic  # dual_path | agent | agentic
 
 dataset:
   csv_path: benchmark3/建筑涂料专利集问答测试问题.csv
@@ -34,7 +34,7 @@ evaluate:
   enable_llm_only: false  # true 时额外跑纯 LLM 对照
   max_retries: 10
   sleep_between: 0.0
-  num_thread: 5
+  num_thread: 3
   use_cache: false
   dhmf_retrieve_use_cache: null
   api_key: null

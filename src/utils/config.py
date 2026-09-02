@@ -773,8 +773,12 @@ class AgenticConfig(BaseModel):
         'enable_thinking': False,
     })
     use_cache: bool = False
-    max_turns: int = 8
-    # 把思考、工具调用、检索原文全部打到 logger，方便调试
+    max_turns: int = 32
+    # 单题上下文上限（最近一次请求的 prompt tokens）。0=不按 token 停。
+    max_prompt_tokens: int = 256000
+    # 预留给强制作答的生成空间；实际阈值 = max_prompt_tokens - prompt_token_reserve
+    prompt_token_reserve: int = 8192
+    # 思考 / 工具 / 检索原文写入 {working_path}/log/agentic_时间戳.log，不刷控制台
     log_trace: bool = True
     # auto：优先 OpenAI tools，接口不支持再降级 JSON；openai / json 强制
     tool_protocol: str = "auto"
@@ -868,7 +872,8 @@ class AgenticConfig(BaseModel):
         )
 
     @field_validator(
-        "max_turns", "search_preview_chars", "search_max_hits",
+        "max_turns", "max_prompt_tokens", "prompt_token_reserve",
+        "search_preview_chars", "search_max_hits",
         "read_doc_max_chars", "neighbors_limit",
         "chunk_candidate_k", "node_candidate_k",
         "keyword_candidate_k", "keyword_top_k", "rerank_top_k",
@@ -877,7 +882,9 @@ class AgenticConfig(BaseModel):
     @classmethod
     def _coerce_int(cls, v, info):
         defaults = {
-            "max_turns": 8,
+            "max_turns": 32,
+            "max_prompt_tokens": 256000,
+            "prompt_token_reserve": 8192,
             "search_preview_chars": 400,
             "search_max_hits": 8,
             "read_doc_max_chars": 8000,

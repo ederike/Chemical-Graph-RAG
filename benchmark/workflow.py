@@ -313,7 +313,7 @@ class TestQueryWorkflow:
         save: bool = True,
     ) -> Dict[str, Any]:
         """
-        步骤 2：读问题集 → DHMF.query / agent_query（+ 可选纯 LLM）→ 评判。
+        步骤 2：读问题集 → DHMF.query / agent_query / agentic_query（+ 可选纯 LLM）→ 评判。
 
         写出 eval_results（逐题明细，每题增量落盘）；
         不写汇总 report（由 report 步骤独立完成）。

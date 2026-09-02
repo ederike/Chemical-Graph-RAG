@@ -152,6 +152,7 @@ class QueryResponse(BaseModel):
     steps: Optional[List[dict]] = None
     turns: Optional[List[dict]] = None
     protocol: Optional[str] = None
+    trace_path: Optional[str] = None
     reasoning_content: Optional[str] = None
 
 

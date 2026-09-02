@@ -222,7 +222,7 @@ python benchmark.py
 ```
 
 `run.mode` 可选：`generate` | `evaluate` | `report` | `excel` | `all`。
-`dhmf.query_mode` 可选：`agent`（默认）或 `dual_path`。
+`dhmf.query_mode` 可选：`agentic`（工具循环）| `agent`（规划多跳）| `dual_path`（单跳检索）。
 
 当前示例配置会生成 200 题（1/2/3-hop = 100/50/50），输出目录由 `paths.output_dir` 指定。
 

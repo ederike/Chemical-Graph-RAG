@@ -145,7 +145,7 @@ def normalize_judgment(raw: str) -> Optional[str]:
 class QueryEvaluator:
     """
     对测试集 JSON 中的问题：
-      1) 按 query_mode 调用 DHMF.query（dual_path）或 DHMF.agent_query（agent）
+      1) 按 query_mode 调用 DHMF.query / agent_query / agentic_query
       2) 可选：同一模型不检索的纯 LLM 对照
       3) 两路回答一次送入裁判对比打分（二分类 llm-acc：正确/错误）
       4) 文档召回率 = 命中 gold 文档数 / gold 文档数（仅超图）
@@ -219,21 +219,17 @@ class QueryEvaluator:
     def _normalize_query_mode(mode: Any) -> str:
         """
         规范化查询方式：
-          dual_path / query  →  DHMF.query(mode='dual_path')
+          dual_path / query   →  DHMF.query(mode='dual_path')
           agent / agent_query →  DHMF.agent_query()
+          agentic             →  DHMF.agentic_query()
         """
-        s = str(mode or "dual_path").strip().lower().replace("-", "_")
-        if s in ("agent", "agent_query", "multi_hop", "multihop"):
-            return "agent"
-        if s in ("dual_path", "dualpath", "query", "rag"):
-            return "dual_path"
-        raise ValueError(
-            f"Unknown benchmark query_mode={mode!r}. "
-            f"Supported: 'dual_path' | 'agent'"
-        )
+        from .config import _normalize_query_mode as _norm
+        return _norm(mode)
 
     def _run_query(self, question: str) -> Any:
-        """按 query_mode 调用 DHMF.query 或 DHMF.agent_query。"""
+        """按 query_mode 调用 DHMF.query / agent_query / agentic_query。"""
+        if self.query_mode == "agentic":
+            return self.dhmf.agentic_query(question, pretty=False)
         if self.query_mode == "agent":
             return self.dhmf.agent_query(question, pretty=False)
         return self.dhmf.query(question, mode="dual_path", pretty=False)
@@ -289,8 +285,10 @@ class QueryEvaluator:
         将 agent 多跳规划与各子步骤回答格式化为可读文本。
 
         用于 rag_raw_answer：与最终回答 rag_answer 分开，记录完整过程。
-        无 plan/steps 时回退为模型原始 answer。
+        agentic 用 turns；旧 agent 用 plan/steps；都没有则回退为原始 answer。
         """
+        if respond.get("turns"):
+            return QueryEvaluator._format_agentic_process(respond)
         plan = list(respond.get("plan") or [])
         steps = list(respond.get("steps") or [])
         if not plan and not steps:
@@ -351,6 +349,65 @@ class QueryEvaluator:
             lines.append("-" * 48)
             lines.append(final)
 
+        return "\n".join(lines).rstrip()
+
+    @staticmethod
+    def _format_agentic_process(respond: Dict[str, Any]) -> str:
+        """将 agentic 工具循环格式化为可读文本，写入 rag_raw_answer。"""
+        turns = list(respond.get("turns") or [])
+        lines: List[str] = ["## Agentic Trace", "-" * 48]
+        proto = respond.get("protocol") or ""
+        if proto:
+            lines.append(f"protocol: {proto}")
+        tp = respond.get("trace_path") or ""
+        if tp:
+            lines.append(f"trace:    {tp}")
+        lp = respond.get("last_prompt_tokens")
+        if lp is not None:
+            lines.append(f"last_prompt_tokens: {lp}")
+        if not turns:
+            lines.append("(no turns)")
+        else:
+            for t in turns:
+                if not isinstance(t, dict):
+                    continue
+                n = t.get("turn")
+                kind = t.get("kind") or ""
+                tag = "forced" if t.get("forced") else kind
+                lines.append(f"### Turn {n}  ·  {tag}")
+                thought = (t.get("thought") or "").strip()
+                if thought:
+                    lines.append("thought:")
+                    for al in thought.splitlines() or [thought]:
+                        lines.append(f"  {al}")
+                for call in t.get("calls") or []:
+                    if not isinstance(call, dict):
+                        continue
+                    name = call.get("name") or ""
+                    args = call.get("arguments") or {}
+                    lines.append(f"tool: {name}  args={args}")
+                    result = str(call.get("result") or "")
+                    if len(result) > 1200:
+                        result = result[:1200] + "…"
+                    if result:
+                        lines.append("result:")
+                        for al in result.splitlines()[:50]:
+                            lines.append(f"  {al}")
+                ans = (t.get("answer") or "").strip()
+                if ans:
+                    lines.append("answer:")
+                    for al in ans.splitlines() or [ans]:
+                        lines.append(f"  {al}")
+                reason = (t.get("force_reason") or "").strip()
+                if reason:
+                    lines.append(f"force_reason: {reason}")
+                lines.append("")
+
+        final = str(respond.get("answer") or "").strip()
+        if final:
+            lines.append("## Final Answer")
+            lines.append("-" * 48)
+            lines.append(final)
         return "\n".join(lines).rstrip()
 
     def _compute_recall(
@@ -725,7 +782,12 @@ class QueryEvaluator:
 
         block["query_status"] = respond.get("status", 0)
         block["answer"] = self._extract_answer_text(respond)
-        if self.query_mode == "agent" or respond.get("plan") or respond.get("steps"):
+        if (
+            self.query_mode in ("agent", "agentic")
+            or respond.get("plan")
+            or respond.get("steps")
+            or respond.get("turns")
+        ):
             block["raw_answer"] = self._format_agent_process(respond)
         else:
             block["raw_answer"] = respond.get("answer") or ""
@@ -765,6 +827,10 @@ class QueryEvaluator:
             "completion_tokens": ct,
             "total_tokens": tt,
             "wall_latency_s": time.perf_counter() - t0,
+            "last_prompt_tokens": respond.get("last_prompt_tokens"),
+            "n_turns": len(respond.get("turns") or respond.get("steps") or []),
+            "protocol": respond.get("protocol"),
+            "trace_path": respond.get("trace_path"),
         }
         return block
 

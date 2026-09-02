@@ -153,7 +153,7 @@ def _answer_model_args_from_dhmf(dhmf, override: Optional[dict] = None) -> dict:
 class ExcelQueryEvaluator:
     """
     对 Excel 测试集逐题：
-      1) 超图：按 query_mode 调用 DHMF.query / agent_query
+      1) 超图：按 query_mode 调用 DHMF.query / agent_query / agentic_query
       2) 纯 LLM：同一模型、不检索，直接根据问题作答
       3) 两路回答一次送入裁判，按同一套验收标准对比打分
     """
@@ -221,6 +221,8 @@ class ExcelQueryEvaluator:
         self.num_thread = max(1, nt)
 
     def _run_query(self, question: str) -> Any:
+        if self.query_mode == "agentic":
+            return self.dhmf.agentic_query(question, pretty=False)
         if self.query_mode == "agent":
             return self.dhmf.agent_query(question, pretty=False)
         return self.dhmf.query(question, mode="dual_path", pretty=False)
@@ -676,7 +678,12 @@ class ExcelQueryEvaluator:
 
         block["query_status"] = respond.get("status", 0)
         block["answer"] = self._extract_answer_text(respond)
-        if self.query_mode == "agent" or respond.get("plan") or respond.get("steps"):
+        if (
+            self.query_mode in ("agent", "agentic")
+            or respond.get("plan")
+            or respond.get("steps")
+            or respond.get("turns")
+        ):
             block["raw_answer"] = self._format_agent_process(respond)
         else:
             block["raw_answer"] = respond.get("answer") or ""
@@ -716,6 +723,10 @@ class ExcelQueryEvaluator:
             "completion_tokens": ct,
             "total_tokens": tt,
             "wall_latency_s": time.perf_counter() - t0,
+            "last_prompt_tokens": respond.get("last_prompt_tokens"),
+            "n_turns": len(respond.get("turns") or respond.get("steps") or []),
+            "protocol": respond.get("protocol"),
+            "trace_path": respond.get("trace_path"),
         }
         return block
 

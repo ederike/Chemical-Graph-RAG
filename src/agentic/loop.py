@@ -11,7 +11,9 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, TextIO, Tuple, TYPE_CHECKING
 
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import resolve_credentials
@@ -152,37 +154,133 @@ def parse_json_action(text: str) -> Optional[dict]:
     return None
 
 
+class TraceSink:
+    """log_trace 全文写入独立文件，不刷控制台。"""
+
+    def __init__(self, path: Optional[Path] = None):
+        self.path = Path(path) if path else None
+        self._fp: Optional[TextIO] = None
+        if self.path is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._fp = open(self.path, "w", encoding="utf-8")
+
+    @property
+    def enabled(self) -> bool:
+        return self._fp is not None
+
+    def line(self, msg: str) -> None:
+        if self._fp is None:
+            return
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._fp.write(f"{ts}  {msg}\n")
+        self._fp.flush()
+
+    def block(self, title: str, body: str) -> None:
+        if self._fp is None:
+            return
+        self.line(f"----- {title} -----")
+        text = "" if body is None else str(body)
+        self._fp.write(text)
+        if text and not text.endswith("\n"):
+            self._fp.write("\n")
+        self.line("----- end -----")
+        self._fp.flush()
+
+    def close(self) -> None:
+        if self._fp is not None:
+            try:
+                self._fp.close()
+            except Exception:
+                pass
+            self._fp = None
+
+
+def open_trace_file(working_path: str) -> Path:
+    log_dir = Path(working_path) / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    path = log_dir / f"agentic_{ts}.log"
+    n = 1
+    while path.exists():
+        n += 1
+        path = log_dir / f"agentic_{ts}_{n}.log"
+    return path
+
+
 @dataclass
 class AgenticContext:
     cfg: "AgenticConfig"
     llm: LLM
     tools: ToolContext
     logger: logging.Logger = field(default_factory=lambda: logging.getLogger(__name__))
+    trace: TraceSink = field(default_factory=TraceSink)
 
     def _trace(self, msg: str) -> None:
-        if self.cfg.log_trace:
-            self.logger.info(f"[agentic.trace] {msg}")
-        else:
-            self.logger.debug(f"[agentic.trace] {msg}")
+        if self.trace.enabled:
+            self.trace.line(msg)
+            return
+        self.logger.debug(f"[agentic.trace] {msg}")
 
     def _trace_block(self, title: str, body: str) -> None:
-        if not self.cfg.log_trace:
-            preview = (body or "").replace("\n", " ")
-            if len(preview) > 200:
-                preview = preview[:200] + "…"
-            self.logger.info(f"[agentic] {title}: {preview}")
+        if self.trace.enabled:
+            self.trace.block(title, body)
             return
-        text = body if body is not None else ""
-        self.logger.info(f"[agentic.trace] ----- {title} -----")
-        for line in str(text).splitlines() or [""]:
-            self.logger.info(f"[agentic.trace] {line}")
-        self.logger.info("[agentic.trace] ----- end -----")
+        preview = (body or "").replace("\n", " ")
+        if len(preview) > 200:
+            preview = preview[:200] + "…"
+        self.logger.info(f"[agentic] {title}: {preview}")
 
 
 def _system_prompt(protocol: str) -> str:
     if protocol == "json":
         return AGENTIC_PROMPT["SYSTEM_JSON"]
     return AGENTIC_PROMPT["SYSTEM_TOOLS"]
+
+
+def _message_chars(msg: dict) -> int:
+    if not isinstance(msg, dict):
+        return len(str(msg or ""))
+    n = 0
+    content = msg.get("content")
+    if isinstance(content, str):
+        n += len(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict):
+                n += len(str(part.get("text") or part.get("content") or ""))
+            else:
+                n += len(str(part))
+    if msg.get("tool_calls"):
+        try:
+            n += len(json.dumps(msg.get("tool_calls"), ensure_ascii=False))
+        except Exception:
+            n += len(str(msg.get("tool_calls")))
+    return n
+
+
+def estimate_prompt_tokens(messages: list, tools: Optional[list] = None) -> int:
+    """无 usage 时按字符粗估。中英混合约 2 字/token，偏保守以便提前停。"""
+    n = 0
+    for m in messages or []:
+        n += _message_chars(m if isinstance(m, dict) else {"content": str(m)})
+    if tools:
+        try:
+            n += len(json.dumps(tools, ensure_ascii=False))
+        except Exception:
+            pass
+    return max(1, n // 2)
+
+
+def last_prompt_tokens(resp: Optional[dict], messages: list, tools: Optional[list] = None) -> int:
+    if isinstance(resp, dict):
+        raw = resp.get("usage_prompt_tokens")
+        try:
+            n = int(raw)
+            if n > 0:
+                return n
+        except (TypeError, ValueError):
+            pass
+    return estimate_prompt_tokens(messages, tools)
 
 
 def _openai_tool_calls_to_actions(resp: dict) -> List[dict]:
@@ -231,13 +329,70 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
     turns: List[dict] = []
     pt = ct = tt = None
     last_reasoning = ""
+    last_prompt = 0
+    budget = int(getattr(cfg, "max_prompt_tokens", 0) or 0)
+    reserve = int(getattr(cfg, "prompt_token_reserve", 0) or 0)
+    token_threshold = (budget - reserve) if budget > 0 else 0
+    if token_threshold < 0:
+        token_threshold = 0
 
     def _accumulate(resp: dict) -> None:
-        nonlocal pt, ct, tt
+        nonlocal pt, ct, tt, last_prompt
         a, b, c = _usage_from(resp)
         pt = _add_usage(pt, a)
         ct = _add_usage(ct, b)
         tt = _add_usage(tt, c)
+        last_prompt = last_prompt_tokens(
+            resp, messages, schemas if use_openai else None,
+        )
+
+    def _over_token_budget(n: Optional[int] = None) -> bool:
+        if token_threshold <= 0:
+            return False
+        return int(n if n is not None else last_prompt) >= token_threshold
+
+    def _finish(ok: bool, answer: str, reasoning: str = "") -> dict:
+        if ok:
+            out = _ok(
+                answer, turns, ctx, pt, ct, tt, protocol,
+                reasoning or last_reasoning,
+            )
+        else:
+            out = _fail(answer, turns, ctx, pt, ct, tt, protocol)
+        out["last_prompt_tokens"] = last_prompt
+        out["max_prompt_tokens"] = budget or None
+        out["prompt_token_threshold"] = token_threshold or None
+        return out
+
+    def _force_final(reason: str, turn_tag) -> dict:
+        nonlocal last_reasoning
+        ctx._trace(f"forcing final answer: {reason} last_prompt={last_prompt}")
+        if (not cfg.force_answer_on_max_turns) and reason.startswith("max_turns"):
+            return _finish(False, f"超过 max_turns={max_turns} 仍未给出答案")
+        messages.append({
+            "role": "user",
+            "content": AGENTIC_PROMPT["FORCE_ANSWER"] + f"\n（原因：{reason}）",
+        })
+        resp = _chat(with_tools=False)
+        _accumulate(resp)
+        answer = str(resp.get("answer") or "").strip()
+        parsed = parse_json_action(answer)
+        if parsed and parsed.get("kind") == "answer":
+            answer = parsed.get("answer") or answer
+        reasoning = str(resp.get("reasoning_content") or "").strip()
+        if reasoning:
+            last_reasoning = reasoning
+            ctx._trace_block("force reasoning", reasoning)
+        turns.append({
+            "turn": turn_tag,
+            "kind": "answer",
+            "thought": reasoning,
+            "answer": answer,
+            "forced": True,
+            "force_reason": reason,
+        })
+        ctx._trace_block("final_answer", answer)
+        return _finish(True, answer, reasoning=last_reasoning)
 
     def _chat(*, with_tools: bool) -> dict:
         if with_tools and use_openai and schemas:
@@ -263,9 +418,19 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
         ctx.logger.warning(f"[agentic] fallback to JSON protocol: {reason}")
 
     for turn_i in range(1, max_turns + 1):
-        ctx._trace(f"===== turn {turn_i}/{max_turns} protocol={'openai' if use_openai else 'json'} =====")
+        if turn_i > 1 and _over_token_budget():
+            return _force_final(
+                f"prompt tokens {last_prompt} >= {token_threshold} "
+                f"(budget {budget}, reserve {reserve})",
+                turn_i,
+            )
+        ctx._trace(
+            f"===== turn {turn_i}/{max_turns} protocol={'openai' if use_openai else 'json'} "
+            f"last_prompt={last_prompt} threshold={token_threshold or '-'} ====="
+        )
         resp = _chat(with_tools=use_openai)
         _accumulate(resp)
+        ctx._trace(f"usage prompt={last_prompt} completion={resp.get('usage_completion_tokens')}")
 
         if int(resp.get("status") or 0) != 1:
             err = str(resp.get("error") or resp.get("answer") or "LLM 调用失败")
@@ -276,9 +441,9 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                 _accumulate(resp)
                 if int(resp.get("status") or 0) != 1:
                     err = str(resp.get("error") or resp.get("answer") or err)
-                    return _fail(err, turns, ctx, pt, ct, tt, protocol)
+                    return _finish(False, err)
             else:
-                return _fail(err, turns, ctx, pt, ct, tt, protocol)
+                return _finish(False, err)
 
         reasoning = str(resp.get("reasoning_content") or "").strip()
         content = str(resp.get("answer") or "").strip()
@@ -297,7 +462,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             if parsed:
                 actions = [parsed]
             elif use_openai and not content:
-                return _fail("模型既未调用工具也未作答", turns, ctx, pt, ct, tt, protocol)
+                return _finish(False, "模型既未调用工具也未作答")
             else:
                 answer = content
                 turns.append({
@@ -307,7 +472,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                     "answer": answer,
                 })
                 ctx._trace_block("final_answer", answer)
-                return _ok(answer, turns, ctx, pt, ct, tt, protocol, last_reasoning)
+                return _finish(True, answer)
 
         if len(actions) == 1 and actions[0].get("kind") == "answer":
             answer = actions[0].get("answer") or ""
@@ -321,7 +486,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             if thought:
                 ctx._trace_block(f"turn {turn_i} thought", thought)
             ctx._trace_block("final_answer", answer)
-            return _ok(answer, turns, ctx, pt, ct, tt, protocol, last_reasoning)
+            return _finish(True, answer)
 
         tool_actions = [a for a in actions if a.get("kind") == "tool"]
         if not tool_actions:
@@ -333,7 +498,17 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                 "answer": answer,
             })
             ctx._trace_block("final_answer", answer)
-            return _ok(answer, turns, ctx, pt, ct, tt, protocol, last_reasoning)
+            return _finish(True, answer)
+
+        if _over_token_budget():
+            ctx._trace(
+                f"skip further tools, prompt {last_prompt} >= {token_threshold}"
+            )
+            return _force_final(
+                f"prompt tokens {last_prompt} >= {token_threshold} "
+                f"(budget {budget}, reserve {reserve})",
+                turn_i,
+            )
 
         if use_openai and openai_calls and resp.get("assistant_message"):
             messages.append(resp["assistant_message"])
@@ -382,34 +557,18 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                     "content": f"工具 {name} 返回：\n{result}",
                 })
         turns.append(turn_record)
+        est = estimate_prompt_tokens(messages, schemas if use_openai else None)
+        if est > last_prompt:
+            last_prompt = est
+        ctx._trace(f"after tools estimated_prompt={last_prompt}")
+        if _over_token_budget():
+            return _force_final(
+                f"prompt tokens {last_prompt} >= {token_threshold} "
+                f"(budget {budget}, reserve {reserve})",
+                turn_i + 1,
+            )
 
-    if cfg.force_answer_on_max_turns:
-        ctx._trace("max_turns reached, forcing final answer")
-        messages.append({"role": "user", "content": AGENTIC_PROMPT["FORCE_ANSWER"]})
-        resp = _chat(with_tools=False)
-        _accumulate(resp)
-        answer = str(resp.get("answer") or "").strip()
-        parsed = parse_json_action(answer)
-        if parsed and parsed.get("kind") == "answer":
-            answer = parsed.get("answer") or answer
-        reasoning = str(resp.get("reasoning_content") or "").strip()
-        if reasoning:
-            last_reasoning = reasoning
-            ctx._trace_block("force reasoning", reasoning)
-        turns.append({
-            "turn": max_turns + 1,
-            "kind": "answer",
-            "thought": reasoning,
-            "answer": answer,
-            "forced": True,
-        })
-        ctx._trace_block("final_answer", answer)
-        return _ok(answer, turns, ctx, pt, ct, tt, protocol, last_reasoning)
-
-    return _fail(
-        f"超过 max_turns={max_turns} 仍未给出答案",
-        turns, ctx, pt, ct, tt, protocol,
-    )
+    return _force_final(f"max_turns={max_turns}", max_turns + 1)
 
 
 def _pack(

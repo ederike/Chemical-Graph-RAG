@@ -128,12 +128,14 @@ def _as_bool(v, default: bool = False) -> bool:
 
 def _normalize_query_mode(mode: Any) -> str:
     s = str(mode or "dual_path").strip().lower().replace("-", "_")
+    if s in ("agentic", "agentic_query", "tool_loop", "react", "loop"):
+        return "agentic"
     if s in ("agent", "agent_query", "multi_hop", "multihop"):
         return "agent"
     if s in ("dual_path", "dualpath", "query", "rag"):
         return "dual_path"
     raise ValueError(
-        f"Unknown query_mode={mode!r}. Supported: 'dual_path' | 'agent'"
+        f"Unknown query_mode={mode!r}. Supported: 'dual_path' | 'agent' | 'agentic'"
     )
 
 def merge_llm_only_model_args(
@@ -293,7 +295,7 @@ class BenchmarkConfig:
     max_source_chars: int = -1
     eval_max_retries: int = 3
     eval_sleep_between: float = 0.0
-    eval_num_thread: int = 1  # 评测并行线程；1 = 串行（agent/dual_path 均可）
+    eval_num_thread: int = 1  # 评测并行线程；1 = 串行（agentic/agent/dual_path 均可）
     eval_use_cache: bool = False
     dhmf_retrieve_use_cache: Optional[bool] = None
     judge_api_key: Optional[str] = None
