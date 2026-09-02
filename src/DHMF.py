@@ -1008,3 +1008,8 @@ class DHMF:
         """Agent query: plan retrieve hops + parallel pure-LLM, then synthesize."""
         from .agent.runner import run_agent_query
         return run_agent_query(self, query, pretty=pretty)
+
+    def agentic_query(self, query, pretty=False):
+        """Tool-calling 检索问答：模型边想边调 search / read_doc / graph_neighbors。"""
+        from .agentic.runner import run_agentic_query
+        return run_agentic_query(self, query, pretty=pretty)

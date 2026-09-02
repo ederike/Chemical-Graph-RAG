@@ -29,6 +29,19 @@ def _none_to_empty(v):
     return "" if v is None else v
 
 
+def _coerce_bool(v, default: bool = False) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off", ""):
+        return False
+    return bool(v)
+
+
 def _nonneg_int(v, default: int = 0) -> int:
     if v is None or v == "":
         return default
@@ -746,6 +759,146 @@ class AgentConfig(BaseModel):
             return False
         return bool(v)
 
+class AgenticConfig(BaseModel):
+    """
+    Tool-calling 检索问答（src/agentic）。与 retrieve / agent 配置完全独立：
+    LLM、循环、search 召回宽度等都只读本段，不回退到 retrieve.* / agent.*。
+    向量索引与 Embedding/Rerank 服务仍走已构建的 retrieve_module（同一套库）。
+    """
+    api_key: str = ""
+    base_url: str = ""
+    model_args: dict = Field(default_factory=lambda: {
+        'model': 'qwen3.6-27b',
+        'temperature': 0.2,
+        'enable_thinking': False,
+    })
+    use_cache: bool = False
+    max_turns: int = 8
+    # 把思考、工具调用、检索原文全部打到 logger，方便调试
+    log_trace: bool = True
+    # auto：优先 OpenAI tools，接口不支持再降级 JSON；openai / json 强制
+    tool_protocol: str = "auto"
+    force_answer_on_max_turns: bool = True
+
+    search_preview_chars: int = 400
+    search_max_hits: int = 8
+    read_doc_max_chars: int = 8000
+    neighbors_limit: int = 20
+
+    enable_search: bool = True
+    enable_read_doc: bool = True
+    enable_graph_neighbors: bool = True
+
+    # 仅本模式 search 工具覆盖 retrieve_items 的召回行为（不改共享 retrieve 配置）
+    chunk_candidate_k: int = 30
+    node_candidate_k: int = 30
+    enable_query_rewrite: bool = False
+    enable_keyword_exact: bool = True
+    enable_keyword_minority: bool = True
+    enable_keyword_majority: bool = False
+    enable_parallel_paths: bool = False
+    keyword_candidate_k: int = 20
+    keyword_top_k: int = 10
+    enable_rerank: bool = True
+    rerank_top_k: int = 8
+    enable_full_body_context: Union[bool, str] = False
+    enable_slice_family_expand: bool = False
+
+    @field_validator("api_key", "base_url", mode="before")
+    @classmethod
+    def _coerce_str(cls, v):
+        return _none_to_empty(v)
+
+    @field_validator("tool_protocol", mode="before")
+    @classmethod
+    def _coerce_protocol(cls, v):
+        s = str(v or "auto").strip().lower()
+        if s in ("openai", "tools", "native"):
+            return "openai"
+        if s in ("json", "react", "text"):
+            return "json"
+        return "auto"
+
+    @field_validator(
+        "use_cache", "log_trace", "force_answer_on_max_turns",
+        "enable_search", "enable_read_doc", "enable_graph_neighbors",
+        "enable_query_rewrite", "enable_keyword_exact",
+        "enable_keyword_minority", "enable_keyword_majority",
+        "enable_parallel_paths", "enable_rerank",
+        "enable_slice_family_expand",
+        mode="before",
+    )
+    @classmethod
+    def _bools(cls, v, info):
+        defaults = {
+            "use_cache": False,
+            "log_trace": True,
+            "force_answer_on_max_turns": True,
+            "enable_search": True,
+            "enable_read_doc": True,
+            "enable_graph_neighbors": True,
+            "enable_query_rewrite": False,
+            "enable_keyword_exact": True,
+            "enable_keyword_minority": True,
+            "enable_keyword_majority": False,
+            "enable_parallel_paths": False,
+            "enable_rerank": True,
+            "enable_slice_family_expand": False,
+        }
+        name = getattr(info, "field_name", "") or ""
+        return _coerce_bool(v, defaults.get(name, False))
+
+    @field_validator("enable_full_body_context", mode="before")
+    @classmethod
+    def _coerce_full_body_context(cls, v):
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        s = str(v).strip().lower()
+        if s in ("simple", "head", "hyperedge"):
+            return "simple"
+        if s in ("true", "1", "yes", "on", "full"):
+            return True
+        if s in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(
+            "agentic.enable_full_body_context 只接受 true / false / simple，"
+            f"收到 {v!r}"
+        )
+
+    @field_validator(
+        "max_turns", "search_preview_chars", "search_max_hits",
+        "read_doc_max_chars", "neighbors_limit",
+        "chunk_candidate_k", "node_candidate_k",
+        "keyword_candidate_k", "keyword_top_k", "rerank_top_k",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_int(cls, v, info):
+        defaults = {
+            "max_turns": 8,
+            "search_preview_chars": 400,
+            "search_max_hits": 8,
+            "read_doc_max_chars": 8000,
+            "neighbors_limit": 20,
+            "chunk_candidate_k": 30,
+            "node_candidate_k": 30,
+            "keyword_candidate_k": 20,
+            "keyword_top_k": 10,
+            "rerank_top_k": 8,
+        }
+        name = getattr(info, "field_name", "") or ""
+        fallback = defaults.get(name, 0)
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return fallback
+        if name == "max_turns":
+            return max(1, n)
+        return max(0, n)
+
+
 class MysqlConfig(BaseModel):
     """Generic MySQL connection block (e.g. dm_data_mysql)."""
     host: str = ""
@@ -799,6 +952,7 @@ class Config(BaseModel):
     vectorization: VectorizationConfig = Field(default_factory=VectorizationConfig)
     retrieve: RetrieveConfig = Field(default_factory=RetrieveConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    agentic: AgenticConfig = Field(default_factory=AgenticConfig)
     dm_data_mysql: MysqlConfig = Field(default_factory=MysqlConfig)
     ali_oss: dict = Field(default_factory=dict)
     oss_download: OssDownloadConfig = Field(default_factory=OssDownloadConfig)
@@ -811,7 +965,7 @@ class Config(BaseModel):
 
         known = {
             'settings', 'doc', 'summary', 'chunk', 'extract', 'build',
-            'vectorization', 'retrieve', 'agent',
+            'vectorization', 'retrieve', 'agent', 'agentic',
             'dm_data_mysql', 'ali_oss', 'oss_download',
         }
         pipeline = {k: v for k, v in data.items() if k in known}

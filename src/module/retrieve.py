@@ -1747,7 +1747,7 @@ class Retrieve:
         )
         return out
 
-    def _build_materials(self, hits_by_chunk: dict) -> list:
+    def _build_materials(self, hits_by_chunk: dict, *, mode: str = None) -> list:
         """
         按文档聚合（不再做全局 top_k 截断）：
           false：资料 = 头块 + 命中索引块（按原文顺序、块去重）
@@ -1762,12 +1762,14 @@ class Retrieve:
         供 rerank）；切片族全文在终轮 rerank 之后由 _expand_slice_families 补入。
 
         召回宽度由双路各自的 chunk_candidate_k / node_candidate_k 决定。
+        mode: 'full' | 'simple' | 'off'。None 时按 retrieve 配置。
         """
-        slice_family = self._slice_family_expand_enabled()
-        if slice_family:
-            mode = 'off'
-        else:
-            mode = self._full_body_mode()
+        if mode is None:
+            slice_family = self._slice_family_expand_enabled()
+            if slice_family:
+                mode = 'off'
+            else:
+                mode = self._full_body_mode()
         full_body = mode == 'full'
 
         groups = {}
@@ -2210,6 +2212,10 @@ class Retrieve:
         keyword_candidate_k=None,
         keyword_top_k=None,
         enable_parallel_paths=None,
+        rerank_top_k=None,
+        enable_rerank=None,
+        enable_full_body_context=None,
+        enable_slice_family_expand=None,
     ) -> list:
         """
         查询改写 → 双路向量 topk ∪ 关键词精确匹配（关键词路内部可先文档 rerank）
@@ -2228,8 +2234,10 @@ class Retrieve:
           - 0：跳过该路（chunk / node / keyword 候选与 top / rerank_top_k）
 
         enable_query_rewrite / enable_keyword_exact / enable_keyword_minority /
-        enable_keyword_majority / enable_parallel_paths:
-          None 用配置；True/False 仅本次覆盖（不改共享 config）。
+        enable_keyword_majority / enable_parallel_paths /
+        enable_rerank / enable_full_body_context / enable_slice_family_expand /
+        rerank_top_k:
+          None 用配置；非 None 仅本次覆盖（不改共享 config）。
 
         分阶段耗时写入 self.last_timing / get_last_timing()：
           precompute / rewrite / embed / chunk / node / keyword / expand / rerank / total
@@ -2261,7 +2269,7 @@ class Retrieve:
             10,
         )
         rerank_top = self._resolve_topk(
-            None,
+            rerank_top_k,
             getattr(self.config.retrieve, 'rerank_top_k', None),
             4,
         )
@@ -2290,12 +2298,22 @@ class Retrieve:
             enable_kw = False
 
         use_cache = getattr(self.config.retrieve, 'use_cache', True)
-        body_mode = self._full_body_mode()
-        enable_rerank = bool(
-            getattr(self.config.retrieve, 'enable_rerank', False)
-        )
+        if enable_full_body_context is None:
+            body_mode = self._full_body_mode()
+        else:
+            body_mode = normalize_full_body_mode(enable_full_body_context)
+        if enable_slice_family_expand is None:
+            slice_family = self._slice_family_expand_enabled()
+        else:
+            slice_family = bool(enable_slice_family_expand)
+        if enable_rerank is None:
+            do_rerank = bool(
+                getattr(self.config.retrieve, 'enable_rerank', False)
+            )
+        else:
+            do_rerank = bool(enable_rerank)
         if rerank_top <= 0:
-            enable_rerank = False
+            do_rerank = False
 
         need_vector = chunk_cand > 0 or node_cand > 0
         parallel = self._resolve_parallel_paths(
@@ -2490,9 +2508,9 @@ class Retrieve:
         else:
             merged = dual_merged
 
-        slice_family = self._slice_family_expand_enabled()
         t0 = time.perf_counter()
-        passages = self._build_materials(merged)
+        materials_mode = 'off' if slice_family else body_mode
+        passages = self._build_materials(merged, mode=materials_mode)
         passages = self._enrich_passage_ids(passages)
         t_expand = time.perf_counter() - t0
 
@@ -2501,7 +2519,7 @@ class Retrieve:
             search_query or query,
             passages,
             top_k=rerank_top,
-            enable=enable_rerank,
+            enable=do_rerank,
             stage='final',
         )
         t_rerank = time.perf_counter() - t0
@@ -2543,7 +2561,7 @@ class Retrieve:
             f"kw_docs={self.last_keyword.get('top_docs')} "
             f"full_body={body_mode if not slice_family else 'off(slice_family)'} "
             f"slice_family={slice_family} "
-            f"rerank={enable_rerank} rerank_k={rerank_top} "
+            f"rerank={do_rerank} rerank_k={rerank_top} "
             f"chunk_range={self._scope_vector_range('chunk')} "
             f"node_range={self._scope_vector_range('node')} "
             f"chunk_hits={len(chunk_hits)} node_hits={len(node_hits)} "

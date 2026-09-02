@@ -1,4 +1,4 @@
-"""Chemical-Graph-RAG HTTP 服务：薄封装 DHMF.query / 多跳问答 / retrieve_items。
+"""Chemical-Graph-RAG HTTP 服务：薄封装 DHMF.query / 多跳问答 / agentic_query / retrieve_items。
 
 启动（项目根目录，worker 必须为 1，避免多份 FAISS）：
 
@@ -125,6 +125,10 @@ class MultihopQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户问题")
 
 
+class AgenticQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="用户问题")
+
+
 class RetrieveRequest(BaseModel):
     query: str = Field(..., min_length=1)
     chunk_candidate_k: Optional[int] = None
@@ -146,6 +150,8 @@ class QueryResponse(BaseModel):
     usage_total_tokens: Optional[int] = None
     plan: Optional[List[dict]] = None
     steps: Optional[List[dict]] = None
+    turns: Optional[List[dict]] = None
+    protocol: Optional[str] = None
     reasoning_content: Optional[str] = None
 
 
@@ -200,6 +206,7 @@ def root():
         "health": "/health",
         "query": "POST /query",
         "multihop-query": "POST /multihop-query",
+        "agentic-query": "POST /agentic-query",
         "retrieve": "POST /retrieve",
     }
 
@@ -235,6 +242,17 @@ async def multihop_query(req: MultihopQueryRequest, request: Request):
         respond = await _run(graph.agent_query, req.query, pretty=False)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"multihop-query failed: {e}") from e
+    return _normalize_respond(respond)
+
+
+@app.post("/agentic-query", response_model=QueryResponse)
+async def agentic_query(req: AgenticQueryRequest, request: Request):
+    """Tool-calling 检索问答。模型边想边调 search / read_doc / graph_neighbors。"""
+    graph = _get_graph(request)
+    try:
+        respond = await _run(graph.agentic_query, req.query, pretty=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"agentic-query failed: {e}") from e
     return _normalize_respond(respond)
 
 

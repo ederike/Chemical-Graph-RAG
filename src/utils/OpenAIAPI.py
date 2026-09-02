@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib.parse import urlparse
@@ -166,6 +167,47 @@ def _prepare_local_call(
 
     return create_kwargs, extra_body, msgs
 
+
+def _tool_calls_from_message(msg) -> list:
+    """Normalize OpenAI / vLLM tool_calls to JSON-serializable dicts."""
+    raw = getattr(msg, "tool_calls", None) or []
+    out = []
+    for i, tc in enumerate(raw):
+        if isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            args = fn.get("arguments")
+            if not isinstance(args, str):
+                try:
+                    args = json.dumps(args or {}, ensure_ascii=False)
+                except Exception:
+                    args = str(args or "{}")
+            out.append({
+                "id": str(tc.get("id") or f"call_{i}"),
+                "type": tc.get("type") or "function",
+                "function": {
+                    "name": str(fn.get("name") or ""),
+                    "arguments": args or "{}",
+                },
+            })
+            continue
+        fn = getattr(tc, "function", None)
+        args = getattr(fn, "arguments", None) if fn is not None else None
+        if not isinstance(args, str):
+            try:
+                args = json.dumps(args or {}, ensure_ascii=False)
+            except Exception:
+                args = str(args or "{}")
+        out.append({
+            "id": str(getattr(tc, "id", None) or f"call_{i}"),
+            "type": getattr(tc, "type", None) or "function",
+            "function": {
+                "name": str(getattr(fn, "name", None) or "") if fn is not None else "",
+                "arguments": args or "{}",
+            },
+        })
+    return out
+
+
 class LLM:
     def __init__(
         self,
@@ -265,6 +307,59 @@ class LLM:
         except Exception as e:
             response["status"] = 0
             response["answer"] = str(e)
+
+        response.update(_usage_from_completion(completion))
+        return response
+
+    def chat(
+        self,
+        messages: list,
+        model_args: dict,
+        *,
+        tools: Optional[list] = None,
+        tool_choice: Optional[Any] = None,
+    ) -> dict:
+        """
+        多轮 chat，可选 OpenAI function tools。
+        不走 generate 缓存（轨迹含工具结果，键不稳定）。
+        """
+        ma = dict(model_args or {})
+        if tools:
+            ma["tools"] = tools
+            if tool_choice is None:
+                tool_choice = "auto"
+        if tool_choice is not None:
+            ma["tool_choice"] = tool_choice
+
+        response: Dict[str, Any] = {
+            "status": 0,
+            "answer": "",
+            "tool_calls": [],
+            "assistant_message": None,
+        }
+        completion = None
+        try:
+            completion = self._create(list(messages or []), ma)
+            response["status"] = 1
+            msg = completion.choices[0].message
+            content = msg.content
+            if self.local_mode:
+                content = _strip_think_tags(content)
+            content = content or ""
+            response["answer"] = content
+            reasoning = getattr(msg, "reasoning_content", None)
+            if reasoning:
+                response["reasoning_content"] = reasoning
+            tool_calls = _tool_calls_from_message(msg)
+            response["tool_calls"] = tool_calls
+            asst: Dict[str, Any] = {"role": "assistant", "content": content}
+            if tool_calls:
+                asst["tool_calls"] = tool_calls
+            response["assistant_message"] = asst
+        except Exception as e:
+            response["status"] = 0
+            response["answer"] = str(e)
+            response["error"] = str(e)
 
         response.update(_usage_from_completion(completion))
         return response
