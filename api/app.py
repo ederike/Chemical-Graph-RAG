@@ -1,4 +1,4 @@
-"""Chemical-Graph-RAG HTTP 服务：薄封装 DHMF.query / agent_query / retrieve_items。
+"""Chemical-Graph-RAG HTTP 服务：薄封装 DHMF.query / 多跳问答 / retrieve_items。
 
 启动（项目根目录，worker 必须为 1，避免多份 FAISS）：
 
@@ -121,7 +121,7 @@ class QueryRequest(BaseModel):
     mode: Literal["dual_path"] = "dual_path"
 
 
-class AgentRequest(BaseModel):
+class MultihopQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户问题")
 
 
@@ -199,7 +199,7 @@ def root():
         "docs": "/docs",
         "health": "/health",
         "query": "POST /query",
-        "agent": "POST /agent",
+        "multihop-query": "POST /multihop-query",
         "retrieve": "POST /retrieve",
     }
 
@@ -227,14 +227,14 @@ async def query(req: QueryRequest, request: Request):
     return _normalize_respond(respond)
 
 
-@app.post("/agent", response_model=QueryResponse)
-async def agent(req: AgentRequest, request: Request):
-    """多跳 Agent。对应 graph.agent_query。单跳一次检索作答，多跳按计划展开。"""
+@app.post("/multihop-query", response_model=QueryResponse)
+async def multihop_query(req: MultihopQueryRequest, request: Request):
+    """多跳问答（multihop-query）。单跳一次检索作答，多跳按计划展开。"""
     graph = _get_graph(request)
     try:
         respond = await _run(graph.agent_query, req.query, pretty=False)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"agent_query failed: {e}") from e
+        raise HTTPException(status_code=500, detail=f"multihop-query failed: {e}") from e
     return _normalize_respond(respond)
 
 

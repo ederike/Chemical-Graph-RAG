@@ -317,4 +317,5 @@ benchmark/              库内自生成评测
 benchmark2/             外部 Excel 评测
 scripts/                超图可视化、向量分片重打包
 docs/fastapi教程.md     FastAPI 写法与调用说明
+docs/API入门.md         零基础：什么是 API、怎么用 /docs 提问
 ```
