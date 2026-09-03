@@ -199,7 +199,7 @@ Agent_PROMPT['SYNTH_USER'] = """
 Output:
 """
 
-Agent_PROMPT['REWRITE_SYSTEM'] = '你是料检索的查询改写器。'
+Agent_PROMPT['REWRITE_SYSTEM'] = '你是材料检索的查询改写器。'
 
 Agent_PROMPT['REWRITE_USER'] = """
 把用户问题改写成更利于向量检索的一行陈述性查询。

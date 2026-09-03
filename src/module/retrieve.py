@@ -82,9 +82,10 @@ class Retrieve:
         并行：关键词路与改写+向量同时启动；chunk / node 在嵌入完成后并行。
               墙钟 ≈ max(关键词路, 改写+嵌入+max(chunk, node))
         串行：chunk → node → keyword，峰值内存更低（分片向量检索不同时驻留）
-      chunk_max_vectors / node_max_vectors（0=全库）：
+      config.search_range.chunk_max_vectors / node_max_vectors（0=全库）：
         标量 N：只搜 id ≤ N；[a, b]：只搜 a ≤ id ≤ b。
         分片按 id 区间打开重叠片。chunk 范围同时限制预加载与关键词 FTS。
+        retrieve / agentic / pin 都只读这一段。
       pin_indexes / unpin_indexes：
         独立两步，把上述范围内的 FAISS 分片常驻进程内存；检索优先用常驻，
         未 pin 时回退为按片 load/unload。
@@ -99,15 +100,19 @@ class Retrieve:
            true：每命中文档写入该文全部 body；切片文档在文首补超边头块，未切开的不加
     """
     def _scope_vector_range(self, db_name) -> tuple:
-        """返回 (lo, hi)。标量 N → (0, N)；[a, b] → (a, b)。0 = 该端不限制。"""
+        """返回 (lo, hi)。标量 N → (0, N)；[a, b] → (a, b)。0 = 该端不限制。
+
+        默认读 config.search_range；retrieve_items / pin_indexes 传入的
+        chunk/node_max_vectors 仅本次覆盖。
+        """
         ov = getattr(self._tls, 'scope_override', None)
         if isinstance(ov, dict) and db_name in ov:
             return parse_vector_id_range(ov.get(db_name))
-        cfg = self.config.retrieve
+        rng = getattr(self.config, 'search_range', None)
         if db_name == 'node':
-            raw = getattr(cfg, 'node_max_vectors', 0)
+            raw = getattr(rng, 'node_max_vectors', 0) if rng is not None else 0
         elif db_name == 'chunk':
-            raw = getattr(cfg, 'chunk_max_vectors', 0)
+            raw = getattr(rng, 'chunk_max_vectors', 0) if rng is not None else 0
         else:
             return 0, 0
         return parse_vector_id_range(raw)
@@ -140,7 +145,7 @@ class Retrieve:
     ) -> dict:
         """
         按 chunk/node_max_vectors 把重叠分片读进 RAM。
-        缺省读 retrieve 配置；传入则仅本次覆盖。
+        缺省读 config.search_range；传入则仅本次覆盖。
         db_name: 'chunk' / 'node' / None（两路都 pin）。
         """
         with self._temporary_scope(chunk_max_vectors, node_max_vectors):
@@ -2266,8 +2271,10 @@ class Retrieve:
         enable_query_rewrite / enable_keyword_exact / enable_keyword_minority /
         enable_keyword_majority / enable_parallel_paths /
         enable_rerank / enable_full_body_context / enable_slice_family_expand /
-        rerank_top_k / chunk_max_vectors / node_max_vectors:
-          None 用配置；非 None 仅本次覆盖（不改共享 config）。
+        rerank_top_k:
+          None 用 retrieve 配置；非 None 仅本次覆盖（不改共享 config）。
+        chunk_max_vectors / node_max_vectors:
+          None 用 config.search_range；非 None 仅本次覆盖。
 
         分阶段耗时写入 self.last_timing / get_last_timing()：
           precompute / rewrite / embed / chunk / node / keyword / expand / rerank / total

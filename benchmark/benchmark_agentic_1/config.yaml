@@ -1,0 +1,88 @@
+# benchmark_agentic_1 独立配置。路径一律相对仓库根目录，不要指向 useless/。
+run:
+  # generate | evaluate | report | excel | all
+  mode: evaluate
+
+dhmf:
+  config_path: example/a/config_open.yaml
+  # 本模块只评测 agentic_query；此项仅作记录，不可改成 dual_path / agent
+  query_mode: agentic
+
+paths:
+  db_path: example/a/DB/main.db
+  output_dir: results/benchmark_agentic_1_含专利
+
+  questions_filename: questions.json
+  questions_path: null          # 非空则覆盖 output_dir/filename
+
+  eval_questions_filename: questions.json
+  eval_questions_path: null
+  eval_results_filename: evals.json
+  eval_results_path: null
+
+  report_source_filename: evals.json
+  report_source_path: null
+  report_filename: report.json
+  report_path: null
+  report_excel_filename: report.xlsx
+  report_excel_path: null
+
+generate:
+  hop_counts:
+    "1": 100
+    "2": 50
+    "3": 50
+  # doc 表 id 闭区间；null / 0 = 该端不限制。也可用 doc_id_range: [1, 25367]
+  doc_id_min: 0
+  doc_id_max: null
+  doc_id_range: null
+  seed: 44
+  max_chars_per_doc: -1
+  max_retries: 3
+  sleep_between: 0.0
+  num_thread: 4
+  use_cache: false
+  # QUESTION_GEN_USER | QUESTION_GEN_Fuzzy_Matching | default | fuzzy
+  question_gen_prompt: QUESTION_GEN_USER
+  api_key: null
+  base_url: null
+  timeout: 600
+  model_args:
+    model: null
+    temperature: 0.2
+    enable_thinking: false
+    response_format:
+      type: json_object
+
+evaluate:
+  enable_llm_only: true
+  enable_doc_recall: true
+  max_source_chars: -1
+  max_retries: 2
+  sleep_between: 0.0
+  num_thread: 4
+  use_cache: false
+  dhmf_retrieve_use_cache: null
+  api_key: null
+  base_url: null
+  timeout: 300
+  model_args:
+    model: null
+    temperature: 0.0
+    enable_thinking: true
+    response_format:
+      type: json_object
+
+  llm_only:
+    api_key: null
+    base_url: null
+    timeout: 300
+    max_retries: 3
+    use_cache: false
+    model_args:
+      model: null
+      temperature: 0.2
+      enable_thinking: false
+
+logging:
+  level: INFO

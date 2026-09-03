@@ -90,6 +90,45 @@ def parse_vector_id_range(raw=0) -> tuple:
         lo, hi = hi, lo
     return lo, hi
 
+
+def _coerce_vector_id_range_value(v):
+    """YAML 检索范围：N → 0..N；[a, b] → a..b。0=全库。"""
+    if v is None or v == "":
+        return 0
+    if isinstance(v, (list, tuple)):
+        vals = [_nonneg_int(x, 0) for x in v if x is not None and x != ""]
+        if len(vals) >= 2:
+            lo, hi = vals[0], vals[1]
+            if lo > 0 and hi > 0 and lo > hi:
+                lo, hi = hi, lo
+            return [lo, hi]
+        if len(vals) == 1:
+            return vals[0]
+        return 0
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+class SearchRangeConfig(BaseModel):
+    """
+    检索 / pin 共用的 FAISS·SQL id 范围。retrieve.query、agentic.search、
+    pin_retrieve_indexes 都只读这一段，不要在 retrieve / agentic 里再写一份。
+
+      0        → 全库
+      N        → 0..N
+      [a, b]   → a..b（闭区间）
+    """
+    node_max_vectors: Union[int, List[int]] = 0
+    chunk_max_vectors: Union[int, List[int]] = 0
+
+    @field_validator("node_max_vectors", "chunk_max_vectors", mode="before")
+    @classmethod
+    def _coerce_vector_id_range(cls, v):
+        return _coerce_vector_id_range_value(v)
+
+
 class SettingsConfig(BaseModel):
     working_path: str
     debug: bool = False
@@ -567,12 +606,6 @@ class RetrieveConfig(BaseModel):
     # 三路检索（chunk / node / keyword）是否并行。
     # true / parallel：墙钟 ≈ max；false / serial：串行，峰值内存更低。
     enable_parallel_paths: bool = True
-    # 范围检索：按 FAISS / SQL id（写入顺序）。0=全库。
-    #   标量 N     → 0..N
-    #   [a, b]     → a..b（闭区间）
-    # 同时限制预加载的 chunk/doc/hyperedge 与关键词 FTS。
-    node_max_vectors: Union[int, List[int]] = 0
-    chunk_max_vectors: Union[int, List[int]] = 0
     keyword_candidate_k: int = 50
     keyword_top_k: int = 10
     # 关键词 FTS 文档频率上限。命中超过该值视为停用词（如「产品」「方法」），
@@ -647,31 +680,6 @@ class RetrieveConfig(BaseModel):
             "enable_full_body_context 只接受 true / false / simple，"
             f"收到 {v!r}"
         )
-
-    @field_validator(
-        "node_max_vectors",
-        "chunk_max_vectors",
-        mode="before",
-    )
-    @classmethod
-    def _coerce_vector_id_range(cls, v):
-        """N → 0..N；[a, b] → a..b。0=全库。"""
-        if v is None or v == "":
-            return 0
-        if isinstance(v, (list, tuple)):
-            vals = [_nonneg_int(x, 0) for x in v if x is not None and x != ""]
-            if len(vals) >= 2:
-                lo, hi = vals[0], vals[1]
-                if lo > 0 and hi > 0 and lo > hi:
-                    lo, hi = hi, lo
-                return [lo, hi]
-            if len(vals) == 1:
-                return vals[0]
-            return 0
-        try:
-            return max(0, int(v))
-        except (TypeError, ValueError):
-            return 0
 
     @field_validator(
         "keyword_max_df",
@@ -836,10 +844,6 @@ class AgenticConfig(BaseModel):
     rerank_top_k: int = 8
     enable_full_body_context: Union[bool, str] = False
     enable_slice_family_expand: bool = False
-    # 范围检索：按 FAISS / SQL id。0=全库。不读 retrieve.chunk/node_max_vectors。
-    #   标量 N → 0..N；[a, b] → a..b（闭区间）
-    node_max_vectors: Union[int, List[int]] = 0
-    chunk_max_vectors: Union[int, List[int]] = 0
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
@@ -908,31 +912,6 @@ class AgenticConfig(BaseModel):
             "agentic.enable_full_body_context 只接受 true / false / simple，"
             f"收到 {v!r}"
         )
-
-    @field_validator(
-        "node_max_vectors",
-        "chunk_max_vectors",
-        mode="before",
-    )
-    @classmethod
-    def _coerce_vector_id_range(cls, v):
-        """N → 0..N；[a, b] → a..b。0=全库。"""
-        if v is None or v == "":
-            return 0
-        if isinstance(v, (list, tuple)):
-            vals = [_nonneg_int(x, 0) for x in v if x is not None and x != ""]
-            if len(vals) >= 2:
-                lo, hi = vals[0], vals[1]
-                if lo > 0 and hi > 0 and lo > hi:
-                    lo, hi = hi, lo
-                return [lo, hi]
-            if len(vals) == 1:
-                return vals[0]
-            return 0
-        try:
-            return max(0, int(v))
-        except (TypeError, ValueError):
-            return 0
 
     @field_validator(
         "max_turns", "max_prompt_tokens", "prompt_token_reserve",
@@ -1020,6 +999,7 @@ class Config(BaseModel):
     extract: ExtractConfig = Field(default_factory=ExtractConfig)
     build: BuildConfig = Field(default_factory=BuildConfig)
     vectorization: VectorizationConfig = Field(default_factory=VectorizationConfig)
+    search_range: SearchRangeConfig = Field(default_factory=SearchRangeConfig)
     retrieve: RetrieveConfig = Field(default_factory=RetrieveConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     agentic: AgenticConfig = Field(default_factory=AgenticConfig)
@@ -1035,7 +1015,7 @@ class Config(BaseModel):
 
         known = {
             'settings', 'doc', 'summary', 'chunk', 'extract', 'build',
-            'vectorization', 'retrieve', 'agent', 'agentic',
+            'vectorization', 'search_range', 'retrieve', 'agent', 'agentic',
             'dm_data_mysql', 'ali_oss', 'oss_download',
         }
         pipeline = {k: v for k, v in data.items() if k in known}

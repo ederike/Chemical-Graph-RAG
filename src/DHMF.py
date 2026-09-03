@@ -824,21 +824,22 @@ class DHMF:
     ):
         """
         检索前常驻：按 chunk/node_max_vectors 把对应 FAISS 分片 load 进内存。
-        缺省用 retrieve 配置；传入则仅本次覆盖（agentic 评测用自己的范围）。
+        缺省用 config.search_range；传入则仅本次覆盖。
 
         与 vectorization 一样是流水线独立一步；不 pin 时检索仍走按片
         load/unload。评测/批量查询前调用一次，结束后 unpin_retrieve_indexes。
         须与检索在同一进程、同一 DHMF 实例。构建/vectorization 期间不要 pin。
         """
+        rng = getattr(self.config, 'search_range', None)
         chunk_r = (
             chunk_max_vectors
             if chunk_max_vectors is not None
-            else getattr(self.config.retrieve, 'chunk_max_vectors', 0)
+            else getattr(rng, 'chunk_max_vectors', 0) if rng is not None else 0
         )
         node_r = (
             node_max_vectors
             if node_max_vectors is not None
-            else getattr(self.config.retrieve, 'node_max_vectors', 0)
+            else getattr(rng, 'node_max_vectors', 0) if rng is not None else 0
         )
         self.logger.info(
             f"Start pin_retrieve_indexes "
