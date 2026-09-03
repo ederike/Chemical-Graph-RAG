@@ -1,7 +1,7 @@
 # benchmark_agentic_1 独立配置。路径一律相对仓库根目录，不要指向 useless/。
 run:
   # generate | evaluate | report | excel | all
-  mode: evaluate
+  mode: report
 
 dhmf:
   config_path: example/a/config_open.yaml

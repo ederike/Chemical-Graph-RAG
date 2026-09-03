@@ -410,8 +410,14 @@ class ToolContext:
         for h in hits:
             self._remember_ref(h.get("source"), h.get("doc_id"))
 
-        last_kw = getattr(retrieve, "last_keyword", None) or {}
-        last_rw = getattr(retrieve, "last_rewrite", None) or {}
+        try:
+            last_kw = dict(retrieve.get_last_keyword() or {})
+        except Exception:
+            last_kw = {}
+        try:
+            last_rw = dict(retrieve.get_last_rewrite() or {})
+        except Exception:
+            last_rw = {}
         if self.trace is not None and getattr(self.trace, "enabled", False):
             try:
                 raw_ctx = retrieve._format_retrieved_chunks(items)

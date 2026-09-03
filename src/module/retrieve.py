@@ -34,6 +34,27 @@ def empty_retrieve_timing() -> dict:
     return {k: 0.0 for k in RETRIEVE_TIMING_KEYS}
 
 
+def empty_last_rewrite() -> dict:
+    return {'original': '', 'rewritten': ''}
+
+
+def empty_last_rerank() -> dict:
+    return {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
+
+
+def empty_last_keyword() -> dict:
+    return {
+        'enabled': False,
+        'enable_minority': False,
+        'enable_majority': False,
+        'minority': [],
+        'majority': [],
+        'pool_chunks': 0,
+        'top_docs': 0,
+        'doc_ids': [],
+    }
+
+
 def add_retrieve_timing(a, b) -> dict:
     """逐项累加两份 retrieve_timing（缺省按 0）。"""
     out = empty_retrieve_timing()
@@ -291,23 +312,47 @@ class Retrieve:
         self.doc_dict = {}
         self.family_key_by_doc = {}
         self.docs_by_family = {}
-        self.last_rewrite = {'original': '', 'rewritten': ''}
-        self.last_rerank = {'enabled': False, 'n_in': 0, 'n_out': 0, 'scores': []}
-        self.last_keyword = {
-            'enabled': False,
-            'enable_minority': False,
-            'enable_majority': False,
-            'minority': [],
-            'majority': [],
-            'pool_chunks': 0,
-            'top_docs': 0,
-            'doc_ids': [],
-        }
         self.last_fts_info = {}
-        self.last_keyword_fts = {}
-        # 最近一次 retrieve_items 的分阶段耗时（thread-local）
+        # 最近一次 retrieve 的耗时 / 改写 / 关键词 / 重排（thread-local，并发评测不串号）
         self._tls = threading.local()
         self.last_timing = empty_retrieve_timing()
+
+    def _tls_dict(self, name: str, factory) -> dict:
+        v = getattr(self._tls, name, None)
+        if not isinstance(v, dict):
+            v = factory()
+            setattr(self._tls, name, v)
+        return v
+
+    @property
+    def last_rewrite(self) -> dict:
+        return self._tls_dict('rewrite', empty_last_rewrite)
+
+    @last_rewrite.setter
+    def last_rewrite(self, value):
+        self._tls.rewrite = (
+            dict(value) if isinstance(value, dict) else empty_last_rewrite()
+        )
+
+    @property
+    def last_keyword(self) -> dict:
+        return self._tls_dict('keyword', empty_last_keyword)
+
+    @last_keyword.setter
+    def last_keyword(self, value):
+        self._tls.keyword = (
+            dict(value) if isinstance(value, dict) else empty_last_keyword()
+        )
+
+    @property
+    def last_rerank(self) -> dict:
+        return self._tls_dict('rerank', empty_last_rerank)
+
+    @last_rerank.setter
+    def last_rerank(self, value):
+        self._tls.rerank = (
+            dict(value) if isinstance(value, dict) else empty_last_rerank()
+        )
 
     def get_last_timing(self) -> dict:
         """当前线程最近一次 retrieve_items 分阶段耗时（秒）。"""
@@ -315,6 +360,18 @@ class Retrieve:
         if isinstance(t, dict) and t:
             return dict(t)
         return dict(self.last_timing or empty_retrieve_timing())
+
+    def get_last_rewrite(self) -> dict:
+        """当前线程最近一次 query rewrite。"""
+        return dict(self.last_rewrite)
+
+    def get_last_keyword(self) -> dict:
+        """当前线程最近一次关键词抽取 / FTS 统计。"""
+        return dict(self.last_keyword)
+
+    def get_last_rerank(self) -> dict:
+        """当前线程最近一次终轮 rerank 统计。"""
+        return dict(self.last_rerank)
 
     def _set_last_timing(self, timing: dict) -> None:
         cleaned = empty_retrieve_timing()
@@ -942,7 +999,7 @@ class Retrieve:
         minority: list,
         majority: list,
         candidate_k: int,
-    ) -> list:
+    ) -> tuple:
         """
         FTS5 MATCH（小写正文）精确包含匹配，构造候选池：
           传入空列表的一类直接跳过（例如只开少数词时 majority=[]，只检索少数词）。
@@ -951,18 +1008,19 @@ class Retrieve:
           3) 少数值优先、多数值命中数排序，截到 candidate_k
 
         FTS 不可用时回退为内存扫描（每块只 casefold 一次）。
+        返回 (hits, fts_info)，fts 统计随返回值走，不写实例字段。
         """
         try:
             candidate_k = int(candidate_k)
         except (TypeError, ValueError):
             candidate_k = 0
         if candidate_k <= 0:
-            return []
+            return [], {}
 
         minority = [k for k in (minority or []) if k]
         majority = [k for k in (majority or []) if k]
         if not minority and not majority:
-            return []
+            return [], {}
 
         t0 = time.perf_counter()
         early_stop = False
@@ -1051,7 +1109,7 @@ class Retrieve:
             h.pop('_sort', None)
             out.append(h)
 
-        self.last_keyword_fts = {
+        fts_info = {
             'used_fts': used_fts,
             'early_stop': early_stop,
             'n_minority_ids': len(min_ids),
@@ -1071,7 +1129,7 @@ class Retrieve:
             f"fts_dt={fts_dt:.3f}s score_dt={score_dt:.3f}s "
             f"max_df={max_df} skipped_df={skipped_df!r}"
         )
-        return out
+        return out, fts_info
 
     def _keyword_hit_row(self, chunk, min_hits, maj_hits) -> dict:
         n_min = len(min_hits)
@@ -1270,7 +1328,7 @@ class Retrieve:
             return {**empty, 'minority': minority, 'majority': majority}
 
         t_match = time.perf_counter()
-        pool = self._search_chunks_by_keywords(
+        pool, fts_info = self._search_chunks_by_keywords(
             minority, majority, candidate_k=candidate_k
         )
         match_dt = time.perf_counter() - t_match
@@ -1284,6 +1342,7 @@ class Retrieve:
                 'minority': minority,
                 'majority': majority,
                 'has_minority': bool(minority),
+                'fts': fts_info or {},
             }
 
         # 文档级首轮 rerank（关键词路强制启用，不受 enable_rerank 开关影响）
@@ -1375,6 +1434,7 @@ class Retrieve:
             ) or bool(minority and hits_by_chunk),
             'pool_n': len(pool),
             'top_n': len(keep_docs),
+            'fts': fts_info or {},
         }
 
     def _union_hits_by_docs(
@@ -2203,6 +2263,7 @@ class Retrieve:
             'has_minority': False,
             'pool_n': 0,
             'top_n': 0,
+            'fts': {},
         }
 
     @staticmethod
@@ -2479,8 +2540,9 @@ class Retrieve:
                 ),
                 'has_minority': bool(result.get('has_minority')),
             }
-            if getattr(self, 'last_keyword_fts', None):
-                self.last_keyword.update(self.last_keyword_fts)
+            fts = result.get('fts')
+            if isinstance(fts, dict) and fts:
+                self.last_keyword.update(fts)
 
         if parallel:
             n_workers = (
