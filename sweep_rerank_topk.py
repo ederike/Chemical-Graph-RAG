@@ -63,10 +63,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from benchmark.config import BenchmarkConfig
-from benchmark.evaluator import QueryEvaluator
-from benchmark.utils import resolve_path
-from benchmark.workflow import TestQueryWorkflow
+from useless.benchmark.config import BenchmarkConfig
+from useless.benchmark.evaluator import QueryEvaluator
+from useless.benchmark.utils import resolve_path
+from useless.benchmark.workflow import TestQueryWorkflow
 from src.utils.config import parse_vector_id_range
 
 _TOPK_DIR_RE = re.compile(r"^benchmark_result_topk=(\d+)$")
