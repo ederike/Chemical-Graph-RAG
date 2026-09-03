@@ -463,7 +463,89 @@ def call_llm(
         }
     out = dict(resp)
     out["latency_s"] = latency
+    if not str(out.get("answer") or "").strip() and out.get("reasoning_content"):
+        out["answer"] = out["reasoning_content"]
     return out
+
+
+def ratio_to_percent(v: Any) -> Optional[float]:
+    """0~1 比例写成百分数（1.0 → 100）。已是百分数（>1）则原样返回。"""
+    if v is None or v == "":
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    if abs(x) > 1.0 + 1e-9:
+        return x
+    return x * 100.0
+
+
+def llm_response_has_text(resp: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(resp, dict):
+        return False
+    if str(resp.get("answer") or "").strip():
+        return True
+    return bool(str(resp.get("reasoning_content") or "").strip())
+
+
+def is_llm_timeout_error(resp: Any) -> bool:
+    """识别 HTTP / SDK 超时，避免再空等一个 timeout。"""
+    if isinstance(resp, dict):
+        if resp.get("status") == 1:
+            return False
+        text = " ".join(
+            str(resp.get(k) or "")
+            for k in ("answer", "error", "message", "query_error")
+        )
+    else:
+        text = str(resp or "")
+    s = text.lower()
+    return any(
+        k in s
+        for k in (
+            "timeout",
+            "timed out",
+            "time out",
+            "deadline exceeded",
+            "readtimeout",
+            "connecttimeout",
+        )
+    )
+
+
+def llm_attempt_should_retry(
+    resp: Any,
+    *,
+    attempt: int,
+    max_retries: int,
+    timeout_s: Optional[float] = None,
+) -> bool:
+    """解析失败可重试；超时或已经打满 HTTP timeout 的请求不再重试。"""
+    if attempt >= max_retries:
+        return False
+    if is_llm_timeout_error(resp):
+        return False
+    if timeout_s:
+        try:
+            lat = float((resp or {}).get("latency_s") or 0) if isinstance(resp, dict) else 0.0
+        except (TypeError, ValueError):
+            lat = 0.0
+        try:
+            cap = float(timeout_s)
+        except (TypeError, ValueError):
+            cap = 0.0
+        if cap > 0 and lat >= 0.8 * cap:
+            return False
+    return True
+
+
+def llm_client_timeout(llm, default: float = 300.0) -> float:
+    try:
+        return float(getattr(llm, "timeout", default) or default)
+    except (TypeError, ValueError):
+        return default
+
 
 def parse_hop_spec(hop_counts: Dict[Any, Any]) -> Dict[int, int]:
     """
@@ -522,12 +604,28 @@ def match_doc_names(expected: Sequence[str], retrieved: Sequence[str]) -> Tuple[
     return hit, miss, list(ret_norm.values())
 
 
-def pin_retrieve_for_eval(dhmf) -> bool:
-    """评测前常驻检索索引。成功返回 True，供 finally 里 unpin。"""
+def pin_retrieve_for_eval(dhmf, *, query_mode: str = "") -> bool:
+    """评测前常驻检索索引。agentic 用 config.agentic 的 id 范围。"""
     if dhmf is None or not hasattr(dhmf, "pin_retrieve_indexes"):
         return False
-    print("[eval] pin_retrieve_indexes …", file=sys.stderr, flush=True)
-    dhmf.pin_retrieve_indexes()
+    kw = {}
+    mode = str(query_mode or "").strip().lower()
+    if mode == "agentic":
+        ac = getattr(getattr(dhmf, "config", None), "agentic", None)
+        if ac is not None:
+            kw["chunk_max_vectors"] = getattr(ac, "chunk_max_vectors", 0)
+            kw["node_max_vectors"] = getattr(ac, "node_max_vectors", 0)
+            print(
+                f"[eval] pin_retrieve_indexes (agentic) "
+                f"chunk={kw['chunk_max_vectors']!r} node={kw['node_max_vectors']!r} …",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print("[eval] pin_retrieve_indexes …", file=sys.stderr, flush=True)
+    else:
+        print("[eval] pin_retrieve_indexes …", file=sys.stderr, flush=True)
+    dhmf.pin_retrieve_indexes(**kw)
     print("[eval] pin_retrieve_indexes done", file=sys.stderr, flush=True)
     return True
 

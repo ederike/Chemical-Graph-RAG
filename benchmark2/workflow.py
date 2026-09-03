@@ -315,7 +315,7 @@ class Benchmark2Workflow:
         answer_llm = (
             self.setup_answer_llm() if self.cfg.enable_llm_only else None
         )
-        pinned = pin_retrieve_for_eval(self.dhmf)
+        pinned = pin_retrieve_for_eval(self.dhmf, query_mode=self.cfg.query_mode)
 
         evaluator = ExcelQueryEvaluator(
             self.dhmf,

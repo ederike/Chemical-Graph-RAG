@@ -411,11 +411,7 @@ def build_summary(
 ) -> Dict[str, Any]:
     if enable_llm_only is None:
         enable_llm_only = any(
-            isinstance(r.get(SYSTEM_LLM_ONLY), dict)
-            and (
-                r[SYSTEM_LLM_ONLY].get("query_status") is not None
-                or r[SYSTEM_LLM_ONLY].get("answer")
-            )
+            ExcelQueryEvaluator._system_attempted(r.get(SYSTEM_LLM_ONLY))
             for r in results
         )
 

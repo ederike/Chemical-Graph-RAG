@@ -5,13 +5,14 @@ from ..utils.config import Config, parse_vector_id_range
 
 from ..utils.OpenAIAPI import Embedding, LLM, Reranker
 from ..utils.prompt import PROMPT
-from ..utils.config import resolve_credentials
+from ..utils.config import resolve_credentials, resolve_llm_timeout
 import json
 import re
 import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -99,6 +100,9 @@ class Retrieve:
     """
     def _scope_vector_range(self, db_name) -> tuple:
         """返回 (lo, hi)。标量 N → (0, N)；[a, b] → (a, b)。0 = 该端不限制。"""
+        ov = getattr(self._tls, 'scope_override', None)
+        if isinstance(ov, dict) and db_name in ov:
+            return parse_vector_id_range(ov.get(db_name))
         cfg = self.config.retrieve
         if db_name == 'node':
             raw = getattr(cfg, 'node_max_vectors', 0)
@@ -108,34 +112,56 @@ class Retrieve:
             return 0, 0
         return parse_vector_id_range(raw)
 
+    @contextmanager
+    def _temporary_scope(self, chunk_max_vectors=None, node_max_vectors=None):
+        """本次检索/pin 覆盖 id 范围；不改共享 retrieve 配置（线程局部）。"""
+        if chunk_max_vectors is None and node_max_vectors is None:
+            yield
+            return
+        prev = getattr(self._tls, 'scope_override', None)
+        ov = dict(prev) if isinstance(prev, dict) else {}
+        if chunk_max_vectors is not None:
+            ov['chunk'] = chunk_max_vectors
+        if node_max_vectors is not None:
+            ov['node'] = node_max_vectors
+        self._tls.scope_override = ov
+        try:
+            yield
+        finally:
+            self._tls.scope_override = prev
+
     def _scope_max_vectors(self, db_name) -> int:
         """兼容旧调用：只返回上界。0 = 不限制。"""
         _, hi = self._scope_vector_range(db_name)
         return hi
 
-    def pin_indexes(self, db_name=None) -> dict:
+    def pin_indexes(
+        self, db_name=None, chunk_max_vectors=None, node_max_vectors=None,
+    ) -> dict:
         """
-        按 retrieve.chunk/node_max_vectors 把重叠分片读进 RAM。
+        按 chunk/node_max_vectors 把重叠分片读进 RAM。
+        缺省读 retrieve 配置；传入则仅本次覆盖。
         db_name: 'chunk' / 'node' / None（两路都 pin）。
         """
-        names = ['chunk', 'node'] if db_name is None else [db_name]
-        out = {}
-        for name in names:
-            vdb = self.vdb.get(name)
-            if vdb is None or not hasattr(vdb, 'pin_shards'):
-                continue
-            lo, hi = self._scope_vector_range(name)
-            stats = vdb.pin_shards(min_vectors=lo, max_vectors=hi)
-            mb = float(stats.get('bytes') or 0) / (1024 * 1024)
-            self.logger.info(
-                f"[retrieve] pin {name} id_range={lo}..{hi} "
-                f"shards={len(stats.get('shards') or [])} "
-                f"ntotal={stats.get('ntotal')} ~{mb:.0f}MB "
-                f"already={stats.get('already')} dt={stats.get('seconds')}s"
-            )
-            out[name] = stats
-        self._ensure_precompute()
-        return out
+        with self._temporary_scope(chunk_max_vectors, node_max_vectors):
+            names = ['chunk', 'node'] if db_name is None else [db_name]
+            out = {}
+            for name in names:
+                vdb = self.vdb.get(name)
+                if vdb is None or not hasattr(vdb, 'pin_shards'):
+                    continue
+                lo, hi = self._scope_vector_range(name)
+                stats = vdb.pin_shards(min_vectors=lo, max_vectors=hi)
+                mb = float(stats.get('bytes') or 0) / (1024 * 1024)
+                self.logger.info(
+                    f"[retrieve] pin {name} id_range={lo}..{hi} "
+                    f"shards={len(stats.get('shards') or [])} "
+                    f"ntotal={stats.get('ntotal')} ~{mb:.0f}MB "
+                    f"already={stats.get('already')} dt={stats.get('seconds')}s"
+                )
+                out[name] = stats
+            self._ensure_precompute()
+            return out
 
     def unpin_indexes(self, db_name=None) -> dict:
         """释放 pin_indexes 常驻的 FAISS 分片。"""
@@ -205,7 +231,9 @@ class Retrieve:
         self.db = db
         self.vdb = vdb
         llm_key, llm_url = resolve_credentials(self.config, self.config.retrieve)
-        self.llmmodel = LLM(llm_key, llm_url)
+        self.llmmodel = LLM(
+            llm_key, llm_url, timeout=resolve_llm_timeout(self.config.retrieve),
+        )
         emb_key = (getattr(self.config.retrieve, 'embedding_api_key', None) or '').strip()
         emb_url = (getattr(self.config.retrieve, 'embedding_base_url', None) or '').strip()
         if not emb_key or not emb_url:
@@ -2216,6 +2244,8 @@ class Retrieve:
         enable_rerank=None,
         enable_full_body_context=None,
         enable_slice_family_expand=None,
+        chunk_max_vectors=None,
+        node_max_vectors=None,
     ) -> list:
         """
         查询改写 → 双路向量 topk ∪ 关键词精确匹配（关键词路内部可先文档 rerank）
@@ -2236,7 +2266,7 @@ class Retrieve:
         enable_query_rewrite / enable_keyword_exact / enable_keyword_minority /
         enable_keyword_majority / enable_parallel_paths /
         enable_rerank / enable_full_body_context / enable_slice_family_expand /
-        rerank_top_k:
+        rerank_top_k / chunk_max_vectors / node_max_vectors:
           None 用配置；非 None 仅本次覆盖（不改共享 config）。
 
         分阶段耗时写入 self.last_timing / get_last_timing()：
@@ -2244,6 +2274,44 @@ class Retrieve:
           chunk/node/keyword 仍是各路自身耗时；total 是墙钟（并行时不再等于相加）。
         """
         t_all = time.perf_counter()
+        with self._temporary_scope(chunk_max_vectors, node_max_vectors):
+            return self._retrieve_items_body(
+                query,
+                t_all=t_all,
+                chunk_candidate_k=chunk_candidate_k,
+                node_candidate_k=node_candidate_k,
+                enable_query_rewrite=enable_query_rewrite,
+                enable_keyword_exact=enable_keyword_exact,
+                enable_keyword_minority=enable_keyword_minority,
+                enable_keyword_majority=enable_keyword_majority,
+                keyword_candidate_k=keyword_candidate_k,
+                keyword_top_k=keyword_top_k,
+                enable_parallel_paths=enable_parallel_paths,
+                rerank_top_k=rerank_top_k,
+                enable_rerank=enable_rerank,
+                enable_full_body_context=enable_full_body_context,
+                enable_slice_family_expand=enable_slice_family_expand,
+            )
+
+    def _retrieve_items_body(
+        self,
+        query,
+        *,
+        t_all: float,
+        chunk_candidate_k=None,
+        node_candidate_k=None,
+        enable_query_rewrite=None,
+        enable_keyword_exact=None,
+        enable_keyword_minority=None,
+        enable_keyword_majority=None,
+        keyword_candidate_k=None,
+        keyword_top_k=None,
+        enable_parallel_paths=None,
+        rerank_top_k=None,
+        enable_rerank=None,
+        enable_full_body_context=None,
+        enable_slice_family_expand=None,
+    ) -> list:
         t0 = time.perf_counter()
         self._ensure_precompute()
         t_precompute = time.perf_counter() - t0

@@ -101,9 +101,11 @@ class DHMF:
             logging.DEBUG if self.config.settings.debug else logging.INFO
         )
 
-        from .utils.config import resolve_credentials
+        from .utils.config import resolve_credentials, resolve_llm_timeout
         api_key, base_url = resolve_credentials(self.config, self.config.retrieve)
-        self.llmmodel = LLM(api_key, base_url)
+        self.llmmodel = LLM(
+            api_key, base_url, timeout=resolve_llm_timeout(self.config.retrieve),
+        )
 
     def ensure_build_logger(self):
         """
@@ -817,21 +819,36 @@ class DHMF:
             self.retrieve_module._precomputed = False
         return out
 
-    def pin_retrieve_indexes(self, db_name=None):
+    def pin_retrieve_indexes(
+        self, db_name=None, chunk_max_vectors=None, node_max_vectors=None,
+    ):
         """
-        检索前常驻：按 retrieve.chunk/node_max_vectors
-        把对应 FAISS 分片 load 进当前进程内存。
+        检索前常驻：按 chunk/node_max_vectors 把对应 FAISS 分片 load 进内存。
+        缺省用 retrieve 配置；传入则仅本次覆盖（agentic 评测用自己的范围）。
 
         与 vectorization 一样是流水线独立一步；不 pin 时检索仍走按片
         load/unload。评测/批量查询前调用一次，结束后 unpin_retrieve_indexes。
         须与检索在同一进程、同一 DHMF 实例。构建/vectorization 期间不要 pin。
         """
+        chunk_r = (
+            chunk_max_vectors
+            if chunk_max_vectors is not None
+            else getattr(self.config.retrieve, 'chunk_max_vectors', 0)
+        )
+        node_r = (
+            node_max_vectors
+            if node_max_vectors is not None
+            else getattr(self.config.retrieve, 'node_max_vectors', 0)
+        )
         self.logger.info(
             f"Start pin_retrieve_indexes "
-            f"chunk_max_vectors={getattr(self.config.retrieve, 'chunk_max_vectors', 0)} "
-            f"node_max_vectors={getattr(self.config.retrieve, 'node_max_vectors', 0)}"
+            f"chunk_max_vectors={chunk_r} node_max_vectors={node_r}"
         )
-        out = self.retrieve_module.pin_indexes(db_name)
+        out = self.retrieve_module.pin_indexes(
+            db_name,
+            chunk_max_vectors=chunk_max_vectors,
+            node_max_vectors=node_max_vectors,
+        )
         for name, stats in (out or {}).items():
             self.logger.info(f"Finish pin_retrieve_indexes {name}: {stats}")
         return out

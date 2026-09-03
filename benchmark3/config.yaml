@@ -34,7 +34,7 @@ evaluate:
   enable_llm_only: false  # true 时额外跑纯 LLM 对照
   max_retries: 10
   sleep_between: 0.0
-  num_thread: 3
+  num_thread: 1
   use_cache: false
   dhmf_retrieve_use_cache: null
   api_key: null

@@ -396,6 +396,8 @@ class ToolContext:
             enable_rerank=bool(cfg.enable_rerank),
             enable_full_body_context=cfg.enable_full_body_context,
             enable_slice_family_expand=bool(cfg.enable_slice_family_expand),
+            chunk_max_vectors=cfg.chunk_max_vectors,
+            node_max_vectors=cfg.node_max_vectors,
             **path_kw,
         )
         dt = time.perf_counter() - t0

@@ -337,7 +337,7 @@ class TestQueryWorkflow:
         answer_llm = (
             self.setup_answer_llm() if self.cfg.enable_llm_only else None
         )
-        pinned = pin_retrieve_for_eval(self.dhmf)
+        pinned = pin_retrieve_for_eval(self.dhmf, query_mode=self.cfg.query_mode)
 
         evaluator = QueryEvaluator(
             self.dhmf,
@@ -358,8 +358,16 @@ class TestQueryWorkflow:
         )
 
         out = self.cfg.eval_results_file() if save else None
-        # if out is not None:
-        #     print(f"[eval] 实时结果 → {out}", file=sys.stderr)
+        existing = []
+        if save and out is not None and out.is_file():
+            try:
+                prev = self.load_json(out)
+                rows = prev.get("results") if isinstance(prev, dict) else None
+                if isinstance(rows, list):
+                    existing = rows
+                    print(f"[resume] 已有 {len(rows)} 条 <- {out}", file=sys.stderr)
+            except Exception as e:
+                print(f"[resume] 无法读取已有结果 {out}: {e}", file=sys.stderr)
 
         def _on_progress(mid_report: dict, index: int, total: int) -> None:
             if out is None:
@@ -375,6 +383,7 @@ class TestQueryWorkflow:
         try:
             eval_data = evaluator.evaluate_all(
                 dataset,
+                existing_results=existing,
                 on_progress=_on_progress if save else None,
             )
         finally:

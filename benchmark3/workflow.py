@@ -321,7 +321,7 @@ class Benchmark3Workflow:
             dataset = self._ensure_dataset()
 
         evaluator = self._make_evaluator(with_dhmf=True)
-        pinned = pin_retrieve_for_eval(self.dhmf)
+        pinned = pin_retrieve_for_eval(self.dhmf, query_mode=self.cfg.query_mode)
         out = self.cfg.eval_results_file() if save else None
         existing = []
         if save and self.cfg.eval_resume and out is not None:

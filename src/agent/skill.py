@@ -12,7 +12,7 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 
 from ..utils.OpenAIAPI import LLM
-from ..utils.config import AgentConfig, resolve_credentials
+from ..utils.config import AgentConfig, resolve_credentials, resolve_llm_timeout
 from .prompts import Agent_PROMPT
 from .state import DIRECT_STEP_KIND, answer_of, first_line
 
@@ -23,7 +23,7 @@ def build_agent_llm(config) -> LLM:
     """从 config.agent（回退 settings）构造 LLM。"""
     agent_cfg = getattr(config, 'agent', None)
     api_key, base_url = resolve_credentials(config, agent_cfg)
-    return LLM(api_key, base_url)
+    return LLM(api_key, base_url, timeout=resolve_llm_timeout(agent_cfg))
 
 class QuerySkill:
     """双路检索 + agent LLM 作答，封装为可调用 skill。"""

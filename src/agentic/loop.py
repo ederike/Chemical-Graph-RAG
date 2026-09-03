@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, Tuple, TYPE_CHECKING
 
 from ..utils.OpenAIAPI import LLM
-from ..utils.config import resolve_credentials
+from ..utils.config import resolve_credentials, resolve_llm_timeout
 from .prompts import AGENTIC_PROMPT
 from .tools import ToolContext, allowed_tool_names, tool_schemas
 
@@ -40,7 +40,7 @@ _TOOLS_ERR_MARKERS = (
 def build_agentic_llm(config) -> LLM:
     agentic_cfg = getattr(config, "agentic", None)
     api_key, base_url = resolve_credentials(config, agentic_cfg)
-    return LLM(api_key, base_url)
+    return LLM(api_key, base_url, timeout=resolve_llm_timeout(agentic_cfg))
 
 
 def _add_usage(a: Optional[int], b: Optional[int]) -> Optional[int]:

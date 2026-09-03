@@ -2,6 +2,22 @@ from typing import Any, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 import yaml
 
+def _coerce_timeout(v, default: float = 300.0) -> float:
+    """YAML timeout：空/非法回退 default，最小 1s。"""
+    if v is None or v == "":
+        return default
+    try:
+        return max(1.0, float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def resolve_llm_timeout(stage: Any = None, *, default: float = 300.0) -> float:
+    """回答请求 HTTP 超时。stage.timeout 优先，否则 default（300s）。"""
+    raw = getattr(stage, "timeout", None) if stage is not None else None
+    return _coerce_timeout(raw, default)
+
+
 def resolve_credentials(
     config: "Config",
     stage: Any = None,
@@ -515,6 +531,7 @@ class RetrieveConfig(BaseModel):
     node_candidate_k: int = 20
     api_key: str = ""
     base_url: str = ""
+    timeout: float = 300.0
     embedding_model_args: dict = Field(default_factory=dict)
     embedding_api_key: str = ""
     embedding_base_url: str = ""
@@ -587,6 +604,11 @@ class RetrieveConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _timeout(cls, v):
+        return _coerce_timeout(v, 300.0)
 
     @field_validator("enable_parallel_paths", mode="before")
     @classmethod
@@ -717,6 +739,7 @@ class AgentConfig(BaseModel):
     """Multi-hop agent LLM settings (independent of retrieve)."""
     api_key: str = ""
     base_url: str = ""
+    timeout: float = 300.0
     model_args: dict = Field(default_factory=lambda: {
         'model': 'qwen3.6-27b',
         'temperature': 0.2,
@@ -735,6 +758,11 @@ class AgentConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _timeout(cls, v):
+        return _coerce_timeout(v, 300.0)
 
     @field_validator("max_steps", mode="before")
     @classmethod
@@ -767,6 +795,7 @@ class AgenticConfig(BaseModel):
     """
     api_key: str = ""
     base_url: str = ""
+    timeout: float = 300.0
     model_args: dict = Field(default_factory=lambda: {
         'model': 'qwen3.6-27b',
         'temperature': 0.2,
@@ -807,11 +836,20 @@ class AgenticConfig(BaseModel):
     rerank_top_k: int = 8
     enable_full_body_context: Union[bool, str] = False
     enable_slice_family_expand: bool = False
+    # 范围检索：按 FAISS / SQL id。0=全库。不读 retrieve.chunk/node_max_vectors。
+    #   标量 N → 0..N；[a, b] → a..b（闭区间）
+    node_max_vectors: Union[int, List[int]] = 0
+    chunk_max_vectors: Union[int, List[int]] = 0
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _timeout(cls, v):
+        return _coerce_timeout(v, 300.0)
 
     @field_validator("tool_protocol", mode="before")
     @classmethod
@@ -870,6 +908,31 @@ class AgenticConfig(BaseModel):
             "agentic.enable_full_body_context 只接受 true / false / simple，"
             f"收到 {v!r}"
         )
+
+    @field_validator(
+        "node_max_vectors",
+        "chunk_max_vectors",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_vector_id_range(cls, v):
+        """N → 0..N；[a, b] → a..b。0=全库。"""
+        if v is None or v == "":
+            return 0
+        if isinstance(v, (list, tuple)):
+            vals = [_nonneg_int(x, 0) for x in v if x is not None and x != ""]
+            if len(vals) >= 2:
+                lo, hi = vals[0], vals[1]
+                if lo > 0 and hi > 0 and lo > hi:
+                    lo, hi = hi, lo
+                return [lo, hi]
+            if len(vals) == 1:
+                return vals[0]
+            return 0
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            return 0
 
     @field_validator(
         "max_turns", "max_prompt_tokens", "prompt_token_reserve",

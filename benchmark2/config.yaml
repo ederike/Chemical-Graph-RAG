@@ -7,7 +7,7 @@ dhmf:
   query_mode: agentic  # dual_path | agent | agentic
 
 dataset:
-  excel_path: benchmark2/建筑涂料测试问题集2.xlsx
+  excel_path: benchmark2/建筑涂料测试问题集1.xlsx
   questions_sheet: null   # 空则自动识别
   stats_sheet: null       # 空则自动识别
   design_sheet: null      # 空则自动识别（仅测试集2有「设计说明」）
@@ -15,7 +15,7 @@ dataset:
   id_list: null           # 指定题号列表，如 [1, 2, 10]；null = 不限制
 
 paths:
-  output_dir: benchmark2_results/benchmark2_question2_results_NewModel
+  output_dir: benchmark2_results/benchmark2_question1_results_agentic
 
   stats_filename: stats_question.json
   stats_path: null
@@ -38,9 +38,9 @@ paths:
 evaluate:
   resume: true
   enable_llm_only: true   # 每题额外跑一路纯 LLM；与超图回答一次对比打分，不再分开评判
-  max_retries: 10
+  max_retries: 2          # 仅 JSON 解析失败重试；HTTP 超时不再连着重试
   sleep_between: 0.0
-  num_thread: 5
+  num_thread: 1
   use_cache: False
   dhmf_retrieve_use_cache: null
   api_key: null
@@ -49,19 +49,19 @@ evaluate:
   model_args:             # 裁判
     model: null
     temperature: 0.0
-    enable_thinking: True
+    enable_thinking: false  # 开思考时裁判常打满 200–300s，再叠加超时重试会到 550s/题
     response_format:
       type: json_object
 
   # 纯 LLM 对照：与裁判 / retrieve.model_args 独立（勿共用 enable_thinking / timeout）
   llm_only:
     api_key: null         # 空则跟 retrieve / settings
-    base_url: http://39.105.229.72:8031/v1
-    timeout: 300          # 单次 HTTP 超时；默认 120s 不够思考/排队
-    max_retries: 3        # 超时或失败后的重试次数
+    base_url: null
+    timeout: 180          # 单次 HTTP 超时；卡住只等一轮，不再 300s×3
+    max_retries: 2        # 超时不再重试；仅短失败可再试
     use_cache: False
     model_args:
-      model: flash-next         # 空则继承 retrieve.model_args.model
+      model: null       # 空则继承 retrieve.model_args.model
       temperature: 0.2
       enable_thinking: false
 

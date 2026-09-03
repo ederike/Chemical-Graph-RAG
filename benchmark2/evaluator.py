@@ -18,6 +18,9 @@ from benchmark.utils import (
     extract_pair_side,
     fail_print,
     fill_prompt,
+    llm_attempt_should_retry,
+    llm_client_timeout,
+    llm_response_has_text,
     pairwise_better_raw,
     pairwise_system_order,
     progress_iter,
@@ -233,7 +236,8 @@ class ExcelQueryEvaluator:
             "{question}", question or ""
         )
         last: Dict[str, Any] = {}
-        for _attempt in range(1, self.max_llm_only_retries + 1):
+        timeout_s = llm_client_timeout(self.answer_llm)
+        for attempt in range(1, self.max_llm_only_retries + 1):
             last = call_llm(
                 self.answer_llm,
                 system=self.prompts.get("PURE_LLM_SYSTEM", ""),
@@ -241,8 +245,15 @@ class ExcelQueryEvaluator:
                 model_args=self.answer_model_args,
                 use_cache=self.llm_only_use_cache,
             )
-            if isinstance(last, dict) and last.get("status") == 1:
+            if isinstance(last, dict) and last.get("status") == 1 and llm_response_has_text(last):
                 return last
+            if not llm_attempt_should_retry(
+                last,
+                attempt=attempt,
+                max_retries=self.max_llm_only_retries,
+                timeout_s=timeout_s,
+            ):
+                break
         return last if isinstance(last, dict) else {
             "status": 0,
             "answer": str(last),
@@ -272,8 +283,10 @@ class ExcelQueryEvaluator:
                 result.pop(k, None)
         return result
 
-    def _extract_answer_text(self, respond: Any) -> str:
-        return QueryEvaluator._extract_answer_text(self, respond)
+    def _extract_answer_text(self, respond: Any, *, parse_sections: bool = True) -> str:
+        return QueryEvaluator._extract_answer_text(
+            self, respond, parse_sections=parse_sections
+        )
 
     def _format_agent_process(self, respond: Dict[str, Any]) -> str:
         return QueryEvaluator._format_agent_process(respond)
@@ -402,7 +415,8 @@ class ExcelQueryEvaluator:
         )
 
         last_err = None
-        for _attempt in range(1, self.max_judge_retries + 1):
+        timeout_s = llm_client_timeout(self.judge_llm)
+        for attempt in range(1, self.max_judge_retries + 1):
             resp = call_llm(
                 self.judge_llm,
                 system=self.prompts.get("JUDGE_SYSTEM", ""),
@@ -416,11 +430,28 @@ class ExcelQueryEvaluator:
                 "total_tokens": resp.get("usage_total_tokens"),
             }
             if resp.get("status") != 1:
-                last_err = f"judge llm status={resp.get('status')}"
+                last_err = (
+                    f"judge llm status={resp.get('status')}: "
+                    f"{str(resp.get('answer') or '')[:120]}"
+                )
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
             obj = extract_json_object(resp.get("answer") or "")
             if not obj:
                 last_err = "judge json parse failed"
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
             parsed = self._parse_side_judgment(
                 obj, score_dimensions=score_dimensions
@@ -430,6 +461,13 @@ class ExcelQueryEvaluator:
                     f"invalid judgment={obj.get('judgment')!r} "
                     f"score={obj.get('score')!r}"
                 )
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
             parsed["judge_latency_s"] = resp.get("latency_s")
             parsed["judge_usage"] = usage
@@ -475,7 +513,8 @@ class ExcelQueryEvaluator:
         )
 
         last_err = None
-        for _attempt in range(1, self.max_judge_retries + 1):
+        timeout_s = llm_client_timeout(self.judge_llm)
+        for attempt in range(1, self.max_judge_retries + 1):
             resp = call_llm(
                 self.judge_llm,
                 system=self.prompts.get("JUDGE_SYSTEM", ""),
@@ -489,11 +528,28 @@ class ExcelQueryEvaluator:
                 "total_tokens": resp.get("usage_total_tokens"),
             }
             if resp.get("status") != 1:
-                last_err = f"judge llm status={resp.get('status')}"
+                last_err = (
+                    f"judge llm status={resp.get('status')}: "
+                    f"{str(resp.get('answer') or '')[:120]}"
+                )
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
             obj = extract_json_object(resp.get("answer") or "")
             if not obj:
                 last_err = "judge json parse failed"
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
 
             named = extract_named_system_sides(obj)
@@ -517,6 +573,13 @@ class ExcelQueryEvaluator:
                     f"A={None if not parsed_a else parsed_a.get('llm_acc')} "
                     f"B={None if not parsed_b else parsed_b.get('llm_acc')}"
                 )
+                if not llm_attempt_should_retry(
+                    resp,
+                    attempt=attempt,
+                    max_retries=self.max_judge_retries,
+                    timeout_s=timeout_s,
+                ):
+                    break
                 continue
 
             sides = {a_sys: parsed_a, b_sys: parsed_b}
@@ -749,13 +812,16 @@ class ExcelQueryEvaluator:
             return block
 
         block["query_status"] = respond.get("status", 0)
-        block["answer"] = self._extract_answer_text(respond)
+        block["answer"] = self._extract_answer_text(respond, parse_sections=False)
         block["raw_answer"] = respond.get("answer") or block["answer"]
         if block["query_status"] != 1:
             block["query_error"] = (
                 f"llm_only status={block['query_status']}: "
                 f"{str(block['raw_answer'])[:200]}"
             )
+        elif not str(block["answer"] or "").strip():
+            block["query_status"] = 0
+            block["query_error"] = "llm_only empty answer"
         pt = respond.get("usage_prompt_tokens")
         ct = respond.get("usage_completion_tokens")
         tt = respond.get("usage_total_tokens")
@@ -793,13 +859,15 @@ class ExcelQueryEvaluator:
             "knowledge_source": item.get("knowledge_source") or "",
             "note": item.get("note") or "",
             SYSTEM_HYPERGRAPH: _empty_system_block(),
-            SYSTEM_LLM_ONLY: _empty_system_block(),
         }
+        if self.enable_llm_only:
+            result[SYSTEM_LLM_ONLY] = _empty_system_block()
 
         try:
             if not str(question).strip():
                 result[SYSTEM_HYPERGRAPH]["query_error"] = "empty question"
-                result[SYSTEM_LLM_ONLY]["query_error"] = "empty question"
+                if self.enable_llm_only:
+                    result[SYSTEM_LLM_ONLY]["query_error"] = "empty question"
                 return self._drop_mirrored_system_fields(result)
 
             result[SYSTEM_HYPERGRAPH] = self._fill_hypergraph(question)
@@ -963,25 +1031,34 @@ class ExcelQueryEvaluator:
             return hg_fail
         return hg_fail or self._system_failed(r.get(SYSTEM_LLM_ONLY))
 
+    def _hypergraph_attempted(self, r: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(r, dict):
+            return False
+        if self._system_attempted(r.get(SYSTEM_HYPERGRAPH)):
+            return True
+        return r.get("query_status") is not None or bool(r.get("rag_answer"))
+
     def _is_item_complete(self, r: Optional[Dict[str, Any]]) -> bool:
-        """断点续跑：两路都跑过才算完成。"""
+        """断点续跑：两路都跑过才算完成。空的 llm_only 占位不算。"""
         if not isinstance(r, dict) or r.get("id") is None:
             return False
-        hg = r.get(SYSTEM_HYPERGRAPH)
-        has_hg = isinstance(hg, dict) and (
-            hg.get("query_status") is not None or hg.get("query_error")
-        )
-        if not has_hg:
-            # 旧格式只有顶层 rag 字段
-            has_hg = r.get("query_status") is not None or bool(r.get("rag_answer"))
-        if not has_hg:
+        if not self._hypergraph_attempted(r):
             return False
         if not self.enable_llm_only:
             return True
-        lo = r.get(SYSTEM_LLM_ONLY)
-        return isinstance(lo, dict) and (
-            lo.get("query_status") is not None or lo.get("query_error") is not None
-        )
+        return self._system_attempted(r.get(SYSTEM_LLM_ONLY))
+
+    def _backfill_llm_only(
+        self,
+        result: Dict[str, Any],
+        item: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """保留已有超图结果，只补纯 LLM 并重新对比评判。"""
+        r = self._drop_mirrored_system_fields(dict(result))
+        question = r.get("question") or (item or {}).get("question") or ""
+        r[SYSTEM_LLM_ONLY] = self._fill_llm_only(question)
+        self._judge_result(r)
+        return self._drop_mirrored_system_fields(r)
 
     def _make_report(
         self,
@@ -1070,20 +1147,35 @@ class ExcelQueryEvaluator:
             fail_print(f"评测跳过 {skipped} 条空问题")
 
         by_id: Dict[str, Dict[str, Any]] = {}
+        backfill: Dict[str, Dict[str, Any]] = {}
         for r in existing_results or []:
+            if not isinstance(r, dict) or r.get("id") is None:
+                continue
+            qid = str(r["id"])
             if self._is_item_complete(r):
-                by_id[str(r["id"])] = r
+                by_id[qid] = r
+            elif self.enable_llm_only and self._hypergraph_attempted(r):
+                backfill[qid] = r
         n_resumed = 0
         todo: List[tuple] = []
         for idx, item in enumerate(items):
             qid = str(item.get("id") or f"idx_{idx}")
             if qid in by_id:
                 n_resumed += 1
+            elif qid in backfill:
+                todo.append((idx, item, backfill[qid]))
             else:
-                todo.append((idx, item))
+                todo.append((idx, item, None))
 
         total = len(items)
         n_todo = len(todo)
+        n_backfill = sum(1 for t in todo if t[2] is not None)
+        if n_resumed or n_backfill:
+            print(
+                f"[resume] 已完成 {n_resumed}，补纯LLM {n_backfill}，"
+                f"新跑 {n_todo - n_backfill}",
+                file=sys.stderr,
+            )
         workers = min(self.num_thread, max(1, n_todo)) if n_todo else 1
         t0 = time.perf_counter()
         created_at = datetime.now().isoformat(timespec="seconds")
@@ -1092,6 +1184,11 @@ class ExcelQueryEvaluator:
             qid = str(item.get("id") or f"idx_{idx}")
             if qid in by_id:
                 results[idx] = self._drop_mirrored_system_fields(dict(by_id[qid]))
+
+        def _run_item(item: Dict[str, Any], existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+            if existing is not None:
+                return self._backfill_llm_only(existing, item)
+            return self.evaluate_one(item)
 
         fail_n = sum(
             1
@@ -1142,8 +1239,8 @@ class ExcelQueryEvaluator:
 
         if workers <= 1:
             pbar = progress_iter(todo, total=n_todo, desc="评测问答", unit="题")
-            for idx, item in pbar:
-                r = self.evaluate_one(item)
+            for idx, item, existing in pbar:
+                r = _run_item(item, existing)
                 results[idx] = r
                 _on_item(r)
                 if hasattr(pbar, "set_postfix"):
@@ -1171,7 +1268,8 @@ class ExcelQueryEvaluator:
 
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 fut_to_idx = {
-                    pool.submit(self.evaluate_one, item): idx for idx, item in todo
+                    pool.submit(_run_item, item, existing): idx
+                    for idx, item, existing in todo
                 }
                 for fut in as_completed(fut_to_idx):
                     idx = fut_to_idx[fut]

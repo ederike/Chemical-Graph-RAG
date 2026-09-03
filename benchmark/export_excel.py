@@ -27,6 +27,7 @@ from .evaluator import (
     QueryEvaluator,
     project_system_row,
 )
+from .utils import ratio_to_percent
 
 try:
     from openpyxl import Workbook
@@ -104,12 +105,8 @@ def _cell_text(v: Any) -> Any:
 
 
 def _fmt_pct(v: Any) -> Optional[float]:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    """0~1 比例写成百分数（1.0 → 100），避免 Excel/WPS 把 1 显示成 1%。"""
+    return ratio_to_percent(v)
 
 
 def _num(v: Any) -> Optional[float]:
@@ -201,7 +198,8 @@ def _auto_width(ws: Worksheet, *, min_w: float = 8, max_w: float = 48) -> None:
 
 def _apply_number_format(cell, fmt: Optional[str]) -> None:
     if fmt == "pct":
-        cell.number_format = "0.00%"
+        # 字面 %：单元格存 100 显示 100%，而不是 Excel 把 1.0 当成 100% / WPS 当成 1%
+        cell.number_format = '0.00"%"'
     elif fmt == "int":
         cell.number_format = "#,##0"
     elif fmt == "float2":

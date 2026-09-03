@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+from benchmark.utils import ratio_to_percent
 from benchmark2.evaluator import SYSTEM_HYPERGRAPH, SYSTEM_LLM_ONLY
 from benchmark2.report import build_report_document, project_system_row
 
@@ -103,12 +104,8 @@ def _int(v: Any) -> Optional[int]:
 
 
 def _fmt_pct(v: Any) -> Optional[float]:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+    """0~1 比例写成百分数（1.0 → 100），避免 Excel/WPS 把 1 显示成 1%。"""
+    return ratio_to_percent(v)
 
 
 def _sys_label(key: str) -> str:
@@ -126,7 +123,7 @@ def _nested(d: Optional[dict], *keys: str, default: Any = None) -> Any:
 
 def _apply_number_format(cell, fmt: Optional[str]) -> None:
     if fmt == "pct":
-        cell.number_format = "0.00%"
+        cell.number_format = '0.00"%"'
     elif fmt == "int":
         cell.number_format = "#,##0"
     elif fmt == "float2":

@@ -122,6 +122,41 @@ def _strip_think_tags(content: Optional[str]) -> str:
             return rest.lstrip("\n")
     return text
 
+
+def _flatten_message_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, str):
+                parts.append(p)
+            elif isinstance(p, dict):
+                parts.append(str(p.get("text") or p.get("content") or ""))
+            else:
+                t = getattr(p, "text", None)
+                parts.append(str(t) if t else "")
+        return "".join(parts)
+    return str(content)
+
+
+def _content_from_message(msg, *, local_mode: bool) -> str:
+    """取 assistant 正文；content 为空时回退 reasoning_content（思考模型常见）。"""
+    if msg is None:
+        return ""
+    text = _flatten_message_content(getattr(msg, "content", None))
+    if local_mode:
+        text = _strip_think_tags(text)
+    if str(text or "").strip():
+        return text
+    reasoning = getattr(msg, "reasoning_content", None)
+    if not reasoning:
+        return text or ""
+    r = str(reasoning)
+    return _strip_think_tags(r) if local_mode else r
+
 def _prepare_local_call(
     model_args: dict,
     *,
@@ -213,19 +248,19 @@ class LLM:
         self,
         api_key,
         base_url,
-        timeout: float = 120.0,
+        timeout: float = 300.0,
         max_retries: int = 0,
         local_mode: Optional[bool] = None,
     ):
         """
-        timeout: 单次 HTTP 请求超时（秒）。默认 120，避免接口挂起导致抽取「假死」。
+        timeout: 单次 HTTP 请求超时（秒）。默认 300，避免思考/排队导致回答超时。
         max_retries: SDK 层自动重试次数；默认 0（由业务层 extract 自己重试）。
         local_mode: None 时自动判断（内网 URL 或 placeholder key → True）。
         """
         # 本地 GPU 常用 "none"（KyOpenAIServer）；EMPTY / token-abc123 亦可
         self.api_key = api_key if api_key not in (None, "") else "none"
         self.base_url = base_url
-        self.timeout = float(timeout) if timeout is not None else 120.0
+        self.timeout = float(timeout) if timeout is not None else 300.0
         self.max_retries = int(max_retries) if max_retries is not None else 0
 
         if local_mode is None:
@@ -297,10 +332,7 @@ class LLM:
             completion = self._create(messages, model_args)
             response["status"] = 1
             msg = completion.choices[0].message
-            content = msg.content
-            if self.local_mode:
-                content = _strip_think_tags(content)
-            response["answer"] = content
+            response["answer"] = _content_from_message(msg, local_mode=self.local_mode)
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
                 response["reasoning_content"] = reasoning
@@ -342,10 +374,7 @@ class LLM:
             completion = self._create(list(messages or []), ma)
             response["status"] = 1
             msg = completion.choices[0].message
-            content = msg.content
-            if self.local_mode:
-                content = _strip_think_tags(content)
-            content = content or ""
+            content = _content_from_message(msg, local_mode=self.local_mode)
             response["answer"] = content
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
@@ -407,10 +436,7 @@ class LLM:
             completion = self._create(messages, model_args)
             response["status"] = 1
             msg = completion.choices[0].message
-            content = msg.content
-            if self.local_mode:
-                content = _strip_think_tags(content)
-            response["answer"] = content
+            response["answer"] = _content_from_message(msg, local_mode=self.local_mode)
             reasoning = getattr(msg, "reasoning_content", None)
             if reasoning:
                 response["reasoning_content"] = reasoning
