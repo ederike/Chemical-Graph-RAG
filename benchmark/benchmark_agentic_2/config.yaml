@@ -1,0 +1,88 @@
+# benchmark_agentic_2 独立配置。
+# 路径一律相对仓库根目录；数据与结果默认落在本包内，不指向 benchmark2 / agentic_1。
+#
+# run.mode:
+#   stats     — 从 Excel 生成 stats / dataset JSON
+#   evaluate  — agentic + 纯 LLM 两路作答（含成对评判）
+#   rejudge   — 仅对已有 evals 重跑评判（两路回答放一起对比）
+#   report    — 汇总报告 JSON
+#   excel     — 导出多 sheet Excel
+#   all       — 依次执行以上全部
+run:
+  mode: all
+
+dhmf:
+  config_path: example/a/config_open.yaml
+  # 本模块固定评测 agentic_query
+  query_mode: agentic
+
+# 可跑 set1 / set2 / both：列表里写哪些就跑哪些
+datasets:
+  - id: set1
+    excel_path: benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx
+    questions_sheet: null
+    stats_sheet: null
+    design_sheet: null
+    enabled: true
+  - id: set2
+    excel_path: benchmark/benchmark_agentic_2/data/建筑涂料测试问题集2.xlsx
+    questions_sheet: null
+    stats_sheet: null
+    design_sheet: null
+    enabled: true
+
+dataset:
+  n_limit: null          # 只跑前 N 题；null = 全部
+  id_list: null          # 指定题号，如 [1, 2, 10]
+
+paths:
+  # 默认输出到本包 results/；也可改成仓库根下 benchmark_agentic_2_results/
+  output_dir: results/benchmark_agentic_2_questions12_agentic_new
+
+  # 下列文件名会按 dataset id 加前缀，如 set1_stats.json
+  stats_filename: stats.json
+  dataset_filename: dataset.json
+  eval_results_filename: evals.json
+  report_filename: report.json
+  report_excel_filename: report.xlsx
+
+  # 非空则覆盖对应文件（单数据集调试用）；多数据集时请保持 null
+  stats_path: null
+  dataset_path: null
+  eval_results_path: null
+  report_source_path: null
+  report_path: null
+  report_excel_path: null
+
+evaluate:
+  resume: true
+  enable_llm_only: true
+  enable_doc_recall: false   # Excel 测试集通常无 source_docs；有则可开
+  max_retries: 3             # 仅 JSON 解析失败重试；HTTP 超时不连着重试
+  sleep_between: 0.0
+  num_thread: 3
+  use_cache: false
+  dhmf_retrieve_use_cache: null
+  api_key: null
+  base_url: null
+  timeout: 300
+  model_args:
+    model: null
+    temperature: 0.0
+    enable_thinking: false
+    response_format:
+      type: json_object
+
+  llm_only:
+    api_key: null
+    base_url: null
+    timeout: 300
+    max_retries: 2
+    use_cache: false
+    model_args:
+      model: null
+      temperature: 0.2
+      enable_thinking: false
+
+logging:
+  level: INFO

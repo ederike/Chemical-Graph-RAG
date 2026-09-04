@@ -50,8 +50,8 @@ query 写成带齐标识和约束的完整问题，不要拆成多次单条件�
 ## 切开的长 PDF
 入库时超长 PDF 会切成多条文档（如 foo.pdf、foo.pdf_1、foo.pdf_2），每条有自己的 doc_id。
 search / read_doc 若带 sliced=true，说明当前命中只是原文件的一片（slice_index / n_slices），不是整本。
-正文可能在切点处断开：表格后半、配方、安全数据常在下一片。
-不要假设读完这一片就等于读完整份原件。按 siblings 里的 slice_index 顺序继续 read_doc。
+正文可能在切点处断开：表格后半、配方、安全数据常在上一页或者下一片。
+不要假设读完这一片就等于读完整份原件。按 siblings 里的 slice_index 顺序继续 read_doc读其他切片片段。
 未标 sliced 的才是完整单篇。
 
 ## 原则
