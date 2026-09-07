@@ -9,8 +9,9 @@ AGENTIC_PROMPT['SYSTEM_TOOLS'] = """\
 
 ## 工具
 
-- search(query, mode)：检索知识库，返回短摘要和 doc_id。需要核对规格/数值/配方时再 read_doc。
-- read_doc(doc_id)：读一篇资料原文。可对 search 命中及其 siblings 中的 doc_id 调用。
+- search(query, mode)：检索知识库，返回短摘要、chunk_id、doc_id、同片 prev/next_chunk_id、切开文档的 siblings。
+- read_chunk(chunk_id)：按块读正文。邻近细节用返回的 prev_chunk_id / next_chunk_id（阅读序，不是 id 大小）。
+- read_doc(doc_id)：读一片资料的全部块。可对 search 命中及其 siblings 的 doc_id 调用。
 - graph_neighbors(name | node_id | doc_id)：同一超边/文档上的实体邻居（产品↔公司↔其它产品）。主体跳转用这个。
 
 ## search 的四种 mode 实际怎么搜（query 必须按这个来写）
@@ -47,12 +48,12 @@ query 写成带齐标识和约束的完整问题，不要拆成多次单条件�
 - 正确：query="NFPA 健康评级为 1、相对密度约 1.10、自燃温度高于 400°C 的产品是什么"。
 - 错误：先 keyword 搜「健康1」再 keyword 搜「1.10」（把同一主体的筛选拆碎）。
 
-## 切开的长 PDF
-入库时超长 PDF 会切成多条文档（如 foo.pdf、foo.pdf_1、foo.pdf_2），每条有自己的 doc_id。
-search / read_doc 若带 sliced=true，说明当前命中只是原文件的一片（slice_index / n_slices），不是整本。
-正文可能在切点处断开：表格后半、配方、安全数据常在上一页或者下一片。
-不要假设读完这一片就等于读完整份原件。按 siblings 里的 slice_index 顺序继续 read_doc读其他切片片段。
-未标 sliced 的才是完整单篇。
+## 块 id 与切开的长 PDF
+入库是多线程的，chunk_id 不是阅读顺序。同一切片（同一 doc_id）内用 chunk_index 以及 prev_chunk_id / next_chunk_id 往前后走。
+超长 PDF 会切成多条文档（foo.pdf、foo.pdf_1、…），各有自己的 doc_id。
+sliced=true 表示当前只是一片（slice_index / n_slices）。siblings 给出其它片的 doc_id、first_chunk_id、last_chunk_id。
+要读邻近段落：read_chunk(prev 或 next)。走到片头/片尾且 sliced 时，对相邻 slice 的 first_chunk_id 再 read_chunk。
+未标 sliced 的才是完整单篇。核对规格优先 read_chunk，不要一上来 read_doc 整片。
 
 ## 原则
 1. 具体牌号、CAS、出厂指标、配方必须来自工具结果，不要用行业常识编造商品实测值。
@@ -68,7 +69,8 @@ AGENTIC_PROMPT['SYSTEM_JSON'] = """\
 目标始终是用户的原始问题。不要预先写死全部检索步骤；每看完一轮工具结果，再决定下一步。
 
 可用工具：
-- search：{"query": "一句完整的自然语言问题", "mode": "hybrid|keyword|node|chunk"}。mode 可省略（默认 hybrid）。
+- search：{"query": "一句完整的自然语言问题", "mode": "hybrid|keyword|node|chunk"}。mode 可省略（默认 hybrid）。命中含 chunk_id / doc_id / prev_chunk_id / next_chunk_id / siblings。
+- read_chunk：{"chunk_id": 整数}。沿 prev/next 读同片邻近块；换片用 siblings 的 first_chunk_id。
 - read_doc：{"doc_id": 整数}。若返回 sliced=true，这只是长 PDF 的一片，按 siblings 继续读下一片。
 - graph_neighbors：name / node_id / doc_id 至少其一。
 
@@ -90,7 +92,8 @@ search 的 query 任何 mode 都要写成完整问句，禁止只丢几个词。
 3. 证据够了就输出 answer，不要空转。
 4. 结论先行，带型号、数值、单位和条件。安全信息原样保留。
 5. 对不上时说明差异并给出已核实的相近信息，不要说「无法回答」。
-6. 命中切开文档（sliced=true）时，不要把一片当成整份原件，按 siblings 接着 read_doc。
+6. 命中切开文档（sliced=true）时，不要把一片当成整份原件。同片用 prev/next_chunk_id 调 read_chunk；换片用 siblings 的 first_chunk_id。
+7. chunk_id 不是阅读顺序，不要按 id 加减来猜邻近块。
 """
 
 AGENTIC_PROMPT['FORCE_ANSWER'] = """\

@@ -1,7 +1,7 @@
 """
 同一条 messages 上的 think → tool → observe 循环。
 
-模型自己决定何时 search / read_doc / graph_neighbors，何时给出最终答案。
+模型自己决定何时 search / read_doc / read_chunk / graph_neighbors，何时给出最终答案。
 优先 OpenAI function calling；接口不支持或 tool_protocol=json 时走 JSON 动作。
 """
 
@@ -57,6 +57,161 @@ def _usage_from(resp: Optional[dict]) -> Tuple[Optional[int], Optional[int], Opt
         resp.get("usage_completion_tokens"),
         resp.get("usage_total_tokens"),
     )
+
+
+_TOOL_USER_PREFIX = "工具 "
+
+
+def _is_tool_result_message(msg: dict) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    role = msg.get("role")
+    if role == "tool":
+        return True
+    if role == "user":
+        c = str(msg.get("content") or "")
+        return c.startswith(_TOOL_USER_PREFIX) and "返回" in c[:80]
+    return False
+
+
+def _extract_json_blob(text: str) -> Optional[dict]:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith(_TOOL_USER_PREFIX):
+        nl = raw.find("\n")
+        raw = raw[nl + 1:] if nl >= 0 else raw
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+
+def _id_stub_from_tool_content(content: str) -> dict:
+    """压缩后仍留给模型的定位字段。"""
+    data = _extract_json_blob(content) or {}
+    stub: Dict[str, Any] = {}
+    for k in (
+        "query", "mode", "doc_id", "chunk_id", "n_hits", "n_chunks",
+        "prev_chunk_id", "next_chunk_id", "slice_index", "n_slices",
+        "family", "error", "source",
+    ):
+        if data.get(k) is not None:
+            stub[k] = data[k]
+    hits = data.get("hits")
+    if isinstance(hits, list):
+        slim = []
+        for h in hits[:12]:
+            if not isinstance(h, dict):
+                continue
+            slim.append({
+                k: h.get(k)
+                for k in (
+                    "doc_id", "chunk_id", "source", "score",
+                    "prev_chunk_id", "next_chunk_id",
+                    "slice_index", "n_slices", "matched_chunk_ids",
+                )
+                if h.get(k) is not None
+            })
+        if slim:
+            stub["hits"] = slim
+    sibs = data.get("siblings")
+    if isinstance(sibs, list):
+        stub["siblings"] = [
+            {
+                k: s.get(k)
+                for k in (
+                    "doc_id", "slice_index", "first_chunk_id",
+                    "last_chunk_id", "n_chunks",
+                )
+                if isinstance(s, dict) and s.get(k) is not None
+            }
+            for s in sibs[:16]
+        ]
+    for k in ("chunk_ids", "first_chunk_id", "last_chunk_id"):
+        if data.get(k) is not None:
+            stub[k] = data[k]
+    seeds = data.get("seeds")
+    if isinstance(seeds, list) and seeds:
+        stub["seeds"] = [
+            {k: s.get(k) for k in ("node_id", "name", "doc_id", "first_chunk_id") if isinstance(s, dict) and s.get(k) is not None}
+            for s in seeds[:8]
+        ]
+    return stub
+
+
+def _soft_trim_tool_content(content: str, cfg) -> str:
+    limit = int(getattr(cfg, "prune_soft_trim_chars", 0) or 0)
+    if limit <= 0 or len(content) <= limit:
+        return content
+    head = max(0, int(getattr(cfg, "prune_soft_trim_head", 0) or 0))
+    tail = max(0, int(getattr(cfg, "prune_soft_trim_tail", 0) or 0))
+    if head + tail >= len(content):
+        return content
+    dropped = len(content) - head - tail
+    marker = (
+        f"\n…[pruned {dropped} chars; ids retained, use read_chunk/read_doc]…\n"
+    )
+    return content[:head] + marker + (content[-tail:] if tail else "")
+
+
+def _hard_stub_tool_content(content: str) -> str:
+    prefix = ""
+    body = content
+    if content.startswith(_TOOL_USER_PREFIX):
+        nl = content.find("\n")
+        prefix = (content[:nl + 1] if nl >= 0 else content + "\n")
+        body = content[nl + 1:] if nl >= 0 else ""
+    stub = _id_stub_from_tool_content(body if body else content)
+    payload = {"pruned": True, **stub} if stub else {"pruned": True, "note": "old tool result cleared"}
+    return prefix + json.dumps(payload, ensure_ascii=False)
+
+
+def prune_old_tool_results(messages: List[dict], cfg) -> int:
+    """
+    就地缩短较早轮次的 tool 结果。OpenAI 仍保留 tool 消息（只改 content）。
+    最近 prune_keep_last_n_turns 个工具轮保持全文；更早 soft-trim；
+    超过 prune_hard_clear_age_turns 则只留 id 占位。
+    返回改写条数。
+    """
+    if not getattr(cfg, "prune_tool_results", True):
+        return 0
+    keep = int(getattr(cfg, "prune_keep_last_n_turns", 3) or 0)
+    hard_age = int(getattr(cfg, "prune_hard_clear_age_turns", 8) or 0)
+    groups: List[List[int]] = []
+    i = 0
+    n = len(messages)
+    while i < n:
+        if _is_tool_result_message(messages[i]):
+            g = []
+            while i < n and _is_tool_result_message(messages[i]):
+                g.append(i)
+                i += 1
+            groups.append(g)
+        else:
+            i += 1
+    changed = 0
+    n_groups = len(groups)
+    for gi, g in enumerate(groups):
+        age = n_groups - 1 - gi
+        if age < keep:
+            continue
+        hard = hard_age > 0 and age >= hard_age
+        for idx in g:
+            old = str(messages[idx].get("content") or "")
+            new = _hard_stub_tool_content(old) if hard else _soft_trim_tool_content(old, cfg)
+            if new != old:
+                messages[idx]["content"] = new
+                changed += 1
+    return changed
 
 
 def _looks_like_tools_unsupported(err: str) -> bool:
@@ -367,6 +522,9 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
     def _force_final(reason: str, turn_tag) -> dict:
         nonlocal last_reasoning
         ctx._trace(f"forcing final answer: {reason} last_prompt={last_prompt}")
+        n_pruned = prune_old_tool_results(messages, cfg)
+        if n_pruned:
+            ctx._trace(f"pruned {n_pruned} old tool results before force answer")
         if (not cfg.force_answer_on_max_turns) and reason.startswith("max_turns"):
             return _finish(False, f"超过 max_turns={max_turns} 仍未给出答案")
         messages.append({
@@ -418,6 +576,12 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
         ctx.logger.warning(f"[agentic] fallback to JSON protocol: {reason}")
 
     for turn_i in range(1, max_turns + 1):
+        n_pruned = prune_old_tool_results(messages, cfg)
+        if n_pruned:
+            ctx._trace(f"pruned {n_pruned} old tool results")
+            est = estimate_prompt_tokens(messages, schemas if use_openai else None)
+            if est > 0:
+                last_prompt = est
         if turn_i > 1 and _over_token_budget():
             return _force_final(
                 f"prompt tokens {last_prompt} >= {token_threshold} "

@@ -5,7 +5,7 @@ Tool-calling 检索问答。
 
     dhmf.agentic_query("……", pretty=True)
 
-内部：同一条 messages 上循环 think → search/read_doc/graph_neighbors → 作答。
+内部：同一条 messages 上循环 think → search/read_doc/read_chunk/graph_neighbors → 作答。
 配置只读 config.agentic。
 """
 

@@ -828,7 +828,17 @@ class AgenticConfig(BaseModel):
 
     enable_search: bool = True
     enable_read_doc: bool = True
+    enable_read_chunk: bool = True
     enable_graph_neighbors: bool = True
+
+    # 旧 tool 结果压缩：保留最近 N 个工具轮全文，更早的截断/占位，省上下文。
+    prune_tool_results: bool = True
+    prune_keep_last_n_turns: int = 3
+    prune_soft_trim_chars: int = 4000
+    prune_soft_trim_head: int = 1200
+    prune_soft_trim_tail: int = 800
+    prune_hard_clear_age_turns: int = 8
+    read_chunk_max_chars: int = 4000
 
     # 仅本模式 search 工具覆盖 retrieve_items 的召回行为（不改共享 retrieve 配置）
     chunk_candidate_k: int = 30
@@ -867,7 +877,8 @@ class AgenticConfig(BaseModel):
 
     @field_validator(
         "use_cache", "log_trace", "force_answer_on_max_turns",
-        "enable_search", "enable_read_doc", "enable_graph_neighbors",
+        "enable_search", "enable_read_doc", "enable_read_chunk",
+        "enable_graph_neighbors", "prune_tool_results",
         "enable_query_rewrite", "enable_keyword_exact",
         "enable_keyword_minority", "enable_keyword_majority",
         "enable_parallel_paths", "enable_rerank",
@@ -882,7 +893,9 @@ class AgenticConfig(BaseModel):
             "force_answer_on_max_turns": True,
             "enable_search": True,
             "enable_read_doc": True,
+            "enable_read_chunk": True,
             "enable_graph_neighbors": True,
+            "prune_tool_results": True,
             "enable_query_rewrite": False,
             "enable_keyword_exact": True,
             "enable_keyword_minority": True,
@@ -916,7 +929,10 @@ class AgenticConfig(BaseModel):
     @field_validator(
         "max_turns", "max_prompt_tokens", "prompt_token_reserve",
         "search_preview_chars", "search_max_hits",
-        "read_doc_max_chars", "neighbors_limit",
+        "read_doc_max_chars", "read_chunk_max_chars", "neighbors_limit",
+        "prune_keep_last_n_turns", "prune_soft_trim_chars",
+        "prune_soft_trim_head", "prune_soft_trim_tail",
+        "prune_hard_clear_age_turns",
         "chunk_candidate_k", "node_candidate_k",
         "keyword_candidate_k", "keyword_top_k", "rerank_top_k",
         mode="before",
@@ -930,7 +946,13 @@ class AgenticConfig(BaseModel):
             "search_preview_chars": 400,
             "search_max_hits": 8,
             "read_doc_max_chars": 8000,
+            "read_chunk_max_chars": 4000,
             "neighbors_limit": 20,
+            "prune_keep_last_n_turns": 3,
+            "prune_soft_trim_chars": 4000,
+            "prune_soft_trim_head": 1200,
+            "prune_soft_trim_tail": 800,
+            "prune_hard_clear_age_turns": 8,
             "chunk_candidate_k": 30,
             "node_candidate_k": 30,
             "keyword_candidate_k": 20,

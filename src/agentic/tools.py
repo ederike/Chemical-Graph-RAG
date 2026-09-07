@@ -1,8 +1,9 @@
 """
-Agentic 工具：search / read_doc / graph_neighbors。
+Agentic 工具：search / read_doc / read_chunk / graph_neighbors。
 
 search 走 retrieve_items，覆盖参数全部来自 agentic 配置，不读 retrieve/agent。
-read_doc / graph_neighbors 读同一套 SQLite（doc / chunk / node / hyperedge）。
+read_doc / read_chunk / graph_neighbors 读同一套 SQLite（doc / chunk / node / hyperedge）。
+块阅读顺序按 chunk_index / body_N，不是入库 chunk_id。
 """
 
 from __future__ import annotations
@@ -148,13 +149,15 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
             "function": {
                 "name": "search",
                 "description": (
-                    "在化工产品知识库中检索。返回短摘要和 doc_id / chunk_id。"
+                    "在化工产品知识库中检索。每条命中含 chunk_id、doc_id、"
+                    "同切片阅读序 prev_chunk_id/next_chunk_id（不是 id 数值序），"
+                    "以及切开 PDF 的 siblings（其它片的 doc_id / first_chunk_id）。"
                     "query 必须是一句完整的自然语言问题或陈述，禁止只传几个关键词。"
                     "mode=keyword：后端从问句抽取牌号/CAS/货号再精确匹配，问句里要带这些标识。"
                     "mode=node：实体节点向量检索，问一个主体（产品/公司/物质）。"
                     "mode=chunk：正文块语义检索，问用途/工艺/配方等段落内容。"
                     "mode=hybrid 或省略：三路混合，拿不准或既有标识又有规格时用。"
-                    "核对数值或原文时再调用 read_doc。"
+                    "要读命中块或邻近块用 read_chunk(chunk_id)；整片用 read_doc。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -190,7 +193,8 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
                 "description": (
                     "按 doc_id 阅读一份资料的摘要头块与正文。"
                     "可对 search 命中的 doc_id，以及命中里 siblings 列出的同族切开文档使用。"
-                    "若返回 sliced=true，当前只是长 PDF 的一片，需要时按 slice_index 顺序再读 siblings。"
+                    "返回该片按阅读序排列的 chunk_ids。sliced=true 时按 siblings 换片。"
+                    "邻近细节优先 read_chunk(prev/next_chunk_id)，不要整片重读。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -201,6 +205,29 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
                         },
                     },
                     "required": ["doc_id"],
+                },
+            },
+        })
+    if cfg.enable_read_chunk:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "read_chunk",
+                "description": (
+                    "按 chunk_id 读一块正文。块 id 不是阅读顺序："
+                    "用返回的 prev_chunk_id / next_chunk_id 沿同一切片（同一 doc_id）往前后读；"
+                    "正文不在这片时，用 siblings[].first_chunk_id 跳到其它切片再沿 next 走。"
+                    "可对 search / read_doc / graph_neighbors 给出的任意 chunk_id 调用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "chunk_id": {
+                            "type": "integer",
+                            "description": "块 id",
+                        },
+                    },
+                    "required": ["chunk_id"],
                 },
             },
         })
@@ -242,6 +269,8 @@ def allowed_tool_names(cfg: "AgenticConfig") -> List[str]:
         names.append("search")
     if cfg.enable_read_doc:
         names.append("read_doc")
+    if cfg.enable_read_chunk:
+        names.append("read_chunk")
     if cfg.enable_graph_neighbors:
         names.append("graph_neighbors")
     return names
@@ -289,7 +318,47 @@ class ToolContext:
                 pass
         return ""
 
-    def _slice_info(self, doc_id) -> Optional[dict]:
+    def _ordered_chunks(self, doc_id) -> list:
+        """该 doc（一片）内按阅读序的块。入库 chunk_id 可能乱序。"""
+        if doc_id is None:
+            return []
+        retrieve = self.dhmf.retrieve_module
+        try:
+            retrieve._ensure_precompute()
+        except Exception:
+            pass
+        chunks = list((retrieve.chunks_by_doc or {}).get(doc_id) or [])
+        if not chunks:
+            try:
+                chunks = list(self.dhmf.db["chunk"].search("doc_id", doc_id) or [])
+            except Exception:
+                chunks = []
+        if not chunks:
+            return []
+        try:
+            chunks.sort(key=retrieve._chunk_order_key)
+        except Exception:
+            chunks.sort(key=lambda c: (c.get("id") or 0))
+        return chunks
+
+    def _chunk_row(self, chunk_id) -> Optional[dict]:
+        if chunk_id is None:
+            return None
+        retrieve = self.dhmf.retrieve_module
+        try:
+            retrieve._ensure_precompute()
+        except Exception:
+            pass
+        row = (getattr(retrieve, "chunk_dict", None) or {}).get(chunk_id)
+        if row:
+            return row
+        try:
+            rows = self.dhmf.db["chunk"].search("id", chunk_id) or []
+            return rows[0] if rows else None
+        except Exception:
+            return None
+
+    def _slice_info(self, doc_id, *, with_chunk_ids: bool = False) -> Optional[dict]:
         """切开 PDF 的同族切片。未切开返回 None。"""
         if doc_id is None:
             return None
@@ -334,11 +403,19 @@ class ToolContext:
                 sm = retrieve._doc_slice_meta(sdoc) if sdoc else {}
             except Exception:
                 sm = {}
-            siblings.append({
+            och = self._ordered_chunks(did)
+            cids = [c.get("id") for c in och if c.get("id") is not None]
+            sib = {
                 "doc_id": did,
                 "slice_index": int(sm.get("slice_index") or 0),
                 "source": src,
-            })
+                "n_chunks": len(cids),
+                "first_chunk_id": cids[0] if cids else None,
+                "last_chunk_id": cids[-1] if cids else None,
+            }
+            if with_chunk_ids:
+                sib["chunk_ids"] = cids
+            siblings.append(sib)
         return {
             "sliced": True,
             "slice_index": slice_index,
@@ -347,11 +424,61 @@ class ToolContext:
             "siblings": siblings,
         }
 
+    def _chunk_nav(self, chunk: dict, *, with_sibling_chunk_ids: bool = False) -> dict:
+        """阅读序导航：同片 prev/next，切开则带 siblings 的 first/last_chunk_id。"""
+        cid = chunk.get("id")
+        doc_id = chunk.get("doc_id")
+        ordered = self._ordered_chunks(doc_id)
+        idx = None
+        for i, c in enumerate(ordered):
+            if c.get("id") == cid:
+                idx = i
+                break
+        prev_id = ordered[idx - 1].get("id") if idx is not None and idx > 0 else None
+        next_id = (
+            ordered[idx + 1].get("id")
+            if idx is not None and idx + 1 < len(ordered)
+            else None
+        )
+        nav = {
+            "chunk_id": cid,
+            "doc_id": doc_id,
+            "chunk_index": idx,
+            "n_chunks": len(ordered),
+            "prev_chunk_id": prev_id,
+            "next_chunk_id": next_id,
+        }
+        sl = self._slice_info(doc_id, with_chunk_ids=with_sibling_chunk_ids)
+        if sl:
+            nav.update(sl)
+        return nav
+
+    def _doc_locator(self, doc_id) -> dict:
+        ordered = self._ordered_chunks(doc_id)
+        ids = [c.get("id") for c in ordered if c.get("id") is not None]
+        loc = {
+            "doc_id": doc_id,
+            "n_chunks": len(ids),
+            "first_chunk_id": ids[0] if ids else None,
+            "last_chunk_id": ids[-1] if ids else None,
+        }
+        sl = self._slice_info(doc_id)
+        if sl:
+            loc.update({
+                "sliced": True,
+                "slice_index": sl.get("slice_index"),
+                "n_slices": sl.get("n_slices"),
+                "family": sl.get("family"),
+                "siblings": sl.get("siblings"),
+            })
+        return loc
+
     def execute(self, name: str, arguments) -> str:
         args = _parse_args(arguments)
         fn = {
             "search": self.search,
             "read_doc": self.read_doc,
+            "read_chunk": self.read_chunk,
             "graph_neighbors": self.graph_neighbors,
         }.get(name)
         if fn is None:
@@ -469,18 +596,52 @@ class ToolContext:
                     "node_id": it.get("node_id"),
                     "node_name": it.get("node_name"),
                     "preview": _preview(content, preview_n),
+                    "matched_chunk_ids": [],
                 }
-                sl = self._slice_info(doc_id)
-                if sl:
-                    hit.update(sl)
+                cid0 = chunk.get("id") or it.get("chunk_id")
+                if cid0 is not None:
+                    hit["matched_chunk_ids"].append(cid0)
+                if chunk.get("id") is not None:
+                    saved = {
+                        "score": hit["score"],
+                        "preview": hit["preview"],
+                        "source": hit["source"],
+                        "match_type": hit["match_type"],
+                        "node_id": hit["node_id"],
+                        "node_name": hit["node_name"],
+                        "matched_chunk_ids": hit["matched_chunk_ids"],
+                    }
+                    hit.update(self._chunk_nav(chunk))
+                    hit.update(saved)
+                    hit["chunk_id"] = chunk.get("id")
+                    if chunk.get("doc_id") is not None:
+                        hit["doc_id"] = chunk.get("doc_id")
+                else:
+                    sl = self._slice_info(doc_id)
+                    if sl:
+                        hit.update(sl)
                 by_doc[key] = hit
                 order.append(key)
                 continue
+            cid = chunk.get("id") or it.get("chunk_id")
+            if cid is not None and cid not in (cur.get("matched_chunk_ids") or []):
+                cur.setdefault("matched_chunk_ids", []).append(cid)
             if score > float(cur.get("score") or 0.0):
                 cur["score"] = score
                 if content:
                     cur["preview"] = _preview(content, preview_n)
                 if chunk.get("id") is not None:
+                    keep = {
+                        "score": score,
+                        "preview": cur.get("preview"),
+                        "source": cur.get("source"),
+                        "match_type": cur.get("match_type"),
+                        "node_id": cur.get("node_id"),
+                        "node_name": cur.get("node_name"),
+                        "matched_chunk_ids": cur.get("matched_chunk_ids"),
+                    }
+                    cur.update(self._chunk_nav(chunk))
+                    cur.update(keep)
                     cur["chunk_id"] = chunk.get("id")
             if not cur.get("node_name") and it.get("node_name"):
                 cur["node_name"] = it.get("node_name")
@@ -515,23 +676,14 @@ class ToolContext:
         except Exception:
             pass
 
-        chunks = list(retrieve.chunks_by_doc.get(doc_id) or [])
-        if not chunks:
-            try:
-                chunks = list(self.dhmf.db["chunk"].search("doc_id", doc_id) or [])
-            except Exception as e:
-                return {"error": f"读文档失败: {e}", "doc_id": doc_id}
+        chunks = self._ordered_chunks(doc_id)
         if not chunks:
             return {"error": f"没有 doc_id={doc_id} 的块", "doc_id": doc_id}
 
-        try:
-            chunks.sort(key=retrieve._chunk_order_key)
-        except Exception:
-            chunks.sort(key=lambda c: c.get("id") or 0)
-
         source = self._source_of(doc_id, chunks[0] if chunks else None)
         self._remember_ref(source, doc_id)
-        slice_info = self._slice_info(doc_id)
+        slice_info = self._slice_info(doc_id, with_chunk_ids=True)
+        chunk_ids = [c.get("id") for c in chunks if c.get("id") is not None]
 
         he = None
         try:
@@ -544,7 +696,11 @@ class ToolContext:
                 he = None
 
         max_chars = int(self.cfg.read_doc_max_chars)
-        parts = [f"doc_id={doc_id}", f"source={source or '未知'}"]
+        parts = [
+            f"doc_id={doc_id}",
+            f"source={source or '未知'}",
+            f"chunk_ids(阅读序)={chunk_ids}",
+        ]
         if slice_info:
             nsl = slice_info.get("n_slices")
             sidx = slice_info.get("slice_index")
@@ -557,7 +713,11 @@ class ToolContext:
             sibs = slice_info.get("siblings") or []
             if sibs:
                 bits = [
-                    f"doc_id={s.get('doc_id')}[{s.get('slice_index')}] {s.get('source')}"
+                    (
+                        f"doc_id={s.get('doc_id')}[slice={s.get('slice_index')}] "
+                        f"first_chunk={s.get('first_chunk_id')} "
+                        f"last_chunk={s.get('last_chunk_id')} {s.get('source')}"
+                    )
                     for s in sibs
                 ]
                 parts.append("siblings: " + " | ".join(bits))
@@ -576,7 +736,12 @@ class ToolContext:
         for i, c in enumerate(chunks):
             name = (c.get("name") or "").strip() or f"chunk_{c.get('id')}"
             body = (c.get("content") or "").strip()
-            parts.append(f"### {name} (chunk_id={c.get('id')})")
+            nav = self._chunk_nav(c)
+            parts.append(
+                f"### {name} (chunk_id={c.get('id')} doc_id={doc_id} "
+                f"idx={nav.get('chunk_index')} "
+                f"prev={nav.get('prev_chunk_id')} next={nav.get('next_chunk_id')})"
+            )
             parts.append(body)
             if max_chars > 0 and sum(len(p) for p in parts) >= max_chars:
                 extra = len(chunks) - i - 1
@@ -593,11 +758,65 @@ class ToolContext:
             "doc_id": doc_id,
             "source": source,
             "n_chunks": len(chunks),
+            "chunk_ids": chunk_ids,
+            "first_chunk_id": chunk_ids[0] if chunk_ids else None,
+            "last_chunk_id": chunk_ids[-1] if chunk_ids else None,
             "truncated": truncated,
             "content": text,
         }
         if slice_info:
             out.update(slice_info)
+        return out
+
+    def read_chunk(self, args: dict) -> dict:
+        chunk_id = _as_int(
+            args.get("chunk_id") if "chunk_id" in args else args.get("_raw")
+        )
+        if chunk_id is None:
+            return {"error": "read_chunk 需要整数 chunk_id"}
+
+        chunk = self._chunk_row(chunk_id)
+        if not chunk:
+            return {"error": f"没有 chunk_id={chunk_id}", "chunk_id": chunk_id}
+
+        doc_id = chunk.get("doc_id")
+        source = self._source_of(doc_id, chunk)
+        self._remember_ref(source, doc_id)
+        nav = self._chunk_nav(chunk, with_sibling_chunk_ids=True)
+        ordered = self._ordered_chunks(doc_id)
+        this_ids = [c.get("id") for c in ordered if c.get("id") is not None]
+
+        body = (chunk.get("content") or "").strip()
+        max_chars = int(getattr(self.cfg, "read_chunk_max_chars", 0) or 0)
+        truncated = False
+        if max_chars > 0 and len(body) > max_chars:
+            body = body[:max_chars] + "\n…(truncated)"
+            truncated = True
+
+        extra = {}
+        try:
+            extra = self.dhmf.retrieve_module._parse_extra(chunk.get("extra")) or {}
+        except Exception:
+            extra = {}
+
+        out = {
+            "chunk_id": chunk_id,
+            "doc_id": doc_id,
+            "source": source,
+            "name": (chunk.get("name") or "").strip() or None,
+            "chunk_index": nav.get("chunk_index"),
+            "n_chunks": nav.get("n_chunks"),
+            "prev_chunk_id": nav.get("prev_chunk_id"),
+            "next_chunk_id": nav.get("next_chunk_id"),
+            "chunk_ids": this_ids,
+            "truncated": truncated,
+            "content": body,
+        }
+        if extra.get("chunk_index") is not None:
+            out["stored_chunk_index"] = extra.get("chunk_index")
+        for k in ("sliced", "slice_index", "n_slices", "family", "siblings"):
+            if nav.get(k) is not None:
+                out[k] = nav[k]
         return out
 
     def graph_neighbors(self, args: dict) -> dict:
@@ -649,12 +868,18 @@ class ToolContext:
                 doc_ids.add(did)
             src = self._source_of(did)
             self._remember_ref(src, did)
+            loc = self._doc_locator(did) if did is not None else {}
             seed_out.append({
                 "node_id": nid,
                 "name": n.get("name"),
                 "doc_id": did,
                 "hyperedge_id": hid,
                 "source": src,
+                "first_chunk_id": loc.get("first_chunk_id"),
+                "last_chunk_id": loc.get("last_chunk_id"),
+                "n_chunks": loc.get("n_chunks"),
+                "slice_index": loc.get("slice_index"),
+                "n_slices": loc.get("n_slices"),
                 "preview": _preview(n.get("content") or "", preview_n),
             })
 
@@ -670,12 +895,18 @@ class ToolContext:
                 did = n.get("doc_id")
                 src = self._source_of(did)
                 self._remember_ref(src, did)
+                loc = self._doc_locator(did) if did is not None else {}
                 neighbors.append({
                     "node_id": nid,
                     "name": n.get("name"),
                     "doc_id": did,
                     "hyperedge_id": n.get("hyperedge_id"),
                     "source": src,
+                    "first_chunk_id": loc.get("first_chunk_id"),
+                    "last_chunk_id": loc.get("last_chunk_id"),
+                    "n_chunks": loc.get("n_chunks"),
+                    "slice_index": loc.get("slice_index"),
+                    "n_slices": loc.get("n_slices"),
                     "preview": _preview(n.get("content") or "", preview_n),
                 })
                 if len(neighbors) >= limit:
