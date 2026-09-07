@@ -157,7 +157,7 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
                     "mode=node：实体节点向量检索，问一个主体（产品/公司/物质）。"
                     "mode=chunk：正文块语义检索，问用途/工艺/配方等段落内容。"
                     "mode=hybrid 或省略：三路混合，拿不准或既有标识又有规格时用。"
-                    "要读命中块或邻近块用 read_chunk(chunk_id)；整片用 read_doc。"
+                    "同片要连续看多块用 read_doc；单点核对或跨切点用 read_chunk。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -191,10 +191,10 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
             "function": {
                 "name": "read_doc",
                 "description": (
-                    "按 doc_id 阅读一份资料的摘要头块与正文。"
-                    "可对 search 命中的 doc_id，以及命中里 siblings 列出的同族切开文档使用。"
-                    "返回该片按阅读序排列的 chunk_ids。sliced=true 时按 siblings 换片。"
-                    "邻近细节优先 read_chunk(prev/next_chunk_id)，不要整片重读。"
+                    "按 doc_id 阅读一整片资料（该切片全部块，按阅读序）。"
+                    "search 已锁定文档、需要连续多块/表格/配方/上下文时用这个，不要对同片反复 read_chunk。"
+                    "可对 search 命中及其 siblings 的 doc_id 调用。"
+                    "sliced=true 时这只是长 PDF 的一片，换片再 read_doc(邻片 doc_id)。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -214,10 +214,10 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
             "function": {
                 "name": "read_chunk",
                 "description": (
-                    "按 chunk_id 读一块正文。块 id 不是阅读顺序："
-                    "用返回的 prev_chunk_id / next_chunk_id 沿同一切片（同一 doc_id）往前后读；"
-                    "正文不在这片时，用 siblings[].first_chunk_id 跳到其它切片再沿 next 走。"
-                    "可对 search / read_doc / graph_neighbors 给出的任意 chunk_id 调用。"
+                    "按 chunk_id 只读一块，用于初略锁定后的核对（一个数值、一行规格），"
+                    "以及切开 PDF 的跨切点：本片对不上时用 siblings[].first_chunk_id 跳到邻片再核一块。"
+                    "同片要看连续多块请改 read_doc，不要沿 next_chunk_id 把整片走完。"
+                    "chunk_id 不是阅读顺序。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -228,6 +228,46 @@ def tool_schemas(cfg: "AgenticConfig") -> list:
                         },
                     },
                     "required": ["chunk_id"],
+                },
+            },
+        })
+    if getattr(cfg, "enable_note_evidence", True):
+        cap = int(getattr(cfg, "evidence_slot_max", 12) or 0)
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "note_evidence",
+                "description": (
+                    "把已核实的事实写入证据槽。旧工具原文会被压缩，作答以本槽为准。"
+                    f"最多 {cap} 条，超出丢最旧；同一 subject+field 后写覆盖。"
+                    "每条尽量带 doc_id 和 chunk_id。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {
+                            "type": "string",
+                            "description": "主体：牌号、产品名、公司名等",
+                        },
+                        "field": {
+                            "type": "string",
+                            "description": "字段名，如 CAS、密度、闪点、生产商",
+                        },
+                        "value": {
+                            "description": "核实后的值",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "description": "单位，没有可省略",
+                        },
+                        "doc_id": {"type": "integer"},
+                        "chunk_id": {"type": "integer"},
+                        "note": {
+                            "type": "string",
+                            "description": "一句补充，可选",
+                        },
+                    },
+                    "required": ["field", "value"],
                 },
             },
         })
@@ -273,7 +313,98 @@ def allowed_tool_names(cfg: "AgenticConfig") -> List[str]:
         names.append("read_chunk")
     if cfg.enable_graph_neighbors:
         names.append("graph_neighbors")
+    if getattr(cfg, "enable_note_evidence", True):
+        names.append("note_evidence")
     return names
+
+
+EVIDENCE_SLOT_MARK = "【证据槽】"
+
+
+@dataclass
+class EvidenceSlot:
+    """压缩不碰的极小事实列表。满了丢最旧；同 subject+field 覆盖。"""
+    max_n: int = 12
+    items: List[dict] = field(default_factory=list)
+
+    def add(self, rec) -> dict:
+        if self.max_n <= 0:
+            return {"ok": False, "reason": "evidence_slot_max=0", "n": 0, "items": []}
+        if isinstance(rec, str):
+            rec = {"field": "note", "value": rec}
+        if not isinstance(rec, dict):
+            return {"ok": False, "reason": "evidence 需为对象", "n": len(self.items), "items": list(self.items)}
+        field = str(rec.get("field") or rec.get("key") or "").strip()
+        value = rec.get("value")
+        if value is None:
+            value = rec.get("val")
+        if not field and value is None:
+            return {"ok": False, "reason": "需要 field 和 value", "n": len(self.items), "items": list(self.items)}
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        item = {
+            "subject": str(rec.get("subject") or rec.get("entity") or "").strip() or None,
+            "field": field or "note",
+            "value": value,
+            "unit": str(rec.get("unit") or "").strip() or None,
+            "doc_id": rec.get("doc_id") if rec.get("doc_id") is not None else rec.get("doc"),
+            "chunk_id": rec.get("chunk_id") if rec.get("chunk_id") is not None else rec.get("chunk"),
+            "note": str(rec.get("note") or "").strip() or None,
+        }
+        for k in ("doc_id", "chunk_id"):
+            item[k] = _as_int(item.get(k))
+        item = {k: v for k, v in item.items() if v is not None and v != ""}
+        key = (item.get("subject"), item.get("field"))
+        self.items = [
+            x for x in self.items
+            if (x.get("subject"), x.get("field")) != key
+        ]
+        self.items.append(item)
+        if len(self.items) > self.max_n:
+            self.items = self.items[-self.max_n:]
+        return {"ok": True, "n": len(self.items), "max": self.max_n, "items": list(self.items)}
+
+    def add_many(self, recs) -> dict:
+        last = {"ok": True, "n": len(self.items), "max": self.max_n, "items": list(self.items)}
+        if recs is None:
+            return last
+        if isinstance(recs, dict):
+            recs = [recs]
+        if not isinstance(recs, list):
+            return last
+        for rec in recs:
+            last = self.add(rec)
+        return last
+
+    def render(self) -> str:
+        cap = self.max_n
+        lines = [
+            f"{EVIDENCE_SLOT_MARK} 最多 {cap} 条，旧工具结果被压缩时仍以本槽为准。空槽表示还没有核实条目。",
+        ]
+        if not self.items:
+            lines.append("（空）")
+        else:
+            for i, it in enumerate(self.items, 1):
+                subj = it.get("subject") or ""
+                field = it.get("field") or ""
+                val = it.get("value")
+                unit = it.get("unit") or ""
+                loc = []
+                if it.get("doc_id") is not None:
+                    loc.append(f"doc_id={it['doc_id']}")
+                if it.get("chunk_id") is not None:
+                    loc.append(f"chunk_id={it['chunk_id']}")
+                extra = it.get("note") or ""
+                head = f"{subj} {field}".strip()
+                mid = f"{val} {unit}".strip()
+                tail = " ".join(loc)
+                line = f"{i}. {head} = {mid}".strip()
+                if tail:
+                    line += f"  [{tail}]"
+                if extra:
+                    line += f"  ({extra})"
+                lines.append(line)
+        return "\n".join(lines)
 
 
 @dataclass
@@ -288,6 +419,11 @@ class ToolContext:
     doc_ids: List[Any] = field(default_factory=list)
     _seen_src: set = field(default_factory=set)
     _seen_did: set = field(default_factory=set)
+    evidence: EvidenceSlot = field(default_factory=EvidenceSlot)
+
+    def __post_init__(self) -> None:
+        cap = int(getattr(self.cfg, "evidence_slot_max", 12) or 0)
+        self.evidence.max_n = cap
 
     def _remember_ref(self, source=None, doc_id=None) -> None:
         if source and source not in self._seen_src:
@@ -479,6 +615,7 @@ class ToolContext:
             "search": self.search,
             "read_doc": self.read_doc,
             "read_chunk": self.read_chunk,
+            "note_evidence": self.note_evidence,
             "graph_neighbors": self.graph_neighbors,
         }.get(name)
         if fn is None:
@@ -818,6 +955,9 @@ class ToolContext:
             if nav.get(k) is not None:
                 out[k] = nav[k]
         return out
+
+    def note_evidence(self, args: dict) -> dict:
+        return self.evidence.add(args)
 
     def graph_neighbors(self, args: dict) -> dict:
         name = str(args.get("name") or "").strip()

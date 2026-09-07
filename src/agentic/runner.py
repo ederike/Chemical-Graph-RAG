@@ -77,7 +77,7 @@ def run_agentic_query(
     pretty: bool = False,
 ) -> Union[dict, str]:
     """
-    同一条对话上的工具循环：模型边想边调 search / read_doc / graph_neighbors。
+    同一条对话上的工具循环：search / read_doc / read_chunk / note_evidence / graph_neighbors。
     配置只读 config.agentic，不读 retrieve / agent。
     """
     config = dhmf.config

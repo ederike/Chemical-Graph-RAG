@@ -840,6 +840,10 @@ class AgenticConfig(BaseModel):
     prune_hard_clear_age_turns: int = 8
     read_chunk_max_chars: int = 4000
 
+    # 极小证据槽：压缩不删；满了丢最旧。0=关闭写入（仍可展示空槽）。
+    enable_note_evidence: bool = True
+    evidence_slot_max: int = 12
+
     # 仅本模式 search 工具覆盖 retrieve_items 的召回行为（不改共享 retrieve 配置）
     chunk_candidate_k: int = 30
     node_candidate_k: int = 30
@@ -879,6 +883,7 @@ class AgenticConfig(BaseModel):
         "use_cache", "log_trace", "force_answer_on_max_turns",
         "enable_search", "enable_read_doc", "enable_read_chunk",
         "enable_graph_neighbors", "prune_tool_results",
+        "enable_note_evidence",
         "enable_query_rewrite", "enable_keyword_exact",
         "enable_keyword_minority", "enable_keyword_majority",
         "enable_parallel_paths", "enable_rerank",
@@ -896,6 +901,7 @@ class AgenticConfig(BaseModel):
             "enable_read_chunk": True,
             "enable_graph_neighbors": True,
             "prune_tool_results": True,
+            "enable_note_evidence": True,
             "enable_query_rewrite": False,
             "enable_keyword_exact": True,
             "enable_keyword_minority": True,
@@ -932,7 +938,7 @@ class AgenticConfig(BaseModel):
         "read_doc_max_chars", "read_chunk_max_chars", "neighbors_limit",
         "prune_keep_last_n_turns", "prune_soft_trim_chars",
         "prune_soft_trim_head", "prune_soft_trim_tail",
-        "prune_hard_clear_age_turns",
+        "prune_hard_clear_age_turns", "evidence_slot_max",
         "chunk_candidate_k", "node_candidate_k",
         "keyword_candidate_k", "keyword_top_k", "rerank_top_k",
         mode="before",
@@ -953,6 +959,7 @@ class AgenticConfig(BaseModel):
             "prune_soft_trim_head": 1200,
             "prune_soft_trim_tail": 800,
             "prune_hard_clear_age_turns": 8,
+            "evidence_slot_max": 12,
             "chunk_candidate_k": 30,
             "node_candidate_k": 30,
             "keyword_candidate_k": 20,

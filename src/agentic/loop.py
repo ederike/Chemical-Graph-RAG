@@ -18,7 +18,12 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple, TYPE_CHECKING
 from ..utils.OpenAIAPI import LLM
 from ..utils.config import resolve_credentials, resolve_llm_timeout
 from .prompts import AGENTIC_PROMPT
-from .tools import ToolContext, allowed_tool_names, tool_schemas
+from .tools import (
+    EVIDENCE_SLOT_MARK,
+    ToolContext,
+    allowed_tool_names,
+    tool_schemas,
+)
 
 if TYPE_CHECKING:
     from ..DHMF import DHMF
@@ -70,6 +75,8 @@ def _is_tool_result_message(msg: dict) -> bool:
         return True
     if role == "user":
         c = str(msg.get("content") or "")
+        if c.startswith(EVIDENCE_SLOT_MARK):
+            return False
         return c.startswith(_TOOL_USER_PREFIX) and "返回" in c[:80]
     return False
 
@@ -264,7 +271,10 @@ def parse_json_action(text: str) -> Optional[dict]:
         ans = data.get("answer")
         if not isinstance(ans, str):
             ans = json.dumps(ans, ensure_ascii=False)
-        return {"kind": "answer", "thought": thought, "answer": str(ans).strip()}
+        out = {"kind": "answer", "thought": thought, "answer": str(ans).strip()}
+        if data.get("evidence") is not None:
+            out["evidence"] = data.get("evidence")
+        return out
 
     tool = data.get("tool") or data.get("name") or data.get("function")
     if isinstance(tool, dict):
@@ -281,12 +291,15 @@ def parse_json_action(text: str) -> Optional[dict]:
                 arguments = {"query": arguments}
         if not isinstance(arguments, dict):
             arguments = {}
-        return {
+        out = {
             "kind": "tool",
             "thought": thought,
             "name": name,
             "arguments": arguments,
         }
+        if data.get("evidence") is not None:
+            out["evidence"] = data.get("evidence")
+        return out
 
     calls = data.get("tool_calls")
     if isinstance(calls, list) and calls:
@@ -386,10 +399,26 @@ class AgenticContext:
         self.logger.info(f"[agentic] {title}: {preview}")
 
 
-def _system_prompt(protocol: str) -> str:
+def _system_prompt(protocol: str, cfg=None) -> str:
     if protocol == "json":
-        return AGENTIC_PROMPT["SYSTEM_JSON"]
-    return AGENTIC_PROMPT["SYSTEM_TOOLS"]
+        text = AGENTIC_PROMPT["SYSTEM_JSON"]
+    else:
+        text = AGENTIC_PROMPT["SYSTEM_TOOLS"]
+    cap = 12
+    if cfg is not None:
+        cap = int(getattr(cfg, "evidence_slot_max", 12) or 0)
+    return text.replace("{evidence_slot_max}", str(cap))
+
+
+def _upsert_evidence_message(messages: List[dict], slot) -> None:
+    """独立 user 消息，prune 不碰（不是 tool 结果）。就地更新。"""
+    content = slot.render() if slot is not None else f"{EVIDENCE_SLOT_MARK}\n（空）"
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and str(m.get("content") or "").startswith(EVIDENCE_SLOT_MARK):
+            messages[i] = {"role": "user", "content": content}
+            return
+    insert_at = 2 if len(messages) >= 2 else len(messages)
+    messages.insert(insert_at, {"role": "user", "content": content})
 
 
 def _message_chars(msg: dict) -> int:
@@ -477,9 +506,10 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
     allowed = set(allowed_tool_names(cfg))
 
     messages: List[dict] = [
-        {"role": "system", "content": _system_prompt("openai" if use_openai else "json")},
+        {"role": "system", "content": _system_prompt("openai" if use_openai else "json", cfg)},
         {"role": "user", "content": q},
     ]
+    _upsert_evidence_message(messages, ctx.tools.evidence)
 
     turns: List[dict] = []
     pt = ct = tt = None
@@ -525,6 +555,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
         n_pruned = prune_old_tool_results(messages, cfg)
         if n_pruned:
             ctx._trace(f"pruned {n_pruned} old tool results before force answer")
+        _upsert_evidence_message(messages, ctx.tools.evidence)
         if (not cfg.force_answer_on_max_turns) and reason.startswith("max_turns"):
             return _finish(False, f"超过 max_turns={max_turns} 仍未给出答案")
         messages.append({
@@ -572,7 +603,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
         use_openai = False
         protocol = "json"
         schemas = []
-        messages[0] = {"role": "system", "content": _system_prompt("json")}
+        messages[0] = {"role": "system", "content": _system_prompt("json", cfg)}
         ctx.logger.warning(f"[agentic] fallback to JSON protocol: {reason}")
 
     for turn_i in range(1, max_turns + 1):
@@ -582,6 +613,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             est = estimate_prompt_tokens(messages, schemas if use_openai else None)
             if est > 0:
                 last_prompt = est
+        _upsert_evidence_message(messages, ctx.tools.evidence)
         if turn_i > 1 and _over_token_budget():
             return _force_final(
                 f"prompt tokens {last_prompt} >= {token_threshold} "
@@ -639,6 +671,8 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                 return _finish(True, answer)
 
         if len(actions) == 1 and actions[0].get("kind") == "answer":
+            if getattr(cfg, "enable_note_evidence", True) and actions[0].get("evidence") is not None:
+                ctx.tools.evidence.add_many(actions[0].get("evidence"))
             answer = actions[0].get("answer") or ""
             thought = actions[0].get("thought") or reasoning
             turns.append({
@@ -689,6 +723,8 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             ctx._trace_block(f"turn {turn_i} thought", turn_record["thought"])
 
         for i, act in enumerate(tool_actions):
+            if getattr(cfg, "enable_note_evidence", True) and act.get("evidence") is not None:
+                ctx.tools.evidence.add_many(act.get("evidence"))
             name = str(act.get("name") or "").strip()
             arguments = act.get("arguments") if isinstance(act.get("arguments"), dict) else {}
             call_id = str(act.get("id") or f"call_{turn_i}_{i}")
@@ -721,6 +757,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                     "content": f"工具 {name} 返回：\n{result}",
                 })
         turns.append(turn_record)
+        _upsert_evidence_message(messages, ctx.tools.evidence)
         est = estimate_prompt_tokens(messages, schemas if use_openai else None)
         if est > last_prompt:
             last_prompt = est
@@ -752,6 +789,7 @@ def _pack(
         "protocol": protocol,
         "retrieval_sources": list(ctx.tools.sources),
         "retrieval_doc_ids": list(ctx.tools.doc_ids),
+        "evidence_slot": list(ctx.tools.evidence.items),
         "retrieve_latency_s": float(ctx.tools.retrieve_latency_s or 0.0),
         "retrieve_timing": dict(ctx.tools.retrieve_timing or {}),
         "usage_prompt_tokens": pt,

@@ -10,9 +10,10 @@ AGENTIC_PROMPT['SYSTEM_TOOLS'] = """\
 ## 工具
 
 - search(query, mode)：检索知识库，返回短摘要、chunk_id、doc_id、同片 prev/next_chunk_id、切开文档的 siblings。
-- read_chunk(chunk_id)：按块读正文。邻近细节用返回的 prev_chunk_id / next_chunk_id（阅读序，不是 id 大小）。
-- read_doc(doc_id)：读一片资料的全部块。可对 search 命中及其 siblings 的 doc_id 调用。
+- read_doc(doc_id)：读**一整片**（同一 doc_id 的全部块，按阅读序）。search 已大致锁定文档、需要连续看多块/整表/配方时用这个，不要对同片反复 read_chunk。
+- read_chunk(chunk_id)：只读**一块**。用于初略锁定后的核对（一个数值、一行规格）、以及切开 PDF 的**跨切点**（本片片头/片尾对不上时，用 siblings 的 first_chunk_id 跳到邻片再核对）。不要用 next 顺着把整片走完。
 - graph_neighbors(name | node_id | doc_id)：同一超边/文档上的实体邻居（产品↔公司↔其它产品）。主体跳转用这个。
+- note_evidence(...)：把已核实的字段写入证据槽（牌号/CAS/数值/单位 + doc_id/chunk_id）。旧工具结果会被压缩，**作答只信证据槽和仍完整的最近几轮**。槽最多 {evidence_slot_max} 条，同主体同字段后写覆盖。
 
 ## search 的四种 mode 实际怎么搜（query 必须按这个来写）
 
@@ -48,12 +49,14 @@ query 写成带齐标识和约束的完整问题，不要拆成多次单条件�
 - 正确：query="NFPA 健康评级为 1、相对密度约 1.10、自燃温度高于 400°C 的产品是什么"。
 - 错误：先 keyword 搜「健康1」再 keyword 搜「1.10」（把同一主体的筛选拆碎）。
 
-## 块 id 与切开的长 PDF
-入库是多线程的，chunk_id 不是阅读顺序。同一切片（同一 doc_id）内用 chunk_index 以及 prev_chunk_id / next_chunk_id 往前后走。
-超长 PDF 会切成多条文档（foo.pdf、foo.pdf_1、…），各有自己的 doc_id。
-sliced=true 表示当前只是一片（slice_index / n_slices）。siblings 给出其它片的 doc_id、first_chunk_id、last_chunk_id。
-要读邻近段落：read_chunk(prev 或 next)。走到片头/片尾且 sliced 时，对相邻 slice 的 first_chunk_id 再 read_chunk。
-未标 sliced 的才是完整单篇。核对规格优先 read_chunk，不要一上来 read_doc 整片。
+## 怎么读文档（read_doc vs read_chunk）
+入库多线程，chunk_id 不是阅读顺序。同片阅读序看 chunk_index / prev_chunk_id / next_chunk_id。
+- 同片要看连续多块、表格、配方、上下文：一次 read_doc(doc_id)。
+- 已锁定文档、只核一个点，或正文在切片边界断开：read_chunk。跨片用 siblings 的 first_chunk_id，不要沿 next 把整份 PDF 走完。
+sliced=true 表示当前只是长 PDF 的一片（slice_index / n_slices），不是整本。未标 sliced 的才是完整单篇。
+
+## 证据槽
+从工具结果里抽出已核实事实就立刻 note_evidence，不要指望以后还能从旧 tool 原文里找。作答时数值以证据槽为准。
 
 ## 原则
 1. 具体牌号、CAS、出厂指标、配方必须来自工具结果，不要用行业常识编造商品实测值。
@@ -70,9 +73,10 @@ AGENTIC_PROMPT['SYSTEM_JSON'] = """\
 
 可用工具：
 - search：{"query": "一句完整的自然语言问题", "mode": "hybrid|keyword|node|chunk"}。mode 可省略（默认 hybrid）。命中含 chunk_id / doc_id / prev_chunk_id / next_chunk_id / siblings。
-- read_chunk：{"chunk_id": 整数}。沿 prev/next 读同片邻近块；换片用 siblings 的 first_chunk_id。
-- read_doc：{"doc_id": 整数}。若返回 sliced=true，这只是长 PDF 的一片，按 siblings 继续读下一片。
+- read_doc：{"doc_id": 整数}。同片要看连续多块/整表时用；sliced=true 则这只是一片，换片再 read_doc 邻片。
+- read_chunk：{"chunk_id": 整数}。初略锁定后核对单点，或跨切点跳到 siblings.first_chunk_id。禁止用 next 把整片走完。
 - graph_neighbors：name / node_id / doc_id 至少其一。
+- note_evidence：{"subject": "牌号或主体", "field": "密度", "value": "1.10", "unit": "g/cm³", "doc_id": 整数, "chunk_id": 整数}。核实后立刻写入；槽最多 {evidence_slot_max} 条。也可在任意工具 JSON 里加 "evidence": [{...}]。
 
 search 的 query 任何 mode 都要写成完整问句，禁止只丢几个词。
 - keyword：后端会从问句里抽取牌号/CAS/货号再精确匹配。正确：「CAS 号 13463-67-7 对应什么产品」。错误：「R-902 13463-67-7」。没有标识时不要用 keyword。
@@ -92,12 +96,13 @@ search 的 query 任何 mode 都要写成完整问句，禁止只丢几个词。
 3. 证据够了就输出 answer，不要空转。
 4. 结论先行，带型号、数值、单位和条件。安全信息原样保留。
 5. 对不上时说明差异并给出已核实的相近信息，不要说「无法回答」。
-6. 命中切开文档（sliced=true）时，不要把一片当成整份原件。同片用 prev/next_chunk_id 调 read_chunk；换片用 siblings 的 first_chunk_id。
+6. 同片连续多块用 read_doc；read_chunk 只做核对和跨切点。
 7. chunk_id 不是阅读顺序，不要按 id 加减来猜邻近块。
+8. 核实过的型号/数值立刻 note_evidence，作答以证据槽为准。
 """
 
 AGENTIC_PROMPT['FORCE_ANSWER'] = """\
-检索轮次已用完。请根据到目前为止的工具结果，直接给出对用户原问题的最终答案。
-具体型号和数值以工具证据为准；证据不足时用已核实的相近信息补全，不要编造未出现的牌号实测值。
+检索轮次已用完。请根据证据槽和仍完整的工具结果，直接给出对用户原问题的最终答案。
+具体型号和数值以证据槽为准；槽里没有的以最近未压缩的工具结果为准。证据不足时用已核实的相近信息补全，不要编造未出现的牌号实测值。
 不要再提出调用工具。结论先行。
 """
