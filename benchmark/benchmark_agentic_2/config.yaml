@@ -18,12 +18,12 @@ dhmf:
 
 # 可跑 set1 / set2 / both：列表里写哪些就跑哪些
 datasets:
-  - id: set1
-    excel_path: benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx
-    questions_sheet: null
-    stats_sheet: null
-    design_sheet: null
-    enabled: true
+  # - id: set1
+  #   excel_path: benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx
+  #   questions_sheet: null
+  #   stats_sheet: null
+  #   design_sheet: null
+  #   enabled: true
   - id: set2
     excel_path: benchmark/benchmark_agentic_2/data/建筑涂料测试问题集2.xlsx
     questions_sheet: null
@@ -37,7 +37,7 @@ dataset:
 
 paths:
   # 默认输出到本包 results/；也可改成仓库根下 benchmark_agentic_2_results/
-  output_dir: results/benchmark_agentic_2_questions12_agentic_new
+  output_dir: results/benchmark_agentic_2_questions2_agentic_new
 
   # 下列文件名会按 dataset id 加前缀，如 set1_stats.json
   stats_filename: stats.json

@@ -1,0 +1,95 @@
+# benchmark_agentic_4 独立配置。路径一律相对仓库根目录。
+# 评测目标：agentic 能否答好配方相关五类问题。
+run:
+  # generate | evaluate | report | excel | all
+  # 默认 generate，避免误跑全量 evaluate
+  mode: all
+
+dhmf:
+  config_path: example/a/config_open.yaml
+  # 本模块只评测 agentic_query
+  query_mode: agentic
+
+paths:
+  db_path: example/a/DB/main.db
+  output_dir: results/benchmark_agentic_4_专利测试集
+
+  questions_filename: questions.json
+  questions_path: null
+
+  eval_questions_filename: questions.json
+  eval_questions_path: null
+  eval_results_filename: evals.json
+  eval_results_path: null
+
+  report_source_filename: evals.json
+  report_source_path: null
+  report_filename: report.json
+  report_path: null
+  report_excel_filename: report.xlsx
+  report_excel_path: null
+
+generate:
+  type_counts:
+    product_to_formula: 20
+    application_to_formula: 20
+    formula_optimize: 20
+    ingredient_to_formula_and_others: 20
+    ingredient_interchange: 20
+
+  # doc 表 id 范围（切开后的 doc.id，不是原始 PDF 数）
+  # null=不限制；单个数字 N 表示 0–N；[a, b] 表示 a–b
+  doc_id_range: [33883, 57032]
+  # 例如只要专利大致段：doc_id_range: [33883, 57032]，22952到33882是空集
+
+  seed: 42
+  max_chars_per_doc: 20000
+  n_limit: null            # 调试：最多生成 N 题（在 type_counts 抽样之后截断）
+  resume: true
+  max_retries: 3           # JSON 解析失败可重试；HTTP 超时不连着重试
+  sleep_between: 0.0
+  num_thread: 2
+  use_cache: false
+  api_key: null
+  base_url: null
+  timeout: 600
+  model_args:
+    model: null
+    temperature: 0.2
+    enable_thinking: false
+    response_format:
+      type: json_object
+
+evaluate:
+  resume: true
+  enable_llm_only: true
+  enable_doc_recall: true
+  max_source_chars: -1
+  max_retries: 2           # 仅 JSON 解析失败重试；HTTP 超时不要死循环
+  sleep_between: 0.0
+  num_thread: 2
+  use_cache: false
+  dhmf_retrieve_use_cache: null
+  api_key: null
+  base_url: null
+  timeout: 300
+  model_args:
+    model: null
+    temperature: 0.0
+    enable_thinking: false
+    response_format:
+      type: json_object
+
+  llm_only:
+    api_key: null
+    base_url: null
+    timeout: 300
+    max_retries: 2
+    use_cache: false
+    model_args:
+      model: null
+      temperature: 0.2
+      enable_thinking: false
+
+logging:
+  level: INFO
