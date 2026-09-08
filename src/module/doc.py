@@ -406,10 +406,14 @@ class Doc:
                     or 'PaddleOCR-VL-1.6'
                 )
                 conc = int(getattr(recog, 'paddleocr_concurrency', 16) or 16)
+                layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
                 self._paddleocr_stats = patch_genai_semaphore()
-                self._paddleocr_pipeline = make_pipeline(url, model, conc)
+                self._paddleocr_pipeline = make_pipeline(
+                    url, model, conc, layout_url=layout_url,
+                )
                 self.logger.info(
                     f"PaddleOCR-VL client ready url={url} model={model} conc={conc}"
+                    + (f" layout={layout_url}" if layout_url else " layout=local-cpu")
                 )
             return self._paddleocr_pipeline, self._paddleocr_stats
 

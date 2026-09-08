@@ -58,6 +58,133 @@ def patch_genai_semaphore() -> dict:
     return stats
 
 
+def _jsonify(obj):
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonify(v) for v in obj]
+    if hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    if hasattr(obj, "tolist"):
+        try:
+            return obj.tolist()
+        except Exception:
+            pass
+    return obj
+
+
+def _encode_image_jpeg(img, quality: int = 95) -> str:
+    import base64
+    import io
+    from PIL import Image
+    import numpy as np
+
+    arr = np.asarray(img)
+    if arr.ndim == 2:
+        im = Image.fromarray(arr, mode="L")
+    else:
+        if arr.shape[2] == 4:
+            arr = arr[:, :, :3]
+        im = Image.fromarray(arr.astype("uint8"), mode="RGB")
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+class RemoteLayoutDetector:
+    """把 PP-DocLayoutV3 调用转到远程 /layout，返回与本地模型相同的 boxes 结构。"""
+
+    def __init__(self, url: str, local_model=None, timeout: float = 120.0):
+        self.url = (url or "").rstrip("/")
+        self._local = local_model
+        self.timeout = float(timeout or 120.0)
+        if self._local is not None and hasattr(self._local, "batch_sampler"):
+            self.batch_sampler = self._local.batch_sampler
+        else:
+            class _BS:
+                batch_size = 8
+            self.batch_sampler = _BS()
+
+    def __call__(self, images, **kwargs):
+        import json
+        import urllib.error
+        import urllib.request
+
+        if images is None:
+            return []
+        if not isinstance(images, (list, tuple)):
+            images = [images]
+        payload = {
+            "images": [_encode_image_jpeg(im) for im in images],
+            "threshold": kwargs.get("threshold"),
+            "layout_nms": kwargs.get("layout_nms"),
+            "layout_unclip_ratio": kwargs.get("layout_unclip_ratio"),
+            "layout_merge_bboxes_mode": kwargs.get("layout_merge_bboxes_mode"),
+            "layout_shape_mode": kwargs.get("layout_shape_mode"),
+            "filter_overlap_boxes": kwargs.get("filter_overlap_boxes"),
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.url + "/layout",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "paddleocr-layout-client",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            err = e.read().decode("utf-8", "replace")[:400]
+            raise RuntimeError(
+                f"远程版面切框失败 HTTP {e.code} {self.url}/layout: {err}"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(
+                f"连不上版面切框服务 {self.url}/layout "
+                f"（请在 CPU/GPU 强机启动 scripts/paddleocr_layout_server.py，"
+                f"并把 doc.recognition.paddleocr_layout_url 指过去）: {e}"
+            ) from e
+        results = body.get("results")
+        if not isinstance(results, list) or len(results) != len(images):
+            raise RuntimeError(
+                f"版面服务返回异常: n_images={len(images)} n_results="
+                f"{0 if not isinstance(results, list) else len(results)}"
+            )
+        return results
+
+    def __getattr__(self, name):
+        if self._local is not None:
+            return getattr(self._local, name)
+        raise AttributeError(name)
+
+
+def ping_layout_server(url: str, timeout: float = 5.0) -> None:
+    import urllib.error
+    import urllib.request
+
+    health = (url or "").rstrip("/") + "/health"
+    try:
+        req = urllib.request.Request(health, headers={"User-Agent": "paddleocr-layout-client"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read(256)
+    except urllib.error.HTTPError as e:
+        if e.code >= 500:
+            raise RuntimeError(f"版面切框服务异常 HTTP {e.code}: {health}") from e
+    except Exception as e:
+        raise RuntimeError(
+            f"连不上版面切框服务 {health} "
+            f"（空着 paddleocr_layout_url 则回退本机 CPU）: {e}"
+        ) from e
+
+
 def ping_server(url: str, timeout: float = 5.0) -> None:
     """GET {url}/models；连不上时给出明确地址，避免 paddlex 只报 Connection error。"""
     import urllib.error
@@ -88,17 +215,27 @@ def make_pipeline(
     url: str,
     model_name: str = DEFAULT_MODEL,
     concurrency: int = 16,
+    layout_url: str = "",
 ):
     from paddleocr import PaddleOCRVL
     ping_server(url)
+    layout_url = (layout_url or "").strip()
+    if layout_url:
+        ping_layout_server(layout_url)
 
-    return PaddleOCRVL(
+    pipe = PaddleOCRVL(
         pipeline_version="v1.6",
         vl_rec_backend="vllm-server",
         vl_rec_server_url=url,
         vl_rec_api_model_name=model_name or DEFAULT_MODEL,
         vl_rec_max_concurrency=max(1, int(concurrency or 16)),
     )
+    if layout_url:
+        inner = getattr(pipe, "paddlex_pipeline", pipe)
+        local = getattr(inner, "layout_det_model", None)
+        inner.layout_det_model = RemoteLayoutDetector(layout_url, local_model=local)
+        logger.info("Layout detection -> remote %s/layout", layout_url)
+    return pipe
 
 
 def render_pdf_pages(

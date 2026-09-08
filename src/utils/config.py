@@ -218,8 +218,9 @@ class DocRecognitionConfig(BaseModel):
     渲染页数超过 max_pages_per_doc 时按该上限切成多段，每段独立识别、
     独立入库：首段保留原文件名，后续段为「原文件名_{n}」（n 从 1 起）。
 
-    use_paddleocr=True 时同一套切片/断点/缓存/多线程，只把识别后端换成
-    本地 PaddleOCR-VL vLLM。
+    use_paddleocr=True 时同一套切片/断点/缓存，识别后端换成 PaddleOCR-VL。
+    paddleocr_layout_url 非空时，PP-DocLayoutV3 切框发到该服务（强 CPU 机），
+    本机只做渲染/裁切；空则切框仍在本机 CPU。
     """
     api_key: str = ""
     base_url: str = ""
@@ -241,13 +242,19 @@ class DocRecognitionConfig(BaseModel):
     paddleocr_model: str = "PaddleOCR-VL-1.6"
     paddleocr_concurrency: int = 16
     paddleocr_dpi: int = 200
+    # 远程 PP-DocLayoutV3：空=本机切框；例 http://HOST:8002
+    paddleocr_layout_url: str = ""
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(
             max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=600.0
         )
     )
 
-    @field_validator("api_key", "base_url", "paddleocr_url", "paddleocr_model", mode="before")
+    @field_validator(
+        "api_key", "base_url", "paddleocr_url", "paddleocr_model",
+        "paddleocr_layout_url",
+        mode="before",
+    )
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
