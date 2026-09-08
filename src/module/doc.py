@@ -123,6 +123,9 @@ class Doc:
         self._paddleocr_pipeline = None
         self._paddleocr_stats = None
         self._paddleocr_lock = threading.Lock()
+        # 本地切框：Lock 互斥；远端切框：Semaphore(workers) 切片并发
+        self._paddleocr_slot = threading.Lock()
+        self._paddleocr_layout_workers = 1
 
     def resolve_doc_dir(self) -> Path:
         """Document directory: working_path/doc (e.g. example/a/doc)."""
@@ -389,7 +392,7 @@ class Doc:
         return bool(getattr(self.config.doc.recognition, 'use_paddleocr', False))
 
     def _get_paddleocr_pipeline(self):
-        """单例 pipeline：paddlex 版面分析非线程安全，全局只建一个。"""
+        """单例 pipeline。本地切框必须互斥；远端切框按 workers 切片并发。"""
         with self._paddleocr_lock:
             if self._paddleocr_pipeline is None:
                 from ..utils.paddleocr_vl import (
@@ -411,9 +414,25 @@ class Doc:
                 self._paddleocr_pipeline = make_pipeline(
                     url, model, conc, layout_url=layout_url,
                 )
+                workers = 1
+                if layout_url:
+                    inner = getattr(
+                        self._paddleocr_pipeline, 'paddlex_pipeline',
+                        self._paddleocr_pipeline,
+                    )
+                    det = getattr(inner, 'layout_det_model', None)
+                    workers = max(1, int(getattr(det, 'workers', 1) or 1))
+                    self._paddleocr_slot = threading.BoundedSemaphore(workers)
+                else:
+                    self._paddleocr_slot = threading.Lock()
+                self._paddleocr_layout_workers = workers
+                layout_note = (
+                    f" layout={layout_url} slice_conc={workers}"
+                    if layout_url else " layout=local-cpu"
+                )
                 self.logger.info(
                     f"PaddleOCR-VL client ready url={url} model={model} conc={conc}"
-                    + (f" layout={layout_url}" if layout_url else " layout=local-cpu")
+                    f"{layout_note}"
                 )
             return self._paddleocr_pipeline, self._paddleocr_stats
 
@@ -651,9 +670,13 @@ class Doc:
                 "请在同一环境执行: pip install 'paddleocr[doc-parser]' paddlepaddle"
                 f" ({type(e).__name__}: {e})"
             ) from e
-        snap = dict(stats)
+        tls = stats.get('_tls')
+        if tls is not None:
+            tls.requests = 0
+            tls.prompt_tokens = 0
+            tls.completion_tokens = 0
 
-        with self._paddleocr_lock:
+        with self._paddleocr_slot:
             try:
                 md_text = parse_document(
                     pipeline,
@@ -681,10 +704,12 @@ class Doc:
         if total_pages is None:
             total_pages = page_count
         total_pages = int(total_pages or page_count)
-        ptok = int(stats.get('prompt_tokens', 0) or 0) - int(snap.get('prompt_tokens', 0) or 0)
-        ctok = int(stats.get('completion_tokens', 0) or 0) - int(
-            snap.get('completion_tokens', 0) or 0
-        )
+        if tls is not None:
+            ptok = int(getattr(tls, 'prompt_tokens', 0) or 0)
+            ctok = int(getattr(tls, 'completion_tokens', 0) or 0)
+        else:
+            ptok = 0
+            ctok = 0
         cost = {
             'usage_prompt_tokens': ptok,
             'usage_completion_tokens': ctok,
@@ -1113,6 +1138,11 @@ class Doc:
 
         recog = self.config.doc.recognition
         num_thread = max(1, int(getattr(recog, 'num_thread', 1) or 1))
+        if self.use_paddleocr():
+            layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
+            if layout_url:
+                self._get_paddleocr_pipeline()
+                num_thread = max(num_thread, int(self._paddleocr_layout_workers or 1))
         # 与 LLM 客户端一致，用于心跳日志说明「最长可能等多久」
         try:
             http_timeout = float(

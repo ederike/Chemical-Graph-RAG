@@ -14,7 +14,7 @@ HOST = "0.0.0.0"
 PORT = 8002
 MODEL = "PP-DocLayoutV3"
 WORKERS = 8          # 进程数，每进程一份模型
-OMP_THREADS = 4      # 每进程内部 OpenMP/MKL 线程；占用核约 WORKERS * OMP_THREADS
+OMP_THREADS = 8      # 每进程内部 OpenMP/MKL 线程；占用核约 WORKERS * OMP_THREADS
 # -------------------------------------------------------
 
 import argparse

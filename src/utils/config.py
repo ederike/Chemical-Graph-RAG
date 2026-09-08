@@ -220,7 +220,8 @@ class DocRecognitionConfig(BaseModel):
 
     use_paddleocr=True 时同一套切片/断点/缓存，识别后端换成 PaddleOCR-VL。
     paddleocr_layout_url 非空时，PP-DocLayoutV3 切框发到该服务（强 CPU 机），
-    本机只做渲染/裁切；空则切框仍在本机 CPU。
+    本机只做渲染/裁切；切片并发按远端 /health 的 workers。
+    空则切框仍在本机 CPU（pipeline 互斥，不切片并发）。
     """
     api_key: str = ""
     base_url: str = ""

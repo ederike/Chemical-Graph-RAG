@@ -28,9 +28,25 @@ def patch_genai_semaphore() -> dict:
 
     lock = threading.Lock()
     semaphores = {}
-    stats = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0}
+    tls = threading.local()
+    stats = {
+        "requests": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "_tls": tls,
+    }
+
+    def _tls_bucket():
+        if not hasattr(tls, "requests"):
+            tls.requests = 0
+            tls.prompt_tokens = 0
+            tls.completion_tokens = 0
+        return tls
 
     def _create_chat_completion(self, messages, *, return_future=False, **kwargs):
+        # 在切片线程上取 bucket，闭包带进后台 loop，避免 threading.local 串台
+        bucket = _tls_bucket()
+
         async def _with_sem():
             loop = asyncio.get_running_loop()
             with lock:
@@ -42,13 +58,18 @@ def patch_genai_semaphore() -> dict:
                 r = await self._client.chat.completions.create(
                     model=self._model_name, messages=messages, **kwargs
                 )
-                stats["requests"] += 1
+                pt = ct = 0
                 u = getattr(r, "usage", None)
                 if u is not None:
-                    stats["prompt_tokens"] += int(getattr(u, "prompt_tokens", 0) or 0)
-                    stats["completion_tokens"] += int(
-                        getattr(u, "completion_tokens", 0) or 0
-                    )
+                    pt = int(getattr(u, "prompt_tokens", 0) or 0)
+                    ct = int(getattr(u, "completion_tokens", 0) or 0)
+                with lock:
+                    stats["requests"] += 1
+                    stats["prompt_tokens"] += pt
+                    stats["completion_tokens"] += ct
+                    bucket.requests += 1
+                    bucket.prompt_tokens += pt
+                    bucket.completion_tokens += ct
                 return r
 
         return genai_mod.run_async(_with_sem(), return_future=return_future)
@@ -97,12 +118,19 @@ def _encode_image_jpeg(img, quality: int = 95) -> str:
 
 
 class RemoteLayoutDetector:
-    """把 PP-DocLayoutV3 调用转到远程 /layout，返回与本地模型相同的 boxes 结构。"""
+    """把 PP-DocLayoutV3 调用转到远程 /layout。
 
-    def __init__(self, url: str, local_model=None, timeout: float = 120.0):
+    一次 HTTP 对应一次 predict 的页图（通常即一个切片）。
+    切片级并发由 Doc 按 /health 的 workers 控制，打满服务端进程。
+    """
+
+    def __init__(
+        self, url: str, local_model=None, timeout: float = 120.0, workers: int = 1,
+    ):
         self.url = (url or "").rstrip("/")
         self._local = local_model
         self.timeout = float(timeout or 120.0)
+        self.workers = max(1, int(workers or 1))
         if self._local is not None and hasattr(self._local, "batch_sampler"):
             self.batch_sampler = self._local.batch_sampler
         else:
@@ -166,7 +194,9 @@ class RemoteLayoutDetector:
         raise AttributeError(name)
 
 
-def ping_layout_server(url: str, timeout: float = 5.0) -> None:
+def ping_layout_server(url: str, timeout: float = 5.0) -> int:
+    """探活并返回远端 worker 进程数（失败则抛错；解析不到则 1）。"""
+    import json
     import urllib.error
     import urllib.request
 
@@ -174,15 +204,23 @@ def ping_layout_server(url: str, timeout: float = 5.0) -> None:
     try:
         req = urllib.request.Request(health, headers={"User-Agent": "paddleocr-layout-client"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read(256)
+            raw = resp.read(4096)
     except urllib.error.HTTPError as e:
         if e.code >= 500:
             raise RuntimeError(f"版面切框服务异常 HTTP {e.code}: {health}") from e
+        return 1
     except Exception as e:
         raise RuntimeError(
             f"连不上版面切框服务 {health} "
             f"（空着 paddleocr_layout_url 则回退本机 CPU）: {e}"
         ) from e
+    workers = 1
+    try:
+        body = json.loads(raw.decode("utf-8"))
+        workers = max(1, int(body.get("workers") or 1))
+    except Exception:
+        workers = 1
+    return workers
 
 
 def ping_server(url: str, timeout: float = 5.0) -> None:
@@ -220,8 +258,9 @@ def make_pipeline(
     from paddleocr import PaddleOCRVL
     ping_server(url)
     layout_url = (layout_url or "").strip()
+    layout_workers = 1
     if layout_url:
-        ping_layout_server(layout_url)
+        layout_workers = ping_layout_server(layout_url)
 
     pipe = PaddleOCRVL(
         pipeline_version="v1.6",
@@ -233,8 +272,13 @@ def make_pipeline(
     if layout_url:
         inner = getattr(pipe, "paddlex_pipeline", pipe)
         local = getattr(inner, "layout_det_model", None)
-        inner.layout_det_model = RemoteLayoutDetector(layout_url, local_model=local)
-        logger.info("Layout detection -> remote %s/layout", layout_url)
+        inner.layout_det_model = RemoteLayoutDetector(
+            layout_url, local_model=local, workers=layout_workers,
+        )
+        logger.info(
+            "Layout detection -> remote %s/layout workers=%d (slice concurrency)",
+            layout_url, layout_workers,
+        )
     return pipe
 
 
