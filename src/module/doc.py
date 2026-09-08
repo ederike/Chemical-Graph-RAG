@@ -120,6 +120,9 @@ class Doc:
         )
         self._recog_cache = CacheDB('cache/OpenAI', 'pdf_recognize_cache')
         self.metrics = None  # set by DHMF
+        self._paddleocr_pipeline = None
+        self._paddleocr_stats = None
+        self._paddleocr_lock = threading.Lock()
 
     def resolve_doc_dir(self) -> Path:
         """Document directory: working_path/doc (e.g. example/a/doc)."""
@@ -382,6 +385,34 @@ class Doc:
         out.sort(key=lambda r: (r.get('name') or '', r.get('id') or 0))
         return out
 
+    def use_paddleocr(self) -> bool:
+        return bool(getattr(self.config.doc.recognition, 'use_paddleocr', False))
+
+    def _get_paddleocr_pipeline(self):
+        """单例 pipeline：paddlex 版面分析非线程安全，全局只建一个。"""
+        with self._paddleocr_lock:
+            if self._paddleocr_pipeline is None:
+                from ..utils.paddleocr_vl import (
+                    make_pipeline,
+                    patch_genai_semaphore,
+                )
+                recog = self.config.doc.recognition
+                url = (
+                    getattr(recog, 'paddleocr_url', None)
+                    or 'http://localhost:8001/v1'
+                )
+                model = (
+                    getattr(recog, 'paddleocr_model', None)
+                    or 'PaddleOCR-VL-1.6'
+                )
+                conc = int(getattr(recog, 'paddleocr_concurrency', 16) or 16)
+                self._paddleocr_stats = patch_genai_semaphore()
+                self._paddleocr_pipeline = make_pipeline(url, model, conc)
+                self.logger.info(
+                    f"PaddleOCR-VL client ready url={url} model={model} conc={conc}"
+                )
+            return self._paddleocr_pipeline, self._paddleocr_stats
+
     def max_pages_per_doc(self) -> int:
         try:
             n = int(
@@ -496,6 +527,7 @@ class Doc:
     ) -> str:
         """Per-slice recognition result cache key."""
         recog = self.config.doc.recognition
+        use_ocr = self.use_paddleocr()
         payload = {
             'scope': 'page_slice',
             'file_hash': file_hash,
@@ -505,11 +537,19 @@ class Doc:
             'page_end': page_end,
             'slice_index': int(slice_index or 0),
             'max_pages_per_doc': self.max_pages_per_doc(),
-            'model_args': recog.model_args,
-            'dpi': recog.dpi,
+            'model_args': recog.model_args if not use_ocr else {
+                'backend': 'paddleocr-vl',
+                'url': getattr(recog, 'paddleocr_url', ''),
+                'model': getattr(recog, 'paddleocr_model', ''),
+            },
+            'dpi': (
+                getattr(recog, 'paddleocr_dpi', 200) if use_ocr else recog.dpi
+            ),
             'prompt': getattr(recog, 'prompt', 'pdf_recognize'),
             'prompt_hash': self._prompt_hash(),
-            'pipeline': 'page_slice_plain_text_v1',
+            'pipeline': (
+                'paddleocr_vl_v1' if use_ocr else 'page_slice_plain_text_v1'
+            ),
             'image_format': getattr(recog, 'image_format', 'jpeg'),
             'source_kind': source_kind or 'pdf',
         }
@@ -554,6 +594,7 @@ class Doc:
         page_end: int = None,
         total_pages: int = 0,
         source_kind: str = 'pdf',
+        pipeline: str = 'page_slice_plain_text_v1',
     ) -> dict:
         """doc.extra metadata (full recognition text lives in doc.content)."""
         return {
@@ -562,7 +603,7 @@ class Doc:
             'source_name': source_name or '',
             'file_hash': file_hash,
             'recognition_cost': recognition_cost or {},
-            'pipeline': 'page_slice_plain_text_v1',
+            'pipeline': pipeline or 'page_slice_plain_text_v1',
             'slice_index': int(slice_index or 0),
             'n_slices': int(n_slices or 1),
             'page_start': int(page_start or 0),
@@ -570,6 +611,143 @@ class Doc:
             'total_pages': int(total_pages or page_count or 0),
             'source_kind': source_kind or 'pdf',
         }
+
+    def _recognize_pdf_paddleocr(
+        self,
+        *,
+        pdf_path: Path,
+        doc_name: str,
+        file_hash: str,
+        cache_key: str,
+        is_image: bool,
+        source_kind: str,
+        page_start: int,
+        page_end,
+        slice_index: int,
+        n_slices: int,
+        total_pages,
+        attempt: int,
+    ):
+        try:
+            from ..utils.paddleocr_vl import EmptyOCRError, parse_document
+        except ImportError as e:
+            raise NonRetryableError(
+                "PaddleOCR-VL client import failed. Install paddleocr[doc-parser] "
+                "and paddlepaddle (see useless/ocr_api_client.py)."
+            ) from e
+
+        recog = self.config.doc.recognition
+        dpi = int(getattr(recog, 'paddleocr_dpi', 200) or 200)
+        try:
+            pipeline, stats = self._get_paddleocr_pipeline()
+        except ImportError as e:
+            raise NonRetryableError(
+                "PaddleOCR-VL 依赖未安装（缺 paddlex/paddleocr/paddlepaddle）。"
+                "当前识别进程的 Python 里需要能 `import paddlex`。"
+                "请在同一环境执行: pip install 'paddleocr[doc-parser]' paddlepaddle"
+                f" ({type(e).__name__}: {e})"
+            ) from e
+        snap = dict(stats)
+
+        with self._paddleocr_lock:
+            try:
+                md_text = parse_document(
+                    pipeline,
+                    pdf_path,
+                    stats,
+                    dpi=dpi,
+                    page_start=page_start,
+                    page_end=page_end,
+                    is_image=is_image,
+                )
+            except EmptyOCRError as e:
+                raise NonRetryableError(str(e)) from e
+
+        content = self.normalize_recognition_text(md_text)
+        if not content:
+            raise RuntimeError(
+                f"PaddleOCR empty answer for {doc_name} "
+                f"(source={pdf_path.name}, pages={page_start}:{page_end})"
+            )
+
+        page_count = (
+            1 if is_image
+            else max(0, int((page_end or 0) - (page_start or 0)))
+        )
+        if total_pages is None:
+            total_pages = page_count
+        total_pages = int(total_pages or page_count)
+        ptok = int(stats.get('prompt_tokens', 0) or 0) - int(snap.get('prompt_tokens', 0) or 0)
+        ctok = int(stats.get('completion_tokens', 0) or 0) - int(
+            snap.get('completion_tokens', 0) or 0
+        )
+        cost = {
+            'usage_prompt_tokens': ptok,
+            'usage_completion_tokens': ctok,
+            'usage_total_tokens': ptok + ctok,
+            'backend': 'paddleocr-vl',
+        }
+        extra_obj = self.doc_extra_payload(
+            page_count=page_count,
+            source_pdf=str(pdf_path),
+            source_name=pdf_path.name,
+            file_hash=file_hash,
+            recognition_cost=cost,
+            slice_index=slice_index,
+            n_slices=n_slices,
+            page_start=page_start,
+            page_end=page_end if page_end is not None else page_start + page_count,
+            total_pages=total_pages,
+            source_kind=source_kind,
+            pipeline='paddleocr_vl_v1',
+        )
+        result = {
+            'name': doc_name,
+            'content': content,
+            'extra': json.dumps(extra_obj, ensure_ascii=False),
+            'hash': hash_str(content),
+            'file_hash': file_hash,
+            'source_pdf': str(pdf_path),
+            'source_name': pdf_path.name,
+            'page_count': page_count,
+            'slice_index': slice_index,
+            'n_slices': n_slices,
+            'recognition_cost': cost,
+        }
+        if recog.use_cache:
+            self._recog_cache.update_cache(
+                json.dumps(
+                    {
+                        'name': doc_name,
+                        'source_name': pdf_path.name,
+                        'file_hash': file_hash,
+                        'page_start': page_start,
+                        'page_end': extra_obj.get('page_end'),
+                        'slice_index': slice_index,
+                        'backend': 'paddleocr-vl',
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(result, ensure_ascii=False),
+                cache_key,
+            )
+        if self.metrics is not None:
+            self.metrics.record(
+                'recognize',
+                0.0,
+                cache_hit=False,
+                prompt_tokens=ptok,
+                completion_tokens=ctok,
+                total_tokens=ptok + ctok,
+                name=doc_name,
+                extra=(
+                    f'backend=paddleocr-vl pages={page_count} '
+                    f'slice={slice_index + 1}/{n_slices} attempt={attempt}'
+                ),
+                log=False,
+                accumulate_time=False,
+            )
+        return result
 
     @Retry(
         max_attempt=4,
@@ -668,6 +846,22 @@ class Doc:
                 f"(source={pdf_path.name}, pages={page_start}:{page_end})"
             )
 
+        if self.use_paddleocr():
+            return self._recognize_pdf_paddleocr(
+                pdf_path=pdf_path,
+                doc_name=doc_name,
+                file_hash=file_hash,
+                cache_key=cache_key,
+                is_image=is_image,
+                source_kind=source_kind,
+                page_start=page_start,
+                page_end=page_end,
+                slice_index=slice_index,
+                n_slices=n_slices,
+                total_pages=total_pages,
+                attempt=attempt,
+            )
+
         if is_image:
             images_b64 = [self.image_to_b64(pdf_path)]
         else:
@@ -761,6 +955,7 @@ class Doc:
             page_end=page_start + page_count,
             total_pages=total_pages,
             source_kind=source_kind,
+            pipeline='page_slice_plain_text_v1',
         )
         result = {
             'name': doc_name,

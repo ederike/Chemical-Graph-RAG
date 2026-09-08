@@ -217,6 +217,9 @@ class DocRecognitionConfig(BaseModel):
 
     渲染页数超过 max_pages_per_doc 时按该上限切成多段，每段独立识别、
     独立入库：首段保留原文件名，后续段为「原文件名_{n}」（n 从 1 起）。
+
+    use_paddleocr=True 时同一套切片/断点/缓存/多线程，只把识别后端换成
+    本地 PaddleOCR-VL vLLM。
     """
     api_key: str = ""
     base_url: str = ""
@@ -232,16 +235,45 @@ class DocRecognitionConfig(BaseModel):
     image_format: str = 'jpeg'
     # 单次 VLM 最多携带的渲染页数；> 该值则切成多个独立文档
     max_pages_per_doc: int = 12
+    # 本地 PaddleOCR-VL（useless/ocr_api_client.py 同款服务）
+    use_paddleocr: bool = False
+    paddleocr_url: str = "http://localhost:8001/v1"
+    paddleocr_model: str = "PaddleOCR-VL-1.6"
+    paddleocr_concurrency: int = 16
+    paddleocr_dpi: int = 200
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(
             max_attempt=4, wait=[10.0, 30.0, 60.0], timeout=600.0
         )
     )
 
-    @field_validator("api_key", "base_url", mode="before")
+    @field_validator("api_key", "base_url", "paddleocr_url", "paddleocr_model", mode="before")
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("use_paddleocr", mode="before")
+    @classmethod
+    def _coerce_use_paddleocr(cls, v):
+        return _coerce_bool(v, False)
+
+    @field_validator("paddleocr_concurrency", mode="before")
+    @classmethod
+    def _coerce_paddleocr_conc(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 16
+        return max(1, n)
+
+    @field_validator("paddleocr_dpi", mode="before")
+    @classmethod
+    def _coerce_paddleocr_dpi(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 200
+        return max(1, n)
 
     @field_validator("max_pages_per_doc", mode="before")
     @classmethod
