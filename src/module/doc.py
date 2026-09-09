@@ -397,6 +397,23 @@ class Doc:
     def use_paddleocr(self) -> bool:
         return bool(getattr(self.config.doc.recognition, 'use_paddleocr', False))
 
+    def _recognition_workers(self) -> int:
+        """切片并发：VLM 只用 num_thread；OCR 只用 layout 池。互不借用。"""
+        recog = self.config.doc.recognition
+        if self.use_paddleocr():
+            layout_url = (
+                getattr(recog, 'paddleocr_layout_url', None) or ''
+            ).strip()
+            if not layout_url:
+                return 1
+            self._init_paddleocr()
+            return max(1, int(self._paddleocr_layout_workers or 1))
+        try:
+            n = int(getattr(recog, 'num_thread', 1) or 1)
+        except (TypeError, ValueError):
+            n = 1
+        return max(1, n)
+
     def _init_paddleocr(self):
         """构造 VL 客户端。远端切框：pipeline 池（懒创建，上限=workers）。"""
         with self._paddleocr_lock:
@@ -617,6 +634,7 @@ class Doc:
                 'backend': 'paddleocr-vl',
                 'url': getattr(recog, 'paddleocr_url', ''),
                 'model': getattr(recog, 'paddleocr_model', ''),
+                'text_format': 'plain_v2',
             },
             'dpi': (
                 getattr(recog, 'paddleocr_dpi', 200) if use_ocr else recog.dpi
@@ -653,8 +671,14 @@ class Doc:
 
     @classmethod
     def normalize_recognition_text(cls, text: str) -> str:
-        """Normalize VLM plain-text whole-document recognition output."""
+        """VLM 纯文本：只去 code fence，不做 OCR 的 HTML 展开。"""
         return cls._strip_code_fence(text)
+
+    @classmethod
+    def normalize_ocr_text(cls, text: str) -> str:
+        """PaddleOCR-VL HTML/markdown → 检索用纯文本。仅 OCR 路径调用。"""
+        from ..utils.utils import html_markdown_to_plain
+        return html_markdown_to_plain(cls._strip_code_fence(text))
 
     @staticmethod
     def doc_extra_payload(
@@ -733,7 +757,7 @@ class Doc:
                 f" ({type(e).__name__}: {e})"
             ) from e
 
-        content = self.normalize_recognition_text(md_text)
+        content = self.normalize_ocr_text(md_text)
         if not content:
             raise RuntimeError(
                 f"PaddleOCR empty answer for {doc_name} "
@@ -812,7 +836,10 @@ class Doc:
     )
     def recognize_pdf(self, pdf_path: Path, **kwargs):
         """
-        PDF 页切片 → 页面图像 → 一次 VLM 多图识别 → 纯文本。
+        单切片识别入口：缓存 + 按 use_paddleocr 分发。
+        VLM → _recognize_pdf_vlm（多图 generate_vision，纯文本）。
+        OCR → _recognize_pdf_paddleocr（PaddleOCR-VL，HTML 再收成纯文本）。
+        两条后端不共用 pipeline / 后处理 / 并发上限。
 
         可通过 kwargs 指定单段切片（prepare_from_pdfs 已规划好）：
           doc_name, page_start, page_end, slice_index, n_slices, total_pages
@@ -901,22 +928,43 @@ class Doc:
                 f"(source={pdf_path.name}, pages={page_start}:{page_end})"
             )
 
+        common = dict(
+            pdf_path=pdf_path,
+            doc_name=doc_name,
+            file_hash=file_hash,
+            cache_key=cache_key,
+            is_image=is_image,
+            source_kind=source_kind,
+            page_start=page_start,
+            page_end=page_end,
+            slice_index=slice_index,
+            n_slices=n_slices,
+            total_pages=total_pages,
+            attempt=attempt,
+        )
         if self.use_paddleocr():
-            return self._recognize_pdf_paddleocr(
-                pdf_path=pdf_path,
-                doc_name=doc_name,
-                file_hash=file_hash,
-                cache_key=cache_key,
-                is_image=is_image,
-                source_kind=source_kind,
-                page_start=page_start,
-                page_end=page_end,
-                slice_index=slice_index,
-                n_slices=n_slices,
-                total_pages=total_pages,
-                attempt=attempt,
-            )
+            return self._recognize_pdf_paddleocr(**common)
+        return self._recognize_pdf_vlm(max_attempt=max_attempt, **common)
 
+    def _recognize_pdf_vlm(
+        self,
+        *,
+        pdf_path: Path,
+        doc_name: str,
+        file_hash: str,
+        cache_key: str,
+        is_image: bool,
+        source_kind: str,
+        page_start: int,
+        page_end,
+        slice_index: int,
+        n_slices: int,
+        total_pages,
+        attempt: int,
+        max_attempt: int,
+    ):
+        """原 VLM 多图识别。不碰 PaddleOCR pipeline / HTML 后处理。"""
+        recog = self.config.doc.recognition
         if is_image:
             images_b64 = [self.image_to_b64(pdf_path)]
         else:
@@ -939,7 +987,6 @@ class Doc:
             PROMPT['pdf_recognize'],
         )
         system_prompt = PROMPT.get('pdf_recognize_system', '')
-        # 对模型按「本段文档」描述；页码用源文件 1-based 区间便于对齐
         human_from = page_start + 1
         human_to = page_start + page_count
         if is_image:
@@ -1043,8 +1090,8 @@ class Doc:
                 cache_hit=False,
                 name=doc_name,
                 extra=(
-                    f'pages={page_count} slice={slice_index + 1}/{n_slices} '
-                    f'attempt={attempt}'
+                    f'backend=vlm pages={page_count} '
+                    f'slice={slice_index + 1}/{n_slices} attempt={attempt}'
                 ),
                 log=False,
                 accumulate_time=False,
@@ -1153,12 +1200,9 @@ class Doc:
                 progress_total = len(to_process)
 
         recog = self.config.doc.recognition
-        num_thread = max(1, int(getattr(recog, 'num_thread', 1) or 1))
-        if self.use_paddleocr():
-            layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
-            if layout_url:
-                self._init_paddleocr()
-                num_thread = max(num_thread, int(self._paddleocr_layout_workers or 1))
+        use_ocr = self.use_paddleocr()
+        backend = 'paddleocr-vl' if use_ocr else 'vlm'
+        num_thread = self._recognition_workers()
         # 与 LLM 客户端一致，用于心跳日志说明「最长可能等多久」
         try:
             http_timeout = float(
@@ -1216,20 +1260,22 @@ class Doc:
                 _record_skip(label)
             return out
 
-        def _postfix(inflight: int = 0):
+        def _postfix(inflight: int = 0, queued: int = 0):
             pf = {'total': progress_total}
             if inflight:
                 pf['run'] = inflight
+            if queued:
+                pf['wait'] = queued
             if self.metrics is not None:
                 s = self.metrics.stage_snapshot('recognize')
                 pf['real'] = s['real']
             return pf
 
         self.logger.info(
-            f"Recognition start: sources={n_source_files} "
+            f"Recognition start: backend={backend}, sources={n_source_files} "
             f"(images={n_image_files}), "
             f"slices={len(to_process)}, sliced_files={n_sliced_files}, "
-            f"max_pages_per_doc={max_pages}, num_thread={num_thread}, "
+            f"max_pages_per_doc={max_pages}, workers={num_thread}, "
             f"http_timeout={http_timeout:.0f}s "
             f"(PDF page-slice or raw image per unit)"
         )
@@ -1248,14 +1294,27 @@ class Doc:
                     results.append(result)
                 bar.set_postfix(**_postfix())
         else:
-            # wait + 心跳：避免 as_completed 在末尾长请求上「假死」无日志
+            # 滑动窗口：同时在跑的 future 不超过 workers。
+            # 禁止一次性 submit 全部切片，否则心跳会把排队也算成 in-flight。
+            n_units = len(to_process)
+            submit_i = 0
+            pending = {}
+
+            def _submit_next(executor):
+                nonlocal submit_i
+                if submit_i >= n_units:
+                    return
+                unit = to_process[submit_i]
+                submit_i += 1
+                pending[executor.submit(_one, unit)] = (
+                    unit, time.perf_counter()
+                )
+
             with ThreadPoolExecutor(max_workers=num_thread) as executor:
-                pending = {
-                    executor.submit(_one, unit): (unit, time.perf_counter())
-                    for unit in to_process
-                }
+                for _ in range(min(num_thread, n_units)):
+                    _submit_next(executor)
                 bar = tqdm(
-                    total=len(pending),
+                    total=n_units,
                     desc='recognize',
                     unit='slice',
                     bar_format=TQDM_BAR_FORMAT,
@@ -1267,6 +1326,7 @@ class Doc:
                         timeout=heartbeat_s,
                         return_when=FIRST_COMPLETED,
                     )
+                    queued = n_units - submit_i
                     if not done:
                         now = time.perf_counter()
                         aged = sorted(
@@ -1281,12 +1341,14 @@ class Doc:
                             for elapsed, name in aged[:8]
                         )
                         more = f' +{len(aged) - 8} more' if len(aged) > 8 else ''
-                        # self.logger.info(
-                        #     f"[recognize] still in-flight={len(pending)} "
-                        #     f"(each call may take up to ~{http_timeout:.0f}s "
-                        #     f"HTTP timeout + retries): {top}{more}"
-                        # )
-                        bar.set_postfix(**_postfix(len(pending)))
+                        self.logger.info(
+                            f"[recognize] backend={backend} "
+                            f"running={len(pending)}/{num_thread} "
+                            f"queued={queued} "
+                            f"(HTTP timeout ~{http_timeout:.0f}s + retries): "
+                            f"{top}{more}"
+                        )
+                        bar.set_postfix(**_postfix(len(pending), queued))
                         continue
 
                     for future in done:
@@ -1302,8 +1364,11 @@ class Doc:
                                 f"Failed to recognize {label}: {e}"
                             )
                             _record_skip(label)
+                        _submit_next(executor)
                         bar.update(1)
-                        bar.set_postfix(**_postfix(len(pending)))
+                        bar.set_postfix(
+                            **_postfix(len(pending), n_units - submit_i)
+                        )
                 bar.close()
 
         wall = time.perf_counter() - t0
@@ -1315,10 +1380,10 @@ class Doc:
 
         self.logger.info(
             f"Recognized {len(results)}/{len(to_process)} valid slice docs "
-            f"(sources={n_source_files}, images={n_image_files}, "
-            f"sliced_files={n_sliced_files}, "
+            f"(backend={backend}, sources={n_source_files}, "
+            f"images={n_image_files}, sliced_files={n_sliced_files}, "
             f"skipped existing={len(skipped)}, invalid={len(invalid)}, "
-            f"max_pages_per_doc={max_pages}, threads={num_thread}, "
+            f"max_pages_per_doc={max_pages}, workers={num_thread}, "
             f"wall_time={wall:.3f}s)."
         )
         return results

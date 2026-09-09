@@ -3,7 +3,7 @@ import logging
 from ..utils.database import BaseDB
 from ..utils.config import Config
 from tqdm import tqdm
-from ..utils.utils import TQDM_BAR_FORMAT
+from ..utils.utils import TQDM_BAR_FORMAT, html_markdown_to_plain
 
 import json
 import re
@@ -258,6 +258,23 @@ class Chunk:
 
         return chunks
 
+    @staticmethod
+    def _body_text_for_chunk(task: dict) -> str:
+        """VLM 正文原样；仅 OCR HTML 表做纯文本展开（避免 pH<7 被当标签吃掉）。"""
+        raw = task.get('content') or ''
+        extra = task.get('extra')
+        if isinstance(extra, str) and extra.strip():
+            try:
+                extra = json.loads(extra)
+            except Exception:
+                extra = None
+        pipeline = ''
+        if isinstance(extra, dict):
+            pipeline = str(extra.get('pipeline') or '')
+        if pipeline == 'paddleocr_vl_v1' or '<table' in raw.lower():
+            return html_markdown_to_plain(raw)
+        return raw.strip()
+
     def resolve_head_body(self, task: dict) -> tuple:
         """
         head = 该文档超边 content（summary 写入）
@@ -265,7 +282,7 @@ class Chunk:
         返回 (head, body, hyperedge_row_or_None)
         """
         doc_id = task.get('id')
-        body = (task.get('content') or '').strip()
+        body = self._body_text_for_chunk(task)
         head = ''
         he_rows = self.hyperedge_db.search('doc_id', doc_id) or []
         he_row = he_rows[0] if he_rows else None

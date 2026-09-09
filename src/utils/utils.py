@@ -1,5 +1,6 @@
 from functools import wraps
 import hashlib
+from html.parser import HTMLParser
 import inspect
 import json
 import random
@@ -15,6 +16,135 @@ def hash_str(s):
 
 # 构建流水线进度条：不显示 elapsed/remaining，只保留速率 + postfix
 TQDM_BAR_FORMAT = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{rate_fmt}{postfix}]'
+
+
+_LATEX_UNWRAP = (
+    (re.compile(r'\$\s*\\text\{([^}]*)\}\s*\$'), r'\1'),
+    (re.compile(r'\$\s*\^\{\s*([^}]*)\s*\}\s*\$'), r'\1'),
+    (re.compile(r'\$\s*\\mathrm\{([^}]*)\}\s*\$'), r'\1'),
+    (re.compile(r'\$\s*([^$]{1,48})\s*\$'), r'\1'),
+    (re.compile(r'\^\{\\text\{([^}]*)\}\}'), r'\1'),
+    (re.compile(r'\\text\{([^}]*)\}'), r'\1'),
+    (re.compile(r'\^\{\s*([^}]*)\s*\}'), r'\1'),
+)
+_MD_IMG = re.compile(r'!\[[^\]]*\]\([^)]+\)')
+_MULTI_NL = re.compile(r'\n{3,}')
+_MULTI_SPACE = re.compile(r'[ \t]{2,}')
+_ROW_SEP = frozenset({':', '：', '-', '–', '—'})
+
+
+def _format_table_row(cells: list) -> str:
+    """表格行 → 检索句：CAS-No. | : | 9004-32-4 → CAS-No.: 9004-32-4。"""
+    cells = [c.strip() for c in cells if c and str(c).strip()]
+    if not cells:
+        return ''
+    if len(cells) == 1:
+        return cells[0]
+    if len(cells) >= 3 and cells[1] in _ROW_SEP:
+        return f"{cells[0]}: {' '.join(cells[2:])}"
+    if len(cells) == 2:
+        return f"{cells[0]}: {cells[1]}"
+    return '；'.join(cells)
+
+
+class _HTMLToPlain:
+    """html.parser 子集：丢掉 img/style，表格行收成「a | b | c」。"""
+
+    class Parser(HTMLParser):
+        _SKIP = frozenset({'script', 'style', 'noscript'})
+        _BLOCK = frozenset({
+            'p', 'div', 'section', 'article', 'header', 'footer',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'li', 'ul', 'ol', 'blockquote', 'pre', 'hr', 'br',
+            'table', 'thead', 'tbody', 'tfoot',
+        })
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.parts = []
+            self._skip = 0
+            self._row = None
+            self._cell = None
+
+        def handle_starttag(self, tag, attrs):
+            tag = (tag or '').lower()
+            if tag in self._SKIP:
+                self._skip += 1
+                return
+            if self._skip or tag == 'img':
+                return
+            if tag == 'tr':
+                self._row = []
+                return
+            if tag in ('td', 'th'):
+                self._cell = []
+                return
+            if tag == 'br':
+                self._emit('\n')
+                return
+            if tag in self._BLOCK:
+                self._emit('\n')
+
+        def handle_endtag(self, tag):
+            tag = (tag or '').lower()
+            if tag in self._SKIP:
+                self._skip = max(0, self._skip - 1)
+                return
+            if self._skip:
+                return
+            if tag in ('td', 'th'):
+                cell = ''.join(self._cell or []).strip()
+                self._cell = None
+                if self._row is not None:
+                    self._row.append(cell)
+                elif cell:
+                    self._emit(cell)
+                return
+            if tag == 'tr':
+                cells = [c for c in (self._row or []) if c]
+                self._row = None
+                line = _format_table_row(cells)
+                if line:
+                    self._emit(line)
+                    self._emit('\n')
+                return
+            if tag in self._BLOCK:
+                self._emit('\n')
+
+        def handle_data(self, data):
+            if self._skip or not data:
+                return
+            if self._cell is not None:
+                self._cell.append(data)
+                return
+            self._emit(data)
+
+        def _emit(self, s):
+            if s:
+                self.parts.append(s)
+
+
+def html_markdown_to_plain(text: str) -> str:
+    """PaddleOCR-VL HTML/markdown → 检索用纯文本。无标签则原样（去掉多余空白）。"""
+    raw = (text or '').strip()
+    if not raw:
+        return ''
+    p = _HTMLToPlain.Parser()
+    try:
+        p.feed(raw)
+        p.close()
+        out = ''.join(p.parts)
+    except Exception:
+        out = raw
+    out = _MD_IMG.sub('', out)
+    out = out.replace('\\n', '\n')
+    for cre, repl in _LATEX_UNWRAP:
+        out = cre.sub(repl, out)
+    out = out.replace('\r\n', '\n').replace('\r', '\n')
+    out = _MULTI_SPACE.sub(' ', out)
+    out = _MULTI_NL.sub('\n\n', out)
+    lines = [ln.strip() for ln in out.split('\n')]
+    return '\n'.join(lines).strip()
 
 class CacheDB(BaseDB):
     def __init__(self,cache_path,cache_name):

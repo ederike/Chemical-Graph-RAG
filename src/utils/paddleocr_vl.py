@@ -7,7 +7,8 @@
 paddlex 版面推理不是线程安全的：同一进程里并发 predict 会把不同 batch
 的 DETR 框叠到一起（[B,300,4] broadcast）。有 paddleocr_layout_url 时
 本机不再加载 PP-DocLayout，切框纯 HTTP；切片并发用 pipeline 池，每份
-pipeline 同一时刻只服务一个切片。VL 请求跨 pipeline 共用一个全局槽位。
+pipeline 同一时刻只服务一个切片。VL 请求挂在 paddlex 同一个后台 loop
+上，按 loop 共用 conc 上限。
 """
 import logging
 import shutil
@@ -22,8 +23,6 @@ DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 TABLE_OPEN, TABLE_CLOSE = "<table", "</table>"
 
 _CREATE_MODEL_LOCK = threading.Lock()
-_VL_GATE = None
-_VL_GATE_LOCK = threading.Lock()
 
 
 class EmptyOCRError(ValueError):
@@ -31,37 +30,38 @@ class EmptyOCRError(ValueError):
 
 
 def patch_genai_semaphore(concurrency: int = 16) -> dict:
-    """Py3.9 + paddlex 3.7: VL HTTP 用线程闸门，跨 pipeline 共享上限。不记 token。"""
+    """Py3.9 + paddlex 3.7: 在运行中的 loop 内懒创建 semaphore。
+
+    paddlex 全局只有一个后台 loop，按 loop 而不是 client 建闸门，
+    这样 8 份 pipeline 共用 conc 上限。禁止用 run_in_executor 去抢
+    threading.Semaphore：会占满默认线程池，HTTP 收尾走不了，16 条
+    CLOSE-WAIT 死锁。
+    """
     import asyncio
     from paddlex.inference.models.common import genai as genai_mod
 
-    global _VL_GATE
     n = max(1, int(concurrency or 16))
-    with _VL_GATE_LOCK:
-        if _VL_GATE is None:
-            _VL_GATE = threading.BoundedSemaphore(n)
-        gate = _VL_GATE
-    stats = {"requests": 0}
     lock = threading.Lock()
+    semaphores = {}
+    stats = {"requests": 0}
 
     def _create_chat_completion(self, messages, *, return_future=False, **kwargs):
         async def _with_sem():
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, gate.acquire)
-            try:
+            with lock:
+                sem = semaphores.setdefault(id(loop), asyncio.Semaphore(n))
+            async with sem:
                 r = await self._client.chat.completions.create(
                     model=self._model_name, messages=messages, **kwargs
                 )
                 with lock:
                     stats["requests"] += 1
                 return r
-            finally:
-                gate.release()
 
         return genai_mod.run_async(_with_sem(), return_future=return_future)
 
     genai_mod.GenAIClient.create_chat_completion = _create_chat_completion
-    logger.info("Patched GenAIClient VL gate concurrency=%d", n)
+    logger.info("Patched GenAIClient semaphore conc=%d (per-loop, shared)", n)
     return stats
 
 
@@ -130,17 +130,83 @@ class RemoteLayoutDetector:
     def close(self):
         return None
 
-    def __call__(self, images, **kwargs):
+    @staticmethod
+    def _transient_layout_error(exc) -> bool:
+        import urllib.error
+        if isinstance(exc, urllib.error.HTTPError):
+            return int(getattr(exc, "code", 0) or 0) >= 500
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError,
+                            BrokenPipeError, TimeoutError)):
+            return True
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (ConnectionResetError, ConnectionAbortedError,
+                               BrokenPipeError, ConnectionRefusedError,
+                               TimeoutError, OSError)):
+            return True
+        msg = str(reason if reason is not None else exc).lower()
+        return any(
+            s in msg for s in (
+                "connection reset", "broken pipe", "timed out",
+                "connection refused", "temporarily unavailable",
+                "remote end closed", "errno 104",
+            )
+        )
+
+    def _post_images(self, images_b64: list, extra: dict) -> list:
         import json
         import urllib.error
         import urllib.request
 
+        payload = {"images": images_b64, **extra}
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.url + "/layout",
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Connection": "close",
+                "User-Agent": "paddleocr-layout-client",
+            },
+            method="POST",
+        )
+        last = None
+        for attempt in range(1, 4):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                results = body.get("results")
+                if not isinstance(results, list) or len(results) != len(images_b64):
+                    raise RuntimeError(
+                        f"版面服务返回异常: n_images={len(images_b64)} n_results="
+                        f"{0 if not isinstance(results, list) else len(results)}"
+                    )
+                return results
+            except urllib.error.HTTPError as e:
+                err = e.read().decode("utf-8", "replace")[:400]
+                last = RuntimeError(
+                    f"远程版面切框失败 HTTP {e.code} {self.url}/layout: {err}"
+                )
+                last.__cause__ = e
+                if not self._transient_layout_error(e) or attempt >= 3:
+                    raise last from e
+            except Exception as e:
+                last = RuntimeError(
+                    f"连不上版面切框服务 {self.url}/layout "
+                    f"（请在 CPU/GPU 强机启动 scripts/paddleocr_layout_server.py，"
+                    f"并把 doc.recognition.paddleocr_layout_url 指过去）: {e}"
+                )
+                last.__cause__ = e
+                if not self._transient_layout_error(e) or attempt >= 3:
+                    raise last from e
+            time.sleep(0.4 * attempt)
+        raise last
+
+    def __call__(self, images, **kwargs):
         if images is None:
             return []
         if not isinstance(images, (list, tuple)):
             images = [images]
-        payload = {
-            "images": [_encode_image_jpeg(im) for im in images],
+        extra = {
             "threshold": kwargs.get("threshold"),
             "layout_nms": kwargs.get("layout_nms"),
             "layout_unclip_ratio": kwargs.get("layout_unclip_ratio"),
@@ -148,37 +214,9 @@ class RemoteLayoutDetector:
             "layout_shape_mode": kwargs.get("layout_shape_mode"),
             "filter_overlap_boxes": kwargs.get("filter_overlap_boxes"),
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self.url + "/layout",
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "paddleocr-layout-client",
-            },
-            method="POST",
+        return self._post_images(
+            [_encode_image_jpeg(im) for im in images], extra,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            err = e.read().decode("utf-8", "replace")[:400]
-            raise RuntimeError(
-                f"远程版面切框失败 HTTP {e.code} {self.url}/layout: {err}"
-            ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"连不上版面切框服务 {self.url}/layout "
-                f"（请在 CPU/GPU 强机启动 scripts/paddleocr_layout_server.py，"
-                f"并把 doc.recognition.paddleocr_layout_url 指过去）: {e}"
-            ) from e
-        results = body.get("results")
-        if not isinstance(results, list) or len(results) != len(images):
-            raise RuntimeError(
-                f"版面服务返回异常: n_images={len(images)} n_results="
-                f"{0 if not isinstance(results, list) else len(results)}"
-            )
-        return results
 
 
 def ping_layout_server(url: str, timeout: float = 5.0) -> int:

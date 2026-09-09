@@ -219,9 +219,10 @@ class DocRecognitionConfig(BaseModel):
     独立入库：首段保留原文件名，后续段为「原文件名_{n}」（n 从 1 起）。
 
     use_paddleocr=True 时同一套切片/断点/缓存，识别后端换成 PaddleOCR-VL。
+    两条后端并发互不借用：VLM 只用 num_thread；OCR 只用远端 layout
+    workers（无 layout_url 则本机 CPU 单 pipeline，强制 1 线程）。
     paddleocr_layout_url 非空时，本机不加载 PP-DocLayoutV3，切框纯 HTTP；
     按远端 /health 的 workers 建 pipeline 池做切片并发（每份独占）。
-    空则切框仍在本机 CPU（单 pipeline 互斥，不切片并发）。
     """
     api_key: str = ""
     base_url: str = ""
@@ -231,7 +232,7 @@ class DocRecognitionConfig(BaseModel):
         'enable_thinking': False,
     })
     use_cache: bool = True
-    num_thread: int = 4
+    num_thread: int = 4  # VLM 切片并发；OCR 忽略此项
     prompt: str = 'pdf_recognize'
     dpi: int = 150
     image_format: str = 'jpeg'
