@@ -135,9 +135,9 @@ def main() -> None:
             print(f"  SKIP {tag} {pdf.name}: {e} ({dt:.2f}s)", flush=True)
             return None
         dt = time.perf_counter() - t0
-        reqs = stats["requests"] - snap["requests"]
-        ptok = stats["prompt_tokens"] - snap["prompt_tokens"]
-        ctok = stats["completion_tokens"] - snap["completion_tokens"]
+        reqs = stats.get("requests", 0) - snap.get("requests", 0)
+        ptok = 0
+        ctok = 0
         nchar = len(md)
         # 实际渲染页数
         page_dir = work / pdf.stem / (pdf.stem + "_pages")
@@ -181,9 +181,9 @@ def main() -> None:
 
     pages = sum(r["pages"] for r in rows)
     secs = [r["seconds"] for r in rows]
-    ptok = stats["prompt_tokens"] - snap_batch["prompt_tokens"]
-    ctok = stats["completion_tokens"] - snap_batch["completion_tokens"]
-    reqs = stats["requests"] - snap_batch["requests"]
+    ptok = 0
+    ctok = 0
+    reqs = stats.get("requests", 0) - snap_batch.get("requests", 0)
     summary = {
         "url": args.url,
         "model": args.model,

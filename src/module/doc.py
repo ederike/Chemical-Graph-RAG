@@ -6,10 +6,12 @@ import tiktoken
 
 from pathlib import Path
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from tqdm import tqdm
 import base64
 import hashlib
 import json
+import queue
 import re
 import threading
 import time
@@ -123,9 +125,13 @@ class Doc:
         self._paddleocr_pipeline = None
         self._paddleocr_stats = None
         self._paddleocr_lock = threading.Lock()
-        # 本地切框：Lock 互斥；远端切框：Semaphore(workers) 切片并发
+        # 本地切框：Lock 互斥单 pipeline；远端切框：pipeline 池，每份独占
         self._paddleocr_slot = threading.Lock()
         self._paddleocr_layout_workers = 1
+        self._paddleocr_layout_url = ''
+        self._paddleocr_pool = None
+        self._paddleocr_created = 0
+        self._paddleocr_make_kwargs = None
 
     def resolve_doc_dir(self) -> Path:
         """Document directory: working_path/doc (e.g. example/a/doc)."""
@@ -391,50 +397,97 @@ class Doc:
     def use_paddleocr(self) -> bool:
         return bool(getattr(self.config.doc.recognition, 'use_paddleocr', False))
 
-    def _get_paddleocr_pipeline(self):
-        """单例 pipeline。本地切框必须互斥；远端切框按 workers 切片并发。"""
+    def _init_paddleocr(self):
+        """构造 VL 客户端。远端切框：pipeline 池（懒创建，上限=workers）。"""
         with self._paddleocr_lock:
-            if self._paddleocr_pipeline is None:
-                from ..utils.paddleocr_vl import (
-                    make_pipeline,
-                    patch_genai_semaphore,
-                )
-                recog = self.config.doc.recognition
-                url = (
-                    getattr(recog, 'paddleocr_url', None)
-                    or 'http://localhost:8001/v1'
-                )
-                model = (
-                    getattr(recog, 'paddleocr_model', None)
-                    or 'PaddleOCR-VL-1.6'
-                )
-                conc = int(getattr(recog, 'paddleocr_concurrency', 16) or 16)
-                layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
-                self._paddleocr_stats = patch_genai_semaphore()
-                self._paddleocr_pipeline = make_pipeline(
-                    url, model, conc, layout_url=layout_url,
-                )
-                workers = 1
-                if layout_url:
-                    inner = getattr(
-                        self._paddleocr_pipeline, 'paddlex_pipeline',
-                        self._paddleocr_pipeline,
-                    )
-                    det = getattr(inner, 'layout_det_model', None)
-                    workers = max(1, int(getattr(det, 'workers', 1) or 1))
-                    self._paddleocr_slot = threading.BoundedSemaphore(workers)
-                else:
-                    self._paddleocr_slot = threading.Lock()
-                self._paddleocr_layout_workers = workers
-                layout_note = (
-                    f" layout={layout_url} slice_conc={workers}"
-                    if layout_url else " layout=local-cpu"
-                )
-                self.logger.info(
-                    f"PaddleOCR-VL client ready url={url} model={model} conc={conc}"
-                    f"{layout_note}"
-                )
-            return self._paddleocr_pipeline, self._paddleocr_stats
+            if self._paddleocr_created > 0:
+                return
+            from ..utils.paddleocr_vl import (
+                make_pipeline,
+                patch_genai_semaphore,
+            )
+            recog = self.config.doc.recognition
+            url = (
+                getattr(recog, 'paddleocr_url', None)
+                or 'http://localhost:8001/v1'
+            )
+            model = (
+                getattr(recog, 'paddleocr_model', None)
+                or 'PaddleOCR-VL-1.6'
+            )
+            conc = int(getattr(recog, 'paddleocr_concurrency', 16) or 16)
+            layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
+            self._paddleocr_stats = patch_genai_semaphore(conc)
+            kw = dict(
+                url=url, model_name=model, concurrency=conc, layout_url=layout_url,
+            )
+            first = make_pipeline(**kw)
+            self._paddleocr_make_kwargs = kw
+            self._paddleocr_layout_url = layout_url
+            workers = 1
+            if layout_url:
+                inner = getattr(first, 'paddlex_pipeline', first)
+                det = getattr(inner, 'layout_det_model', None)
+                workers = max(1, int(getattr(det, 'workers', 1) or 1))
+                self._paddleocr_pool = queue.Queue()
+                self._paddleocr_pool.put(first)
+                self._paddleocr_pipeline = None
+            else:
+                self._paddleocr_pipeline = first
+                self._paddleocr_slot = threading.Lock()
+            self._paddleocr_created = 1
+            self._paddleocr_layout_workers = workers
+            layout_note = (
+                f" layout={layout_url} pipeline_pool={workers}"
+                if layout_url else " layout=local-cpu pipeline_pool=1"
+            )
+            self.logger.info(
+                f"PaddleOCR-VL client ready url={url} model={model} conc={conc}"
+                f"{layout_note}"
+            )
+
+    def _get_paddleocr_pipeline(self):
+        """兼容旧调用：初始化。远端切框没有单例，请用 _borrow_paddleocr_pipeline。"""
+        self._init_paddleocr()
+        return self._paddleocr_pipeline, self._paddleocr_stats
+
+    def _new_paddleocr_pipeline(self):
+        from ..utils.paddleocr_vl import make_pipeline
+        return make_pipeline(**self._paddleocr_make_kwargs)
+
+    def _acquire_paddleocr_pipeline(self):
+        self._init_paddleocr()
+        if not self._paddleocr_layout_url:
+            self._paddleocr_slot.acquire()
+            return self._paddleocr_pipeline
+        try:
+            return self._paddleocr_pool.get_nowait()
+        except queue.Empty:
+            pass
+        with self._paddleocr_lock:
+            if self._paddleocr_created < self._paddleocr_layout_workers:
+                pipe = self._new_paddleocr_pipeline()
+                self._paddleocr_created += 1
+                # self.logger.info(
+                #     f"PaddleOCR-VL pipeline pool "
+                #     f"{self._paddleocr_created}/{self._paddleocr_layout_workers}"
+                # )
+                return pipe
+        return self._paddleocr_pool.get()
+
+    def _release_paddleocr_pipeline(self, pipe):
+        if not self._paddleocr_layout_url:
+            self._paddleocr_slot.release()
+            return
+        self._paddleocr_pool.put(pipe)
+
+    @contextmanager
+    def _borrow_paddleocr_pipeline(self):
+        pipe = self._acquire_paddleocr_pipeline()
+        try:
+            yield pipe, self._paddleocr_stats
+        finally:
+            self._release_paddleocr_pipeline(pipe)
 
     def max_pages_per_doc(self) -> int:
         try:
@@ -610,7 +663,6 @@ class Doc:
         source_pdf: str = '',
         source_name: str = '',
         file_hash: str = '',
-        recognition_cost=None,
         slice_index: int = 0,
         n_slices: int = 1,
         page_start: int = 0,
@@ -625,7 +677,6 @@ class Doc:
             'source_pdf': source_pdf,
             'source_name': source_name or '',
             'file_hash': file_hash,
-            'recognition_cost': recognition_cost or {},
             'pipeline': pipeline or 'page_slice_plain_text_v1',
             'slice_index': int(slice_index or 0),
             'n_slices': int(n_slices or 1),
@@ -662,7 +713,18 @@ class Doc:
         recog = self.config.doc.recognition
         dpi = int(getattr(recog, 'paddleocr_dpi', 200) or 200)
         try:
-            pipeline, stats = self._get_paddleocr_pipeline()
+            with self._borrow_paddleocr_pipeline() as (pipeline, _stats):
+                try:
+                    md_text = parse_document(
+                        pipeline,
+                        pdf_path,
+                        dpi=dpi,
+                        page_start=page_start,
+                        page_end=page_end,
+                        is_image=is_image,
+                    )
+                except EmptyOCRError as e:
+                    raise NonRetryableError(str(e)) from e
         except ImportError as e:
             raise NonRetryableError(
                 "PaddleOCR-VL 依赖未安装（缺 paddlex/paddleocr/paddlepaddle）。"
@@ -670,25 +732,6 @@ class Doc:
                 "请在同一环境执行: pip install 'paddleocr[doc-parser]' paddlepaddle"
                 f" ({type(e).__name__}: {e})"
             ) from e
-        tls = stats.get('_tls')
-        if tls is not None:
-            tls.requests = 0
-            tls.prompt_tokens = 0
-            tls.completion_tokens = 0
-
-        with self._paddleocr_slot:
-            try:
-                md_text = parse_document(
-                    pipeline,
-                    pdf_path,
-                    stats,
-                    dpi=dpi,
-                    page_start=page_start,
-                    page_end=page_end,
-                    is_image=is_image,
-                )
-            except EmptyOCRError as e:
-                raise NonRetryableError(str(e)) from e
 
         content = self.normalize_recognition_text(md_text)
         if not content:
@@ -704,24 +747,11 @@ class Doc:
         if total_pages is None:
             total_pages = page_count
         total_pages = int(total_pages or page_count)
-        if tls is not None:
-            ptok = int(getattr(tls, 'prompt_tokens', 0) or 0)
-            ctok = int(getattr(tls, 'completion_tokens', 0) or 0)
-        else:
-            ptok = 0
-            ctok = 0
-        cost = {
-            'usage_prompt_tokens': ptok,
-            'usage_completion_tokens': ctok,
-            'usage_total_tokens': ptok + ctok,
-            'backend': 'paddleocr-vl',
-        }
         extra_obj = self.doc_extra_payload(
             page_count=page_count,
             source_pdf=str(pdf_path),
             source_name=pdf_path.name,
             file_hash=file_hash,
-            recognition_cost=cost,
             slice_index=slice_index,
             n_slices=n_slices,
             page_start=page_start,
@@ -741,7 +771,6 @@ class Doc:
             'page_count': page_count,
             'slice_index': slice_index,
             'n_slices': n_slices,
-            'recognition_cost': cost,
         }
         if recog.use_cache:
             self._recog_cache.update_cache(
@@ -765,9 +794,6 @@ class Doc:
                 'recognize',
                 0.0,
                 cache_hit=False,
-                prompt_tokens=ptok,
-                completion_tokens=ctok,
-                total_tokens=ptok + ctok,
                 name=doc_name,
                 extra=(
                     f'backend=paddleocr-vl pages={page_count} '
@@ -967,17 +993,11 @@ class Doc:
                 f"pages={page_count} [{human_from}-{human_to}/{total_pages}])"
             )
 
-        cost = {
-            'usage_prompt_tokens': response.get('usage_prompt_tokens'),
-            'usage_completion_tokens': response.get('usage_completion_tokens'),
-            'usage_total_tokens': response.get('usage_total_tokens'),
-        }
         extra_obj = self.doc_extra_payload(
             page_count=page_count,
             source_pdf=str(pdf_path),
             source_name=pdf_path.name,
             file_hash=file_hash,
-            recognition_cost=cost,
             slice_index=slice_index,
             n_slices=n_slices,
             page_start=page_start,
@@ -997,7 +1017,6 @@ class Doc:
             'page_count': page_count,
             'slice_index': slice_index,
             'n_slices': n_slices,
-            'recognition_cost': cost,
         }
 
         if recog.use_cache:
@@ -1022,9 +1041,6 @@ class Doc:
                 'recognize',
                 0.0,
                 cache_hit=False,
-                prompt_tokens=response.get('usage_prompt_tokens') or 0,
-                completion_tokens=response.get('usage_completion_tokens') or 0,
-                total_tokens=response.get('usage_total_tokens'),
                 name=doc_name,
                 extra=(
                     f'pages={page_count} slice={slice_index + 1}/{n_slices} '
@@ -1141,7 +1157,7 @@ class Doc:
         if self.use_paddleocr():
             layout_url = (getattr(recog, 'paddleocr_layout_url', None) or '').strip()
             if layout_url:
-                self._get_paddleocr_pipeline()
+                self._init_paddleocr()
                 num_thread = max(num_thread, int(self._paddleocr_layout_workers or 1))
         # 与 LLM 客户端一致，用于心跳日志说明「最长可能等多久」
         try:
@@ -1351,7 +1367,6 @@ class Doc:
                     page_count=int(task.get('page_count') or 0),
                     source_pdf=str(task.get('source_pdf') or ''),
                     file_hash=str(task.get('file_hash') or ''),
-                    recognition_cost=task.get('recognition_cost') or {},
                 ),
                 ensure_ascii=False,
             )

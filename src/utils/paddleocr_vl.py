@@ -3,10 +3,16 @@
 契约与踩坑见 useless/ocr_api_client.py。对接入口：
   patch_genai_semaphore() 必须在构造 PaddleOCRVL 之前调用；
   make_pipeline() + parse_document()。
+
+paddlex 版面推理不是线程安全的：同一进程里并发 predict 会把不同 batch
+的 DETR 框叠到一起（[B,300,4] broadcast）。有 paddleocr_layout_url 时
+本机不再加载 PP-DocLayout，切框纯 HTTP；切片并发用 pipeline 池，每份
+pipeline 同一时刻只服务一个切片。VL 请求跨 pipeline 共用一个全局槽位。
 """
 import logging
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -15,67 +21,47 @@ logger = logging.getLogger("paddleocr_vl")
 DEFAULT_MODEL = "PaddleOCR-VL-1.6"
 TABLE_OPEN, TABLE_CLOSE = "<table", "</table>"
 
+_CREATE_MODEL_LOCK = threading.Lock()
+_VL_GATE = None
+_VL_GATE_LOCK = threading.Lock()
+
 
 class EmptyOCRError(ValueError):
     """空白页或无识别正文：不应重试。"""
 
 
-def patch_genai_semaphore() -> dict:
-    """Py3.9 + paddlex 3.7: 在运行中的 loop 内懒创建 semaphore。"""
+def patch_genai_semaphore(concurrency: int = 16) -> dict:
+    """Py3.9 + paddlex 3.7: VL HTTP 用线程闸门，跨 pipeline 共享上限。不记 token。"""
     import asyncio
-    import threading
     from paddlex.inference.models.common import genai as genai_mod
 
+    global _VL_GATE
+    n = max(1, int(concurrency or 16))
+    with _VL_GATE_LOCK:
+        if _VL_GATE is None:
+            _VL_GATE = threading.BoundedSemaphore(n)
+        gate = _VL_GATE
+    stats = {"requests": 0}
     lock = threading.Lock()
-    semaphores = {}
-    tls = threading.local()
-    stats = {
-        "requests": 0,
-        "prompt_tokens": 0,
-        "completion_tokens": 0,
-        "_tls": tls,
-    }
-
-    def _tls_bucket():
-        if not hasattr(tls, "requests"):
-            tls.requests = 0
-            tls.prompt_tokens = 0
-            tls.completion_tokens = 0
-        return tls
 
     def _create_chat_completion(self, messages, *, return_future=False, **kwargs):
-        # 在切片线程上取 bucket，闭包带进后台 loop，避免 threading.local 串台
-        bucket = _tls_bucket()
-
         async def _with_sem():
             loop = asyncio.get_running_loop()
-            with lock:
-                sem = semaphores.setdefault(
-                    (id(self), id(loop)),
-                    asyncio.Semaphore(getattr(self, "_max_concurrency", 8) or 8),
-                )
-            async with sem:
+            await loop.run_in_executor(None, gate.acquire)
+            try:
                 r = await self._client.chat.completions.create(
                     model=self._model_name, messages=messages, **kwargs
                 )
-                pt = ct = 0
-                u = getattr(r, "usage", None)
-                if u is not None:
-                    pt = int(getattr(u, "prompt_tokens", 0) or 0)
-                    ct = int(getattr(u, "completion_tokens", 0) or 0)
                 with lock:
                     stats["requests"] += 1
-                    stats["prompt_tokens"] += pt
-                    stats["completion_tokens"] += ct
-                    bucket.requests += 1
-                    bucket.prompt_tokens += pt
-                    bucket.completion_tokens += ct
                 return r
+            finally:
+                gate.release()
 
         return genai_mod.run_async(_with_sem(), return_future=return_future)
 
     genai_mod.GenAIClient.create_chat_completion = _create_chat_completion
-    logger.info("Patched GenAIClient semaphore (cross-loop) + token stats")
+    logger.info("Patched GenAIClient VL gate concurrency=%d", n)
     return stats
 
 
@@ -117,26 +103,32 @@ def _encode_image_jpeg(img, quality: int = 95) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-class RemoteLayoutDetector:
-    """把 PP-DocLayoutV3 调用转到远程 /layout。
+class _BatchSize:
+    def __init__(self, batch_size: int = 8):
+        self.batch_size = max(1, int(batch_size or 8))
 
-    一次 HTTP 对应一次 predict 的页图（通常即一个切片）。
-    切片级并发由 Doc 按 /health 的 workers 控制，打满服务端进程。
+
+class RemoteLayoutDetector:
+    """把 PP-DocLayoutV3 调用转到远程 /layout。不持有、不转发本机 paddle 模型。
+
+    一次 HTTP 对应 cv worker 的一批页图（通常即一个切片）。
+    切片级并发由 Doc 的 pipeline 池对齐 /health 的 workers。
     """
 
     def __init__(
-        self, url: str, local_model=None, timeout: float = 120.0, workers: int = 1,
+        self,
+        url: str,
+        timeout: float = 120.0,
+        workers: int = 1,
+        batch_size: int = 8,
     ):
         self.url = (url or "").rstrip("/")
-        self._local = local_model
         self.timeout = float(timeout or 120.0)
         self.workers = max(1, int(workers or 1))
-        if self._local is not None and hasattr(self._local, "batch_sampler"):
-            self.batch_sampler = self._local.batch_sampler
-        else:
-            class _BS:
-                batch_size = 8
-            self.batch_sampler = _BS()
+        self.batch_sampler = _BatchSize(batch_size)
+
+    def close(self):
+        return None
 
     def __call__(self, images, **kwargs):
         import json
@@ -187,11 +179,6 @@ class RemoteLayoutDetector:
                 f"{0 if not isinstance(results, list) else len(results)}"
             )
         return results
-
-    def __getattr__(self, name):
-        if self._local is not None:
-            return getattr(self._local, name)
-        raise AttributeError(name)
 
 
 def ping_layout_server(url: str, timeout: float = 5.0) -> int:
@@ -249,6 +236,40 @@ def ping_server(url: str, timeout: float = 5.0) -> None:
         ) from e
 
 
+def _is_layout_config(config) -> bool:
+    if not isinstance(config, dict):
+        return False
+    module = str(config.get("module_name") or "")
+    name = str(config.get("model_name") or "")
+    return module == "layout_detection" or name.startswith("PP-DocLayout")
+
+
+def _close_local_layout(model) -> None:
+    if model is None or isinstance(model, RemoteLayoutDetector):
+        return
+    closer = getattr(model, "close", None)
+    if not callable(closer):
+        return
+    try:
+        closer()
+    except Exception:
+        logger.debug("close local layout model failed", exc_info=True)
+
+
+def _attach_remote_layout(pipe, layout_url: str, workers: int, batch_size: int = 8):
+    inner = getattr(pipe, "paddlex_pipeline", pipe)
+    current = getattr(inner, "layout_det_model", None)
+    if isinstance(current, RemoteLayoutDetector):
+        current.workers = max(1, int(workers or 1))
+        return current
+    det = RemoteLayoutDetector(
+        layout_url, workers=workers, batch_size=batch_size,
+    )
+    inner.layout_det_model = det
+    _close_local_layout(current)
+    return det
+
+
 def make_pipeline(
     url: str,
     model_name: str = DEFAULT_MODEL,
@@ -258,27 +279,49 @@ def make_pipeline(
     from paddleocr import PaddleOCRVL
     ping_server(url)
     layout_url = (layout_url or "").strip()
-    layout_workers = 1
-    if layout_url:
-        layout_workers = ping_layout_server(layout_url)
-
-    pipe = PaddleOCRVL(
+    layout_workers = ping_layout_server(layout_url) if layout_url else 1
+    conc = max(1, int(concurrency or 16))
+    kwargs = dict(
         pipeline_version="v1.6",
         vl_rec_backend="vllm-server",
         vl_rec_server_url=url,
         vl_rec_api_model_name=model_name or DEFAULT_MODEL,
-        vl_rec_max_concurrency=max(1, int(concurrency or 16)),
+        vl_rec_max_concurrency=conc,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
     )
-    if layout_url:
-        inner = getattr(pipe, "paddlex_pipeline", pipe)
-        local = getattr(inner, "layout_det_model", None)
-        inner.layout_det_model = RemoteLayoutDetector(
-            layout_url, local_model=local, workers=layout_workers,
-        )
-        logger.info(
-            "Layout detection -> remote %s/layout workers=%d (slice concurrency)",
-            layout_url, layout_workers,
-        )
+    if not layout_url:
+        return PaddleOCRVL(**kwargs)
+
+    from paddlex.inference.pipelines.base import BasePipeline
+
+    orig = BasePipeline.create_model
+
+    def _create_model(self, config, **kw):
+        if _is_layout_config(config):
+            bs = int((config or {}).get("batch_size") or 8)
+            logger.debug(
+                "Skip local %s; layout -> %s/layout",
+                (config or {}).get("model_name") or "PP-DocLayout",
+                layout_url,
+            )
+            return RemoteLayoutDetector(
+                layout_url, workers=layout_workers, batch_size=bs,
+            )
+        return orig(self, config, **kw)
+
+    with _CREATE_MODEL_LOCK:
+        BasePipeline.create_model = _create_model
+        try:
+            pipe = PaddleOCRVL(**kwargs)
+        finally:
+            BasePipeline.create_model = orig
+
+    det = _attach_remote_layout(pipe, layout_url, layout_workers)
+    logger.info(
+        "Layout detection -> remote %s/layout workers=%d (pipeline pool)",
+        layout_url, det.workers,
+    )
     return pipe
 
 
@@ -353,7 +396,7 @@ def check_truncation(md_text: str, name: str) -> int:
 def parse_document(
     pipeline,
     src_path: Path,
-    stats: dict,
+    stats: dict = None,
     *,
     dpi: int = 200,
     page_start: int = 0,

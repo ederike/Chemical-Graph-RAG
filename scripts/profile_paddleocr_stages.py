@@ -163,9 +163,9 @@ def run_staged(inner, pngs: list[str], stats: dict, conc_note: str) -> dict:
     # assemble 签名可能随版本变，组装失败不影响阶段对比；用 predict 路径的 restructure 即可
     del t0
 
-    reqs = stats["requests"] - snap["requests"]
-    ptok = stats["prompt_tokens"] - snap["prompt_tokens"]
-    ctok = stats["completion_tokens"] - snap["completion_tokens"]
+    reqs = stats.get("requests", 0) - snap.get("requests", 0)
+    ptok = 0
+    ctok = 0
     wall = time.perf_counter() - t_all
     return {
         "pages": len(pngs),
