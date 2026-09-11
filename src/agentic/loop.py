@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, Tuple, TYPE_CHECKING
 
 from ..utils.OpenAIAPI import LLM
+from ..utils.progress import emit as progress_emit
 from ..utils.config import resolve_credentials, resolve_llm_timeout
 from .prompts import AGENTIC_PROMPT
 from .tools import (
@@ -581,6 +582,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             "force_reason": reason,
         })
         ctx._trace_block("final_answer", answer)
+        progress_emit("answer", "得出答案", answer)
         return _finish(True, answer, reasoning=last_reasoning)
 
     def _chat(*, with_tools: bool) -> dict:
@@ -624,6 +626,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             f"===== turn {turn_i}/{max_turns} protocol={'openai' if use_openai else 'json'} "
             f"last_prompt={last_prompt} threshold={token_threshold or '-'} ====="
         )
+        progress_emit("turn", f"第 {turn_i} 轮思考")
         resp = _chat(with_tools=use_openai)
         _accumulate(resp)
         ctx._trace(f"usage prompt={last_prompt} completion={resp.get('usage_completion_tokens')}")
@@ -648,6 +651,8 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             ctx._trace_block(f"turn {turn_i} reasoning", reasoning)
         if content:
             ctx._trace_block(f"turn {turn_i} content", content)
+        if reasoning or content:
+            progress_emit("thought", f"Turn {turn_i} 思考", reasoning or content[:240])
 
         actions: List[dict] = []
         openai_calls = resp.get("tool_calls") or []
@@ -668,6 +673,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                     "answer": answer,
                 })
                 ctx._trace_block("final_answer", answer)
+                progress_emit("answer", "得出答案", answer)
                 return _finish(True, answer)
 
         if len(actions) == 1 and actions[0].get("kind") == "answer":
@@ -684,6 +690,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             if thought:
                 ctx._trace_block(f"turn {turn_i} thought", thought)
             ctx._trace_block("final_answer", answer)
+            progress_emit("answer", "得出答案", answer)
             return _finish(True, answer)
 
         tool_actions = [a for a in actions if a.get("kind") == "tool"]
@@ -696,6 +703,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
                 "answer": answer,
             })
             ctx._trace_block("final_answer", answer)
+            progress_emit("answer", "得出答案", answer)
             return _finish(True, answer)
 
         if _over_token_budget():
@@ -731,6 +739,11 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             ctx._trace(
                 f"tool_call {name} id={call_id} args={json.dumps(arguments, ensure_ascii=False)}"
             )
+            progress_emit(
+                "tool",
+                f"调用 {name}",
+                json.dumps(arguments, ensure_ascii=False),
+            )
             if name not in allowed:
                 result = json.dumps(
                     {"error": f"未启用的工具 {name!r}", "allowed": sorted(allowed)},
@@ -739,6 +752,7 @@ def run_agentic_loop(ctx: AgenticContext, query: str) -> dict:
             else:
                 result = ctx.tools.execute(name, arguments)
             ctx._trace_block(f"tool_result {name}", result)
+            progress_emit("tool", f"{name} 返回", result)
             turn_record["calls"].append({
                 "id": call_id,
                 "name": name,

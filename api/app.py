@@ -3,7 +3,7 @@
 启动（项目根目录，worker 必须为 1，避免多份 FAISS）：
 
     export DHMF_CONFIG=example/a/config_open.yaml
-    uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 1
+    uvicorn api.app:app --port 8000 --workers 1
 
 或：
 
@@ -12,16 +12,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import partial
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -131,6 +134,13 @@ class AgenticQueryRequest(BaseModel):
 
 class RetrieveRequest(BaseModel):
     query: str = Field(..., min_length=1)
+    chunk_candidate_k: Optional[int] = None
+    node_candidate_k: Optional[int] = None
+
+
+class StreamRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    mode: Literal["dual", "agent", "agentic", "retrieve"] = "dual"
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
 
@@ -284,6 +294,95 @@ async def retrieve(req: RetrieveRequest, request: Request):
         "items": [_slim_item(it) for it in (items or [])],
         "retrieve_timing": _jsonable(timing),
     }
+
+
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(_jsonable(payload), ensure_ascii=False) + "\n\n"
+
+
+@app.post("/stream")
+async def stream(req: StreamRequest, request: Request):
+    """SSE 进度流。前端用于过程框实时打印。"""
+    graph = _get_graph(request)
+    q: Queue = Queue()
+
+    def push(ev: dict) -> None:
+        q.put(ev)
+
+    def work() -> None:
+        from src.utils.progress import bind
+
+        try:
+            with bind(push):
+                if req.mode == "dual":
+                    respond = graph.query(req.query, mode="dual_path", pretty=False)
+                    q.put({"type": "done", "data": _normalize_respond(respond)})
+                elif req.mode == "agent":
+                    respond = graph.agent_query(req.query, pretty=False)
+                    q.put({"type": "done", "data": _normalize_respond(respond)})
+                elif req.mode == "agentic":
+                    respond = graph.agentic_query(req.query, pretty=False)
+                    q.put({"type": "done", "data": _normalize_respond(respond)})
+                else:
+                    kwargs = {}
+                    if req.chunk_candidate_k is not None:
+                        kwargs["chunk_candidate_k"] = req.chunk_candidate_k
+                    if req.node_candidate_k is not None:
+                        kwargs["node_candidate_k"] = req.node_candidate_k
+                    items = graph.retrieve_module.retrieve_items(req.query, **kwargs)
+                    try:
+                        timing = dict(graph.retrieve_module.get_last_timing() or {})
+                    except Exception:
+                        timing = {}
+                    q.put({
+                        "type": "done",
+                        "data": {
+                            "query": req.query,
+                            "items": [_slim_item(it) for it in (items or [])],
+                            "retrieve_timing": _jsonable(timing),
+                            "status": 1,
+                            "answer": "",
+                        },
+                    })
+        except Exception as e:
+            q.put({"type": "error", "message": str(e)})
+        finally:
+            q.put(None)
+
+    loop = asyncio.get_running_loop()
+    fut = loop.run_in_executor(_executor, work)
+
+    async def gen():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                def _take():
+                    try:
+                        return q.get(timeout=12)
+                    except Empty:
+                        return {"_ping": True}
+
+                item = await loop.run_in_executor(None, _take)
+                if item is None:
+                    break
+                if item.get("_ping"):
+                    yield ": ping\n\n"
+                    continue
+                yield _sse(item)
+        finally:
+            await fut
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def run() -> None:

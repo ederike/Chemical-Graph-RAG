@@ -15,6 +15,7 @@ from ..utils.OpenAIAPI import LLM
 from ..utils.config import AgentConfig
 from .prompts import Agent_PROMPT
 from .skill import QuerySkill
+from ..utils.progress import emit as progress_emit
 from .state import (
     AgentState,
     PlanStep,
@@ -70,6 +71,7 @@ def _fill_prompt(template: str, **kwargs) -> str:
 def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     query = (state.get('query') or '').strip()
     ctx.logger.info(f'[agent.plan] query={query!r}')
+    progress_emit("plan", "正在规划检索步骤", query)
 
     raw = ctx.chat_text(
         Agent_PROMPT.get('PLAN_SYSTEM', ''),
@@ -82,6 +84,14 @@ def plan_node(ctx: AgentContext, state: AgentState) -> dict:
     if bool(getattr(ctx.cfg, 'enable_direct_retrieve', False)) and n_ret > 1:
         steps = inject_direct_retrieve_step(steps, query)
     extra = ' + direct' if any(is_direct_step(s) for s in steps) else ''
+    progress_emit(
+        "plan",
+        "规划完成",
+        " → ".join(
+            f"{s['id']}:{s.get('kind', 'retrieve')}:{(s.get('question') or '')[:40]}"
+            for s in steps
+        ),
+    )
     ctx.logger.info(
         f'[agent.plan] retrieve={n_ret} + llm{extra} '
         + ' | '.join(
@@ -139,6 +149,8 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
     for step in ready:
         sid = step['id']
         t0 = time.perf_counter()
+        kind = 'llm' if is_llm_step(step) else ('direct' if is_direct_step(step) else 'retrieve')
+        progress_emit("step", f"执行 Step {sid} · {kind}", step.get('question') or '')
         if is_llm_step(step):
             ctx.logger.info(f'[agent.execute] step={sid} kind=llm q={query!r}')
             resp = ctx.chat(
@@ -180,6 +192,11 @@ def execute_node(ctx: AgentContext, state: AgentState) -> dict:
             resp=resp,
             latency_s=time.perf_counter() - t0,
         )
+        progress_emit(
+            "step",
+            f"Step {sid} 完成",
+            str((results[sid] or {}).get('answer') or '')[:240],
+        )
 
     return {'results': results}
 
@@ -194,6 +211,7 @@ def synthesize_node(ctx: AgentContext, state: AgentState) -> dict:
     query   = state.get('query') or ''
     plan: List[PlanStep] = list(state.get('plan') or [])
     results: Dict[str, StepResult] = dict(state.get('results') or {})
+    progress_emit("synth", "正在汇总最终回答")
 
     resp = ctx.chat(
         Agent_PROMPT.get('SYNTH_SYSTEM', ''),

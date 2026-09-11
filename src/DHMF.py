@@ -17,6 +17,7 @@ from .utils.prompt import PROMPT
 from .utils.storage import DocDB,ChunkDB,HyperedgeDB,NodeDB,EdgeDB,DocVDB,ChunkVDB,HyperedgeVDB,NodeVDB,EdgeVDB
 from .utils.config import Config
 from .utils.metrics import PipelineMetrics
+from .utils.progress import emit as progress_emit
 
 class DHMF:
     def __init__(self,config:Config):
@@ -984,6 +985,7 @@ class DHMF:
         retrieval_items = self.retrieve_module.retrieve_items(query)
         retrieval_result = self.retrieve_module._format_retrieved_chunks(retrieval_items)
         retrieve_latency_s = time.perf_counter() - t0
+        progress_emit("generate", "开始生成回答")
         retrieve_timing = {}
         try:
             retrieve_timing = dict(self.retrieve_module.get_last_timing() or {})
@@ -1001,6 +1003,8 @@ class DHMF:
             use_cache=getattr(self.config.retrieve, 'use_cache', True),
         )
         if isinstance(respond, dict):
+            ans = str(respond.get('answer') or '')
+            progress_emit("generate", "生成完成", ans[:240])
             respond['retrieve_latency_s'] = retrieve_latency_s
             respond['retrieve_timing'] = retrieve_timing
             respond['latency_s'] = time.perf_counter() - t_all

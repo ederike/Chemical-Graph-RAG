@@ -1,0 +1,19 @@
+{
+  "username": "admin",
+  "password": "kaiyin"
+}
+
+autossh -M 0 -N \
+  -o ProxyCommand=none \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -R 8000:127.0.0.1:8000 \
+  root@203.88.127.78
+
+cd ~/projects/Chemical-Graph-RAG
+source /root/miniconda3/etc/profile.d/conda.sh
+conda activate test
+export DHMF_CONFIG=example/a/config_open.yaml
+nohup uvicorn api.app:app --host 127.0.0.1 --port 8000 --workers 1 \
+  > ~/fastapi.log 2>&1 &

@@ -16,6 +16,8 @@ from contextlib import contextmanager
 
 import numpy as np
 
+from ..utils.progress import emit as progress_emit
+
 # retrieve_items 分阶段耗时字段（秒）；thread-local 保证并发评测不串号
 RETRIEVE_TIMING_KEYS = (
     'precompute_s',
@@ -2381,6 +2383,7 @@ class Retrieve:
         enable_slice_family_expand=None,
     ) -> list:
         t0 = time.perf_counter()
+        progress_emit("retrieve", "开始检索", str(query or ""))
         self._ensure_precompute()
         t_precompute = time.perf_counter() - t0
 
@@ -2501,11 +2504,15 @@ class Retrieve:
 
         def _rewrite_and_embed():
             t_rw0 = time.perf_counter()
+            progress_emit("rewrite", "查询改写")
             rewritten_q = self.rewrite_query(
                 query, enabled=enable_query_rewrite
             )
             t_rw = time.perf_counter() - t_rw0
             sq = rewritten_q or query
+            if rewritten_q and rewritten_q != query:
+                progress_emit("rewrite", "改写完成", rewritten_q)
+            progress_emit("embed", "向量检索")
 
             t_em0 = time.perf_counter()
             emb = None
@@ -2630,6 +2637,12 @@ class Retrieve:
         if enable_kw:
             _apply_keyword_meta(kw_result)
 
+        progress_emit(
+            "retrieve",
+            "召回路完成",
+            f"chunk {len(chunk_hits)} · node {len(node_hits)}"
+            + (f" · keyword docs {len(kw_result.get('doc_ids') or [])}" if enable_kw else ""),
+        )
         dual_merged = self._merge_chunk_hits(chunk_hits, node_hits)
 
         if enable_kw and (
@@ -2652,6 +2665,8 @@ class Retrieve:
         t_expand = time.perf_counter() - t0
 
         t0 = time.perf_counter()
+        if do_rerank:
+            progress_emit("rerank", "重排序")
         passages = self._rerank_materials(
             search_query or query,
             passages,
@@ -2682,6 +2697,11 @@ class Retrieve:
         self._set_last_timing(timing)
 
         n_mat = len({p.get('material_id') for p in passages if p.get('material_id') is not None})
+        progress_emit(
+            "retrieve",
+            "检索完成",
+            f"{len(passages)} 条片段 · {n_mat} 个材料 · {t_total:.2f}s",
+        )
         n_head = sum(1 for p in passages if p.get('role') == 'head')
         n_index = sum(1 for p in passages if p.get('role') == 'index')
         n_merged_chunks = len(merged)

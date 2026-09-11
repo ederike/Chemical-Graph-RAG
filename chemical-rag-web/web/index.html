@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>化工知识超图问答库</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("cgr_theme");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-view="login">
+  <div id="login-gate" class="gate">
+    <div class="gate-card">
+      <p class="eyebrow">Chemical Graph RAG</p>
+      <h1>化工知识超图问答库</h1>
+      <p class="gate-lead">持有密钥方可进入。此处不能注册，密钥由管理员在服务器配置文件中设定。</p>
+      <form id="login-form" autocomplete="off">
+        <label>
+          <span>用户名</span>
+          <input id="login-user" name="username" type="text" spellcheck="false" required />
+        </label>
+        <label>
+          <span>密钥</span>
+          <input id="login-pass" name="password" type="password" required />
+        </label>
+        <button type="submit" class="btn-primary" id="login-btn">进入</button>
+        <p class="gate-error" id="login-error" hidden></p>
+      </form>
+      <button type="button" class="ghost gate-theme" id="gate-theme">切换白天版</button>
+    </div>
+  </div>
+
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <strong>超图检索</strong>
+          <span>化工超图知识库</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="login-status">已登录 · <b id="who-label">—</b></span>
+        <div class="settings-wrap">
+          <button type="button" class="ghost" id="btn-settings" aria-expanded="false">设置</button>
+          <div class="settings-pop" id="settings-pop" hidden>
+      <div class="settings-block">
+        <p>外观</p>
+        <div class="theme-switch" id="theme-switch">
+          <button type="button" data-theme="dark" id="theme-dark">夜间</button>
+          <button type="button" data-theme="light" id="theme-light">白天</button>
+        </div>
+      </div>
+      <div class="settings-block">
+        <p>每个问题最长等待（秒）</p>
+        <div class="timeout-row">
+          <input id="timeout-range" type="range" min="30" max="900" step="30" />
+          <input id="timeout-num" type="number" min="30" max="900" step="10" />
+        </div>
+        <p class="hint">超时后浏览器会放弃本次请求。服务端上限约 900 秒。</p>
+      </div>
+          </div>
+        </div>
+        <button type="button" class="ghost" id="btn-logout">退出</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel process-panel">
+        <div class="panel-head">
+          <h2>过程</h2>
+          <span class="chip" id="process-chip">待命</span>
+        </div>
+        <div class="panel-body" id="process-body">
+          <div class="empty">
+            <p>过程轨迹会出现在这里。</p>
+            <p class="muted">Agentic 按轮次展开工具调用；Agent 展示规划与子步骤；Dual-path / 仅检索给出预览。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel answer-panel">
+        <div class="panel-head">
+          <h2>最终回答</h2>
+          <span class="chip quiet" id="answer-meta"></span>
+        </div>
+        <div class="panel-body" id="answer-body">
+          <div class="empty">
+            <p>模型的最终结论会写在这一栏。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="composer">
+      <form id="query-form">
+        <div class="query-box">
+          <span class="run-timer" id="run-timer" hidden>0.0s</span>
+          <textarea
+            id="query-input"
+            rows="3"
+            placeholder="输入问题，例如：该产品的相对密度是多少？"
+            required
+          ></textarea>
+        </div>
+        <div class="composer-side">
+          <div class="mode-wrap">
+            <button type="button" class="mode-btn" id="mode-btn" aria-haspopup="listbox" aria-expanded="false">
+              <span id="mode-label">Agentic 工具循环</span>
+              <span class="caret"></span>
+            </button>
+            <ul class="mode-menu" id="mode-menu" hidden role="listbox">
+              <li data-mode="retrieve" role="option">
+                <strong>Retrieve</strong>
+                <span>仅检索证据</span>
+              </li>
+              <li data-mode="dual" role="option">
+                <strong>Dual-path</strong>
+                <span>双路检索问答</span>
+              </li>
+              <li data-mode="agent" role="option">
+                <strong>Agent</strong>
+                <span>多跳规划问答</span>
+              </li>
+              <li data-mode="agentic" role="option">
+                <strong>Agentic</strong>
+                <span>工具循环问答</span>
+              </li>
+            </ul>
+          </div>
+          <button type="submit" class="btn-primary" id="ask-btn">检索</button>
+        </div>
+      </form>
+      <p class="composer-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
