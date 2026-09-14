@@ -1,0 +1,38 @@
+# 用法：在项目根目录
+#   1. cp docker/env.example .env   并填密码
+#   2. docker compose up -d --build
+#
+# 镜像里只有代码和环境。example/a（含 DB）和 cache 必须在宿主机上，通过 volume 挂入。
+
+services:
+  api:
+    image: chemical-graph-rag-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DHMF_CONFIG: example/a/config_open.yaml
+    volumes:
+      - ./example/a:/app/example/a
+      - ./cache:/app/cache
+    expose:
+      - "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: "1gb"
+
+  web:
+    image: chemical-graph-rag-web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+    depends_on:
+      api:
+        condition: service_healthy

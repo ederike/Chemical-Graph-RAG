@@ -1,0 +1,33 @@
+.git
+.grok
+.vscode
+**/.git
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/*.log
+**/.DS_Store
+
+# 知识库、PDF、缓存体积很大，绝不能打进镜像
+cache/
+cache_*/
+example/a/DB/
+example/a/doc/
+example/a/doc_*/
+example/a/log/
+results/
+useless/
+benchmark/**/results/
+benchmark/**/data/
+docs/*.xlsx
+
+# 登录密码不要进镜像层
+chemical-rag-web/config.json
+.env
+docker/htpasswd
+
+# 本地杂项
+1.md
+1.txt
+temp.py

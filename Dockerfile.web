@@ -1,0 +1,10 @@
+# 登录页 + nginx 反代。密码运行时由 AUTH_USER / AUTH_PASSWORD 生成，不写进镜像。
+FROM nginx:1.24-alpine
+
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/99-htpasswd.sh /docker-entrypoint.d/99-htpasswd.sh
+COPY chemical-rag-web/web/ /usr/share/nginx/html/
+
+RUN chmod +x /docker-entrypoint.d/99-htpasswd.sh
+
+EXPOSE 80
