@@ -1061,8 +1061,66 @@ class OssDownloadConfig(BaseModel):
             return False
         return bool(v)
 
+class AppConfig(BaseModel):
+    """
+    HTTP 问答服务（api/app.py）。写在 yaml 的 app_config: 下。
+
+    workers 是问答线程池大小，不是 uvicorn 进程数。
+    进程数必须保持 1（各进程会各自 pin 一份 FAISS）。
+    """
+    workers: int = 4
+    content_chars: int = 500
+    cors: str = "*"
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    @field_validator("workers", mode="before")
+    @classmethod
+    def _workers(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 4
+        return max(1, n)
+
+    @field_validator("content_chars", mode="before")
+    @classmethod
+    def _content_chars(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 500
+        return max(50, n)
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _port(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 8000
+        if n < 1 or n > 65535:
+            return 8000
+        return n
+
+    @field_validator("cors", mode="before")
+    @classmethod
+    def _cors(cls, v):
+        if v is None or str(v).strip() == "":
+            return "*"
+        return str(v).strip()
+
+    @field_validator("host", mode="before")
+    @classmethod
+    def _host(cls, v):
+        if v is None or str(v).strip() == "":
+            return "0.0.0.0"
+        return str(v).strip()
+
+
 class Config(BaseModel):
     settings: SettingsConfig
+    app_config: AppConfig = Field(default_factory=AppConfig)
     doc: DocConfig = Field(default_factory=DocConfig)
     summary: SummaryConfig = Field(default_factory=SummaryConfig)
     chunk: ChunkConfig = Field(default_factory=ChunkConfig)
@@ -1084,9 +1142,9 @@ class Config(BaseModel):
             data = yaml.safe_load(f) or {}
 
         known = {
-            'settings', 'doc', 'summary', 'chunk', 'extract', 'build',
-            'vectorization', 'search_range', 'retrieve', 'agent', 'agentic',
-            'dm_data_mysql', 'ali_oss', 'oss_download',
+            'settings', 'app_config', 'doc', 'summary', 'chunk', 'extract',
+            'build', 'vectorization', 'search_range', 'retrieve', 'agent',
+            'agentic', 'dm_data_mysql', 'ali_oss', 'oss_download',
         }
         pipeline = {k: v for k, v in data.items() if k in known}
         extras = {k: v for k, v in data.items() if k not in known}

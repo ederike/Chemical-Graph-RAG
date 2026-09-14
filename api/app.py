@@ -1,13 +1,11 @@
 """Chemical-Graph-RAG HTTP 服务：薄封装 DHMF.query / 多跳问答 / agentic_query / retrieve_items。
 
-启动（项目根目录，worker 必须为 1，避免多份 FAISS）：
+启动（项目根目录，uvicorn 进程数必须为 1，避免多份 FAISS）：
 
     export DHMF_CONFIG=example/a/config_open.yaml
-    uvicorn api.app:app --port 8000 --workers 1
-
-或：
-
     python -m api
+
+线程池、端口、CORS 写在配置文件的 app_config: 段，不设环境变量。
 """
 from __future__ import annotations
 
@@ -31,11 +29,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-CONFIG_PATH = os.environ.get("DHMF_CONFIG", "example/a/config_open.yaml")
-MAX_WORKERS = max(1, int(os.environ.get("DHMF_API_WORKERS", "4")))
-CONTENT_CHARS = max(50, int(os.environ.get("DHMF_API_CONTENT_CHARS", "500")))
+from src.utils.config import AppConfig, Config
 
-_executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="dhmf-api")
+CONFIG_PATH = os.environ.get("DHMF_CONFIG", "example/a/config_open.yaml")
 
 
 def _resolve_config_path() -> Path:
@@ -44,6 +40,23 @@ def _resolve_config_path() -> Path:
     if not path.is_absolute():
         path = ROOT / path
     return path
+
+
+def _load_config() -> Optional[Config]:
+    path = _resolve_config_path()
+    if not path.is_file():
+        return None
+    return Config.from_yaml(str(path))
+
+
+_dhmf_config = _load_config()
+_app_cfg = (
+    _dhmf_config.app_config if _dhmf_config is not None else AppConfig()
+)
+MAX_WORKERS = _app_cfg.workers
+CONTENT_CHARS = _app_cfg.content_chars
+
+_executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="dhmf-api")
 
 
 def _jsonable(value: Any) -> Any:
@@ -77,14 +90,15 @@ def _jsonable(value: Any) -> Any:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from src.DHMF import DHMF
-    from src.utils.config import Config
 
     os.chdir(ROOT)
     config_path = _resolve_config_path()
     if not config_path.is_file():
         raise FileNotFoundError(f"DHMF config not found: {config_path}")
 
-    config = Config.from_yaml(str(config_path))
+    config = _dhmf_config if _dhmf_config is not None else Config.from_yaml(
+        str(config_path)
+    )
     graph = DHMF(config)
     graph.pin_retrieve_indexes()
     app.state.graph = graph
@@ -107,7 +121,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-_cors = os.environ.get("DHMF_API_CORS", "*")
+_cors = _app_cfg.cors or "*"
 _origins = [o.strip() for o in _cors.split(",") if o.strip()] or ["*"]
 _allow_all = _origins == ["*"]
 app.add_middleware(
@@ -388,12 +402,10 @@ async def stream(req: StreamRequest, request: Request):
 def run() -> None:
     import uvicorn
 
-    host = os.environ.get("DHMF_API_HOST", "0.0.0.0")
-    port = int(os.environ.get("DHMF_API_PORT", "8000"))
     uvicorn.run(
         "api.app:app",
-        host=host,
-        port=port,
+        host=_app_cfg.host or "0.0.0.0",
+        port=_app_cfg.port,
         workers=1,
         reload=False,
     )
