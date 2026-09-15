@@ -1,6 +1,9 @@
 # 登录页 + nginx 反代。密码运行时由 AUTH_USER / AUTH_PASSWORD 生成，不写进镜像。
 FROM nginx:1.24-alpine
 
+# 99-htpasswd.sh 需要 openssl CLI；nginx alpine 只有库、没有这个命令（缺了会 exit 127 重启）
+RUN apk add --no-cache openssl
+
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/99-htpasswd.sh /docker-entrypoint.d/99-htpasswd.sh
 COPY chemical-rag-web/web/ /usr/share/nginx/html/

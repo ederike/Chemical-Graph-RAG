@@ -1,8 +1,9 @@
 #!/bin/bash
 # 修改 config.json 里的 username / password 后执行本脚本，凭据立即生效。
-#   bash /root/chemical-rag-web/apply-auth.sh
+# 生产机内网 172.17.105.227，公网 http://182.92.85.174/ ；Docker 部署请改 .env 后重建 web 容器。
+#   bash /data/chemical-graph-rag/chemical-rag-web/apply-auth.sh
 set -euo pipefail
-ROOT=/root/chemical-rag-web
+ROOT=/data/chemical-graph-rag/chemical-rag-web
 WEB_DST=/var/www/chemical-rag
 HTPASSWD=/etc/nginx/chemical-rag.htpasswd
 CFG="$ROOT/config.json"

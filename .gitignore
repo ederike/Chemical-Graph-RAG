@@ -40,4 +40,6 @@ benchmark2/
 temp.py
 benchmark2.py
 starts.txt
-password.json
+config.json
+examples/
+remote/
