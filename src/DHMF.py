@@ -972,7 +972,7 @@ class DHMF:
         lines.append('=' * 60)
         return '\n'.join(lines)
 
-    def query(self, query, mode='dual_path', pretty=False):
+    def query(self, query, mode='dual_path', pretty=False, history=None):
         """Dual-path RAG query. pretty=True returns formatted Thought/Answer text."""
         if mode != 'dual_path':
             raise ValueError(
@@ -980,9 +980,14 @@ class DHMF:
                 f"For multi-hop agent use agent_query()."
             )
 
+        from .utils.chat_history import attach_history, expand_retrieve_query
+
+        retrieve_q = expand_retrieve_query(query, history)
+        gen_q = attach_history(query, history)
+
         t_all = time.perf_counter()
         t0 = time.perf_counter()
-        retrieval_items = self.retrieve_module.retrieve_items(query)
+        retrieval_items = self.retrieve_module.retrieve_items(retrieve_q)
         retrieval_result = self.retrieve_module._format_retrieved_chunks(retrieval_items)
         retrieve_latency_s = time.perf_counter() - t0
         progress_emit("generate", "开始生成回答")
@@ -995,7 +1000,7 @@ class DHMF:
         respond_prompt = (
             PROMPT.get('query_answer', '{retrieval_result}\n.Question: {query}')
             .replace('{retrieval_result}', str(retrieval_result or ''))
-            .replace('{query}', str(query or ''))
+            .replace('{query}', str(gen_q or ''))
         )
         respond = self.llmmodel.generate(
             prompt={'system': system_prompt, 'user': respond_prompt},
@@ -1026,12 +1031,12 @@ class DHMF:
             return self.format_query_response(respond, query=query)
         return respond
 
-    def agent_query(self, query, pretty=False):
+    def agent_query(self, query, pretty=False, history=None):
         """Agent query: plan retrieve hops + parallel pure-LLM, then synthesize."""
         from .agent.runner import run_agent_query
-        return run_agent_query(self, query, pretty=pretty)
+        return run_agent_query(self, query, pretty=pretty, history=history)
 
-    def agentic_query(self, query, pretty=False):
+    def agentic_query(self, query, pretty=False, history=None):
         """Tool-calling 检索问答：模型边想边调 search / read_doc / graph_neighbors。"""
         from .agentic.runner import run_agentic_query
-        return run_agentic_query(self, query, pretty=pretty)
+        return run_agentic_query(self, query, pretty=pretty, history=history)

@@ -22,14 +22,30 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+WEB_DIR = ROOT / "chemical-rag-web" / "web"
+WEB_ONLY = os.environ.get("CGR_WEB_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 
 from src.utils.config import AppConfig, Config
+from api.store import (
+    add_turn,
+    authenticate,
+    create_conversation,
+    delete_conversation,
+    get_conversation,
+    init_db,
+    issue_token,
+    list_conversations,
+    rename_conversation,
+    revoke_token,
+    user_from_token,
+)
 
 CONFIG_PATH = os.environ.get("DHMF_CONFIG", "example/a/config_open.yaml")
 
@@ -89,9 +105,21 @@ def _jsonable(value: Any) -> Any:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    os.chdir(ROOT)
+    init_db()
+    app.state.web_only = WEB_ONLY
+    app.state.llm_context = probe_llm_context(_dhmf_config)
+    if WEB_ONLY:
+        app.state.graph = None
+        app.state.config_path = str(_resolve_config_path())
+        try:
+            yield
+        finally:
+            _executor.shutdown(wait=False, cancel_futures=True)
+        return
+
     from src.DHMF import DHMF
 
-    os.chdir(ROOT)
     config_path = _resolve_config_path()
     if not config_path.is_file():
         raise FileNotFoundError(f"DHMF config not found: {config_path}")
@@ -103,6 +131,7 @@ async def lifespan(app: FastAPI):
     graph.pin_retrieve_indexes()
     app.state.graph = graph
     app.state.config_path = str(config_path)
+    app.state.llm_context = probe_llm_context(config)
     try:
         yield
     finally:
@@ -133,23 +162,34 @@ app.add_middleware(
 )
 
 
+class HistoryTurn(BaseModel):
+    query: str = ""
+    answer: str = ""
+    last_prompt_tokens: Optional[int] = None
+    usage_prompt_tokens: Optional[int] = None
+
+
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户问题")
     mode: Literal["dual_path"] = "dual_path"
+    history: Optional[List[HistoryTurn]] = None
 
 
 class MultihopQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户问题")
+    history: Optional[List[HistoryTurn]] = None
 
 
 class AgenticQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, description="用户问题")
+    history: Optional[List[HistoryTurn]] = None
 
 
 class RetrieveRequest(BaseModel):
     query: str = Field(..., min_length=1)
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
+    history: Optional[List[HistoryTurn]] = None
 
 
 class StreamRequest(BaseModel):
@@ -157,6 +197,7 @@ class StreamRequest(BaseModel):
     mode: Literal["dual", "agent", "agentic", "retrieve"] = "dual"
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
+    history: Optional[List[HistoryTurn]] = None
 
 
 class QueryResponse(BaseModel):
@@ -181,10 +222,120 @@ class QueryResponse(BaseModel):
 
 
 def _get_graph(request: Request):
+    if getattr(request.app.state, "web_only", False):
+        raise HTTPException(
+            status_code=503,
+            detail="当前是网页试点模式（CGR_WEB_ONLY=1），未加载知识库。要问答请去掉该环境变量后重启 python -m api。",
+        )
     graph = getattr(request.app.state, "graph", None)
     if graph is None:
         raise HTTPException(status_code=503, detail="DHMF 尚未加载完成")
     return graph
+
+
+def _bearer_token(request: Request) -> str:
+    auth = request.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return ""
+
+
+def _require_user(request: Request) -> dict:
+    user = user_from_token(_bearer_token(request))
+    if user is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已失效")
+    return user
+
+
+def _history_dicts(history) -> Optional[List[dict]]:
+    if not history:
+        return None
+    out = []
+    for t in history:
+        q = (getattr(t, "query", None) or "").strip()
+        a = getattr(t, "answer", None) or ""
+        if not q:
+            continue
+        row = {"query": q, "answer": a}
+        for key in ("last_prompt_tokens", "usage_prompt_tokens"):
+            try:
+                n = int(getattr(t, key, None) or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n > 0:
+                row[key] = n
+        out.append(row)
+    return out or None
+
+
+def probe_llm_context(config) -> dict:
+    """Read answering LLM max_model_len from the OpenAI-compatible /models API."""
+    agentic = getattr(config, "agentic", None) if config is not None else None
+    settings = getattr(config, "settings", None) if config is not None else None
+    base = ""
+    model = ""
+    reserve = 4096
+    cfg_cap = 0
+    if agentic is not None:
+        base = str(getattr(agentic, "base_url", "") or "")
+        ma = getattr(agentic, "model_args", None) or {}
+        if isinstance(ma, dict):
+            model = str(ma.get("model") or "")
+        reserve = int(getattr(agentic, "prompt_token_reserve", 4096) or 4096)
+        cfg_cap = int(getattr(agentic, "max_prompt_tokens", 0) or 0)
+    if not base and settings is not None:
+        base = str(getattr(settings, "base_url", "") or "")
+    out = {
+        "model": model,
+        "base_url": base,
+        "max_context_tokens": cfg_cap or 131072,
+        "reserve_tokens": max(0, reserve),
+        "source": "config max_prompt_tokens" if cfg_cap else "default",
+    }
+    if not base:
+        return out
+    url = base.rstrip("/") + "/models"
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": "Bearer EMPTY", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        models = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            return out
+        picked = None
+        for m in models:
+            if isinstance(m, dict) and str(m.get("id") or "") == model:
+                picked = m
+                break
+        if picked is None:
+            for m in models:
+                if isinstance(m, dict) and m.get("max_model_len"):
+                    picked = m
+                    break
+        if not isinstance(picked, dict):
+            return out
+        raw = picked.get("max_model_len") or picked.get("context_length")
+        if raw:
+            out["max_context_tokens"] = int(raw)
+            out["model"] = str(picked.get("id") or model)
+            out["source"] = "vllm max_model_len"
+    except Exception as e:
+        out["probe_error"] = str(e)[:240]
+    return out
+
+
+def _llm_context(request: Optional[Request] = None) -> dict:
+    if request is not None:
+        cached = getattr(request.app.state, "llm_context", None)
+        if isinstance(cached, dict) and cached.get("max_context_tokens"):
+            return cached
+    cfg = _dhmf_config
+    return probe_llm_context(cfg)
 
 
 async def _run(func, /, *args, **kwargs):
@@ -225,6 +376,18 @@ def _slim_item(item: dict, content_chars: int = CONTENT_CHARS) -> dict:
 
 @app.get("/")
 def root():
+    index = WEB_DIR / "index.html"
+    if index.is_file():
+        return FileResponse(index)
+    return {
+        "service": "Chemical Graph RAG",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+@app.get("/status")
+def status():
     return {
         "service": "Chemical Graph RAG",
         "docs": "/docs",
@@ -233,25 +396,155 @@ def root():
         "multihop-query": "POST /multihop-query",
         "agentic-query": "POST /agentic-query",
         "retrieve": "POST /retrieve",
+        "web_only": WEB_ONLY,
     }
+
+
+@app.get("/context")
+def llm_context(request: Request):
+    info = dict(_llm_context(request))
+    info.pop("base_url", None)
+    return info
 
 
 @app.get("/health")
 def health(request: Request):
+    if getattr(request.app.state, "web_only", False):
+        return {
+            "ok": True,
+            "web_only": True,
+            "config_path": getattr(
+                request.app.state, "config_path", str(_resolve_config_path())
+            ),
+        }
     graph = _get_graph(request)
     return {
         "ok": True,
+        "web_only": False,
         "config_path": getattr(request.app.state, "config_path", str(_resolve_config_path())),
         "working_path": graph.config.settings.working_path,
     }
 
 
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class ConversationCreate(BaseModel):
+    title: str = ""
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(..., min_length=1)
+
+
+class TurnCreate(BaseModel):
+    query: str = Field(..., min_length=1)
+    mode: str = "agentic"
+    answer: str = ""
+    status: int = 0
+    latency_s: Optional[float] = None
+    sources: Optional[List[Any]] = None
+    result: Optional[Dict[str, Any]] = None
+    stream_steps: Optional[List[Any]] = None
+
+
+@app.post("/auth/login")
+def auth_login(req: LoginRequest):
+    user = authenticate(req.username, req.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="用户名或密钥不正确")
+    token = issue_token(user["id"])
+    return {"token": token, "username": user["username"]}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request):
+    token = _bearer_token(request)
+    if token:
+        revoke_token(token)
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    user = _require_user(request)
+    return {"username": user["username"], "is_admin": user["is_admin"]}
+
+
+@app.get("/conversations")
+def conversations_list(request: Request, q: str = ""):
+    user = _require_user(request)
+    return {"items": list_conversations(user["id"], q=q)}
+
+
+@app.post("/conversations")
+def conversations_create(req: ConversationCreate, request: Request):
+    user = _require_user(request)
+    return create_conversation(user["id"], req.title)
+
+
+@app.get("/conversations/{conv_id}")
+def conversations_get(conv_id: str, request: Request):
+    user = _require_user(request)
+    row = get_conversation(user["id"], conv_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return row
+
+
+@app.patch("/conversations/{conv_id}")
+def conversations_rename(conv_id: str, req: ConversationRename, request: Request):
+    user = _require_user(request)
+    try:
+        row = rename_conversation(user["id"], conv_id, req.title)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return row
+
+
+@app.delete("/conversations/{conv_id}")
+def conversations_delete(conv_id: str, request: Request):
+    user = _require_user(request)
+    if not delete_conversation(user["id"], conv_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True}
+
+
+@app.post("/conversations/{conv_id}/turns")
+def conversations_add_turn(conv_id: str, req: TurnCreate, request: Request):
+    user = _require_user(request)
+    row = add_turn(
+        user["id"],
+        conv_id,
+        query=req.query,
+        mode=req.mode,
+        answer=req.answer,
+        status=req.status,
+        latency_s=req.latency_s,
+        sources=req.sources,
+        result=req.result,
+        stream_steps=req.stream_steps,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return row
+
+
 @app.post("/query", response_model=QueryResponse)
 async def query(req: QueryRequest, request: Request):
     """单跳：三路召回 + 可选 rerank + 一次生成。对应 graph.query。"""
+    _require_user(request)
+    _reject_if_over_context(request, _history_dicts(req.history), req.query)
     graph = _get_graph(request)
     try:
-        respond = await _run(graph.query, req.query, mode=req.mode, pretty=False)
+        respond = await _run(
+            graph.query, req.query, mode=req.mode, pretty=False,
+            history=_history_dicts(req.history),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -262,9 +555,14 @@ async def query(req: QueryRequest, request: Request):
 @app.post("/multihop-query", response_model=QueryResponse)
 async def multihop_query(req: MultihopQueryRequest, request: Request):
     """多跳问答（multihop-query）。单跳一次检索作答，多跳按计划展开。"""
+    _require_user(request)
+    _reject_if_over_context(request, _history_dicts(req.history), req.query)
     graph = _get_graph(request)
     try:
-        respond = await _run(graph.agent_query, req.query, pretty=False)
+        respond = await _run(
+            graph.agent_query, req.query, pretty=False,
+            history=_history_dicts(req.history),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"multihop-query failed: {e}") from e
     return _normalize_respond(respond)
@@ -273,9 +571,14 @@ async def multihop_query(req: MultihopQueryRequest, request: Request):
 @app.post("/agentic-query", response_model=QueryResponse)
 async def agentic_query(req: AgenticQueryRequest, request: Request):
     """Tool-calling 检索问答。模型边想边调 search / read_doc / graph_neighbors。"""
+    _require_user(request)
+    _reject_if_over_context(request, _history_dicts(req.history), req.query)
     graph = _get_graph(request)
     try:
-        respond = await _run(graph.agentic_query, req.query, pretty=False)
+        respond = await _run(
+            graph.agentic_query, req.query, pretty=False,
+            history=_history_dicts(req.history),
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"agentic-query failed: {e}") from e
     return _normalize_respond(respond)
@@ -284,6 +587,7 @@ async def agentic_query(req: AgenticQueryRequest, request: Request):
 @app.post("/retrieve")
 async def retrieve(req: RetrieveRequest, request: Request):
     """只要召回证据，不调用生成。对应 retrieve_module.retrieve_items。"""
+    _require_user(request)
     graph = _get_graph(request)
     kwargs = {}
     if req.chunk_candidate_k is not None:
@@ -292,7 +596,9 @@ async def retrieve(req: RetrieveRequest, request: Request):
         kwargs["node_candidate_k"] = req.node_candidate_k
 
     def _do():
-        items = graph.retrieve_module.retrieve_items(req.query, **kwargs)
+        from src.utils.chat_history import expand_retrieve_query
+        q = expand_retrieve_query(req.query, _history_dicts(req.history))
+        items = graph.retrieve_module.retrieve_items(q, **kwargs)
         try:
             timing = dict(graph.retrieve_module.get_last_timing() or {})
         except Exception:
@@ -314,9 +620,31 @@ def _sse(payload: dict) -> str:
     return "data: " + json.dumps(_jsonable(payload), ensure_ascii=False) + "\n\n"
 
 
+def _reject_if_over_context(request: Request, history, query: str) -> None:
+    info = _llm_context(request)
+    max_ctx = int(info.get("max_context_tokens") or 0)
+    reserve = int(info.get("reserve_tokens") or 4096)
+    if max_ctx <= 0:
+        return
+    from src.utils.chat_history import estimate_next_prompt_tokens
+
+    used = estimate_next_prompt_tokens(history, query)
+    limit = max(1, max_ctx - max(0, reserve))
+    if used >= limit:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前对话上下文约 {used} tokens，已达到回答模型上限 "
+                f"{max_ctx}（需预留 {reserve}）。请点击「新对话」再继续。"
+            ),
+        )
+
+
 @app.post("/stream")
 async def stream(req: StreamRequest, request: Request):
     """SSE 进度流。前端用于过程框实时打印。"""
+    _require_user(request)
+    _reject_if_over_context(request, _history_dicts(req.history), req.query)
     graph = _get_graph(request)
     q: Queue = Queue()
 
@@ -325,17 +653,21 @@ async def stream(req: StreamRequest, request: Request):
 
     def work() -> None:
         from src.utils.progress import bind
+        from src.utils.chat_history import expand_retrieve_query
 
+        hist = _history_dicts(req.history)
         try:
             with bind(push):
                 if req.mode == "dual":
-                    respond = graph.query(req.query, mode="dual_path", pretty=False)
+                    respond = graph.query(
+                        req.query, mode="dual_path", pretty=False, history=hist,
+                    )
                     q.put({"type": "done", "data": _normalize_respond(respond)})
                 elif req.mode == "agent":
-                    respond = graph.agent_query(req.query, pretty=False)
+                    respond = graph.agent_query(req.query, pretty=False, history=hist)
                     q.put({"type": "done", "data": _normalize_respond(respond)})
                 elif req.mode == "agentic":
-                    respond = graph.agentic_query(req.query, pretty=False)
+                    respond = graph.agentic_query(req.query, pretty=False, history=hist)
                     q.put({"type": "done", "data": _normalize_respond(respond)})
                 else:
                     kwargs = {}
@@ -343,7 +675,8 @@ async def stream(req: StreamRequest, request: Request):
                         kwargs["chunk_candidate_k"] = req.chunk_candidate_k
                     if req.node_candidate_k is not None:
                         kwargs["node_candidate_k"] = req.node_candidate_k
-                    items = graph.retrieve_module.retrieve_items(req.query, **kwargs)
+                    rq = expand_retrieve_query(req.query, hist)
+                    items = graph.retrieve_module.retrieve_items(rq, **kwargs)
                     try:
                         timing = dict(graph.retrieve_module.get_last_timing() or {})
                     except Exception:
@@ -397,6 +730,41 @@ async def stream(req: StreamRequest, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _alias_api_prefix() -> None:
+    """Local (no nginx): frontend calls /api/*, same handlers as /health, /query, ..."""
+    seen = {(r.path, tuple(r.methods or [])) for r in app.routes if hasattr(r, "path")}
+    extras = []
+    for route in list(app.routes):
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        endpoint = getattr(route, "endpoint", None)
+        if not path or not methods or endpoint is None:
+            continue
+        if path.startswith("/api"):
+            continue
+        if path in {"/", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}:
+            continue
+        alias = "/api" + path
+        key = (alias, tuple(methods))
+        if key in seen:
+            continue
+        extras.append((alias, endpoint, methods, route))
+        seen.add(key)
+    for alias, endpoint, methods, route in extras:
+        kw = {}
+        name = getattr(route, "name", None)
+        if name:
+            kw["name"] = "api_" + name
+        if getattr(route, "response_model", None) is not None:
+            kw["response_model"] = route.response_model
+        app.add_api_route(alias, endpoint, methods=list(methods), **kw)
+
+
+_alias_api_prefix()
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
 
 
 def run() -> None:

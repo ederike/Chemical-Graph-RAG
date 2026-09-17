@@ -75,6 +75,7 @@ def run_agentic_query(
     query: str,
     *,
     pretty: bool = False,
+    history=None,
 ) -> Union[dict, str]:
     """
     同一条对话上的工具循环：search / read_doc / read_chunk / note_evidence / graph_neighbors。
@@ -87,8 +88,10 @@ def run_agentic_query(
         agentic_cfg = AgenticConfig()
 
     logger = dhmf.logger
+    from ..utils.chat_history import attach_history
+
     llm = build_agentic_llm(config)
-    q = (query or "").strip()
+    q = attach_history(query, history)
 
     trace = TraceSink()
     trace_path = None

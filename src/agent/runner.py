@@ -77,6 +77,7 @@ def run_agent_query(
     query: str,
     *,
     pretty: bool = False,
+    history=None,
 ) -> Union[dict, str]:
     """
     规划检索依赖图（并行加入纯 LLM 步；多跳且开启时再加入原问题直检）→ 按就绪序执行 → 汇总。
@@ -95,9 +96,11 @@ def run_agent_query(
     ctx      = AgentContext(cfg=agent_cfg, llm=llm, skill=skill, logger=logger)
     graph    = build_agent_graph(ctx)
 
+    from ..utils.chat_history import attach_history
+
     t0 = time.perf_counter()
     init: AgentState = {
-        'query': (query or '').strip(),
+        'query': attach_history(query, history),
         'plan': [], 'results': {},
         'final_answer': '', 'final_status': 0,
         'respond': {}, 'error': '',

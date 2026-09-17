@@ -2,6 +2,9 @@
   const TIMEOUT_KEY = "cgr_timeout";
   const THEME_KEY = "cgr_theme";
   const SPLIT_KEY = "cgr_split";
+  const TOKEN_KEY = "cgr_token";
+  const USER_KEY = "cgr_user";
+  const SIDEBAR_KEY = "cgr_sidebar";
   const MODES = {
     retrieve: {
       label: "Retrieve 仅检索",
@@ -47,6 +50,16 @@
   let abortTimer = null;
   let abortReason = "";
   let runTimerId = null;
+  let conversationId = null;
+  let conversations = [];
+  let currentTurns = [];
+  let liveSteps = [];
+  let lastQuery = "";
+  let paintAnswer = true;
+  let viewingTurnId = null;
+  let maxContext = 0;
+  let contextReserve = 4096;
+  let contextModel = "";
 
   function esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -256,7 +269,226 @@
     return out.join("");
   }
   function authHeader() {
-    return authToken ? { Authorization: "Basic " + authToken } : {};
+    return authToken ? { Authorization: "Bearer " + authToken } : {};
+  }
+  function persistAuth() {
+    try {
+      if (authToken) {
+        localStorage.setItem(TOKEN_KEY, authToken);
+        localStorage.setItem(USER_KEY, authUser || "");
+      } else {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+      }
+    } catch (_) {}
+  }
+  async function apiJson(method, path, body, opts) {
+    const res = await fetch(path, {
+      method,
+      headers: {
+        ...(body != null ? { "Content-Type": "application/json" } : {}),
+        ...authHeader(),
+      },
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+    if (res.status === 401) {
+      const errBody = data && data.detail;
+      const detail = typeof errBody === "string" && errBody ? errBody : "unauthorized";
+      if (!opts || !opts.silent) showGate("登录已失效，请重新输入密钥。");
+      throw new Error(detail);
+    }
+    if (!res.ok) {
+      const detail = data.detail;
+      const msg = typeof detail === "string"
+        ? detail
+        : (detail && JSON.stringify(detail)) || res.statusText;
+      throw new Error(msg || "请求失败");
+    }
+    return data;
+  }
+  function groupLabel(iso) {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return "更早";
+    const d = new Date(t);
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diff = (start - day) / 86400000;
+    if (diff <= 0) return "今天";
+    if (diff === 1) return "昨天";
+    if (diff < 7) return "7 天内";
+    if (diff < 30) return "30 天内";
+    return "更早";
+  }
+  function renderSessionList() {
+    const nav = $("session-nav");
+    if (!nav) return;
+    const q = (($("session-search") && $("session-search").value) || "").trim().toLowerCase();
+    const items = conversations.filter((c) => {
+      if (!q) return true;
+      return (c.title || "").toLowerCase().includes(q) || (c.last_query || "").toLowerCase().includes(q);
+    });
+    if (!items.length) {
+      nav.innerHTML = `<div class="session-empty">${
+        conversations.length ? "没有匹配的对话。" : "还没有对话。点「新对话」或直接提问。"
+      }</div>`;
+      return;
+    }
+    let html = "";
+    let lastG = "";
+    items.forEach((c) => {
+      const g = groupLabel(c.updated_at);
+      if (g !== lastG) {
+        html += `<div class="session-group">${esc(g)}</div>`;
+        lastG = g;
+      }
+      const on = c.id === conversationId ? " on" : "";
+      html += `<div class="session-item${on}" data-id="${esc(c.id)}" title="${esc(c.title || "")}">
+        <span class="session-name">${esc(c.title || "新对话")}</span>
+        <span class="session-actions">
+          <button type="button" data-act="rename" title="重命名">改</button>
+          <button type="button" data-act="delete" class="danger" title="删除">删</button>
+        </span>
+      </div>`;
+    });
+    nav.innerHTML = html;
+  }
+  async function refreshSessions() {
+    const data = await apiJson("GET", "/api/conversations");
+    conversations = Array.isArray(data.items) ? data.items : [];
+    renderSessionList();
+  }
+  function emptyProcess() {
+    processChip.textContent = "待命";
+    processChip.className = "chip";
+    processBody.innerHTML = `<div class="empty">
+      <p>过程轨迹会出现在这里。</p>
+      <p class="muted">Agentic 按轮次展开工具调用；Agent 展示规划与子步骤；Dual-path / 仅检索给出预览。</p>
+    </div>`;
+  }
+  function emptyAnswer() {
+    answerMeta.textContent = "";
+    answerBody.innerHTML = `<div class="empty"><p>模型的最终结论会写在这一栏。左侧可切换本账号的历史对话。</p></div>`;
+  }
+  function startDraft() {
+    conversationId = null;
+    currentTurns = [];
+    liveSteps = [];
+    viewingTurnId = null;
+    const title = $("session-title");
+    if (title) title.textContent = "新对话";
+    emptyProcess();
+    emptyAnswer();
+    renderSessionList();
+    updateCtxBar();
+  }
+  function renderThread(turns, activeId) {
+    currentTurns = turns || [];
+    if (!currentTurns.length) {
+      emptyAnswer();
+      return;
+    }
+    const aid = activeId || currentTurns[currentTurns.length - 1].id;
+    answerBody.innerHTML = currentTurns.map((t) => {
+      const ans = t.answer || (t.result && t.result.answer) || "";
+      const retrieve = t.mode === "retrieve";
+      const body = retrieve
+        ? `<div class="answer-text">${esc(ans || "本模式不调用生成模型，只返回检索证据。")}</div>`
+        : `<div class="answer-md">${renderMarkdown(ans)}</div>`;
+      return `<article class="turn-block${t.id === aid ? " on" : ""}" data-turn="${t.id}">
+        <div class="turn-kicker">第 ${esc(t.turn_index)} 问 · ${esc(t.mode)}</div>
+        <div class="turn-q">${esc(t.query)}</div>
+        ${body}
+        ${sourcesHtml(t.sources || (t.result && t.result.retrieval_sources) || [])}
+      </article>`;
+    }).join("");
+    answerBody.scrollTop = answerBody.scrollHeight;
+  }
+  function showTurnProcess(turn) {
+    if (!turn) {
+      viewingTurnId = null;
+      emptyProcess();
+      return;
+    }
+    viewingTurnId = turn.id;
+    const data = turn.result && typeof turn.result === "object" ? turn.result : {};
+    const steps = Array.isArray(turn.stream_steps) ? turn.stream_steps : [];
+    processChip.textContent = Number(turn.status) === 1 || Number(data.status) === 1 ? "完成" : "记录";
+    processChip.className = "chip";
+    answerMeta.textContent = turn.mode || "";
+    paintAnswer = false;
+    try {
+      if (steps.length) {
+        processBody.innerHTML = `<div class="trace" id="live-trace"></div>`;
+        steps.forEach((ev) => appendStep(ev, { noScroll: true }));
+        return;
+      }
+      if (turn.mode === "retrieve") renderRetrieve(Object.assign({ items: [] }, data));
+      else if (turn.mode === "dual") renderDual(data);
+      else if (turn.mode === "agent") renderAgent(data);
+      else renderAgentic(data);
+    } finally {
+      paintAnswer = true;
+    }
+  }
+  async function loadConversation(id) {
+    const full = await apiJson("GET", `/api/conversations/${id}`);
+    conversationId = full.id;
+    currentTurns = Array.isArray(full.turns) ? full.turns : [];
+    const title = $("session-title");
+    if (title) title.textContent = full.title || "对话";
+    const last = currentTurns[currentTurns.length - 1];
+    renderThread(currentTurns, last && last.id);
+    if (last) showTurnProcess(last);
+    else emptyProcess();
+    renderSessionList();
+    closeMobileSidebar();
+    updateCtxBar();
+  }
+  async function persistTurn(query, data) {
+    if (!conversationId) {
+      const created = await apiJson("POST", "/api/conversations", { title: clip(query, 40) });
+      conversationId = created.id;
+    }
+    const retrieveNote = data && Array.isArray(data.items)
+      ? `本模式不调用生成模型，只返回检索证据。共命中 ${data.items.length} 条。`
+      : "";
+    await apiJson("POST", `/api/conversations/${conversationId}/turns`, {
+      query,
+      mode,
+      answer: (data && data.answer) || retrieveNote,
+      status: data && data.status != null ? data.status : 1,
+      latency_s: data && data.latency_s != null ? data.latency_s : null,
+      sources: (data && data.retrieval_sources) || [],
+      result: data || {},
+      stream_steps: liveSteps.slice(),
+    });
+    await refreshSessions();
+    const full = await apiJson("GET", `/api/conversations/${conversationId}`);
+    currentTurns = Array.isArray(full.turns) ? full.turns : [];
+    const title = $("session-title");
+    if (title) title.textContent = full.title || "对话";
+    renderThread(currentTurns, currentTurns.length ? currentTurns[currentTurns.length - 1].id : null);
+    updateCtxBar();
+  }
+  function setSidebarCollapsed(on) {
+    document.documentElement.classList.toggle("sidebar-collapsed", !!on);
+    document.documentElement.classList.remove("sidebar-open");
+    try { localStorage.setItem(SIDEBAR_KEY, on ? "collapsed" : "open"); } catch (_) {}
+    const scrim = $("sidebar-scrim");
+    if (scrim) scrim.hidden = true;
+  }
+  function openMobileSidebar() {
+    document.documentElement.classList.add("sidebar-open");
+    const scrim = $("sidebar-scrim");
+    if (scrim) scrim.hidden = false;
+  }
+  function closeMobileSidebar() {
+    document.documentElement.classList.remove("sidebar-open");
+    const scrim = $("sidebar-scrim");
+    if (scrim) scrim.hidden = true;
   }
   function getTimeout() {
     const n = Number(localStorage.getItem(TIMEOUT_KEY) || 300);
@@ -295,13 +527,28 @@
     const who = $("who-label");
     if (who) who.textContent = authUser || "已验证";
     closeSettings();
+    startDraft();
+    loadContextInfo();
+    refreshSessions().catch(() => {});
   }
   function showGate(msg) {
     stopQuery("logout");
+    const prev = authToken;
     authToken = null;
     authUser = "";
+    persistAuth();
+    conversationId = null;
+    conversations = [];
+    currentTurns = [];
     document.body.dataset.view = "login";
     closeSettings();
+    closeMobileSidebar();
+    if (prev) {
+      fetch("/api/auth/logout", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + prev },
+      }).catch(() => {});
+    }
     const err = $("login-error");
     if (msg) {
       err.hidden = false;
@@ -344,15 +591,12 @@
 
   async function probe() {
     if (!authToken) return false;
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
     try {
-      const res = await fetch("/api/health", { headers: authHeader(), signal: ctrl.signal });
-      return res.ok;
+      const data = await apiJson("GET", "/api/auth/me", null, { silent: true });
+      if (data && data.username) authUser = data.username;
+      return true;
     } catch {
       return false;
-    } finally {
-      clearTimeout(t);
     }
   }
 
@@ -407,6 +651,15 @@
     const arr = Array.isArray(list) ? list.filter(Boolean) : [];
     if (!arr.length) return "";
     return `<div class="sources">${arr.slice(0, 12).map((s) => `<span class="src">${esc(s)}</span>`).join("")}</div>`;
+  }
+
+  function paintRetrieveAnswer(data) {
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!paintAnswer) return;
+    answerBody.innerHTML = `
+      <div class="answer-text">本模式不调用生成模型，只返回检索证据。共命中 ${items.length} 条，详见上方过程栏。</div>
+      ${data.retrieve_timing ? `<p class="answer-meta-line">retrieve_timing 已返回</p>` : ""}`;
+    answerMeta.textContent = `${items.length} 条`;
   }
 
   function renderDual(data) {
@@ -489,14 +742,14 @@ ${esc(clip(c.result || "", 280))}</p>`;
           </article>`).join("")
         : `<article class="card"><p class="muted">没有命中片段。</p></article>`
     }</div>`;
-    answerBody.innerHTML = `
-      <div class="answer-text">本模式不调用生成模型，只返回检索证据。共命中 ${items.length} 条，详见上方过程栏。</div>
-      ${data.retrieve_timing ? `<p class="answer-meta-line">retrieve_timing 已返回</p>` : ""}`;
-    answerMeta.textContent = `${items.length} 条`;
+    paintRetrieveAnswer(data);
   }
 
   function fillAnswer(data) {
     const ok = Number(data.status) === 1;
+    answerMeta.textContent = ok ? "完成" : "未成功";
+    if (!ok) processChip.classList.add("err");
+    if (!paintAnswer) return;
     const ans = data.answer || "（空回答）";
     answerBody.innerHTML = `
       <div class="answer-md">${renderMarkdown(ans)}</div>
@@ -508,8 +761,6 @@ ${esc(clip(c.result || "", 280))}</p>`;
           data.usage_total_tokens != null ? `tokens ${data.usage_total_tokens}` : "",
         ].filter(Boolean).join(" · ")
       }</p>`;
-    answerMeta.textContent = ok ? "完成" : "未成功";
-    if (!ok) processChip.classList.add("err");
   }
 
   function startTimer() {
@@ -534,15 +785,24 @@ ${esc(clip(c.result || "", 280))}</p>`;
   }
 
   function waitingUi() {
+    liveSteps = [];
     processChip.textContent = "进行中";
     processChip.className = "chip busy";
     answerMeta.textContent = "";
     processBody.innerHTML = `<div class="trace" id="live-trace"></div>`;
-    answerBody.innerHTML = `<div class="empty"><p>正在生成最终回答…</p></div>`;
+    const pending = document.createElement("article");
+    pending.id = "pending-turn";
+    pending.className = "turn-block";
+    pending.innerHTML = `<div class="turn-kicker">进行中</div><div class="empty"><p>正在生成最终回答…</p></div>`;
+    if (!answerBody.querySelector(".turn-block")) answerBody.innerHTML = "";
+    const old = $("pending-turn");
+    if (old) old.remove();
+    answerBody.appendChild(pending);
+    answerBody.scrollTop = answerBody.scrollHeight;
     startTimer();
   }
 
-  function appendStep(ev) {
+  function appendStep(ev, opts) {
     let box = $("live-trace");
     if (!box) {
       processBody.innerHTML = `<div class="trace" id="live-trace"></div>`;
@@ -557,7 +817,16 @@ ${esc(clip(c.result || "", 280))}</p>`;
       `<h3>${esc(title)}</h3>` +
       (preview ? `<div class="preview">${esc(preview)}</div>` : "");
     box.appendChild(art);
-    processBody.scrollTop = processBody.scrollHeight;
+    if (!opts || !opts.noScroll) {
+      processBody.scrollTop = processBody.scrollHeight;
+    }
+    if (asking) {
+      liveSteps.push({
+        stage: ev.stage || "step",
+        title: ev.title || ev.stage || "步骤",
+        preview: ev.preview || "",
+      });
+    }
   }
 
   async function readSSE(res, onEvent) {
@@ -585,6 +854,87 @@ ${esc(clip(c.result || "", 280))}</p>`;
     }
   }
 
+  function historyPayload() {
+    return (currentTurns || [])
+      .filter((t) => t && String(t.query || "").trim())
+      .map((t) => {
+        const res = t.result && typeof t.result === "object" ? t.result : {};
+        const pt = Number(res.last_prompt_tokens || res.usage_prompt_tokens || 0) || 0;
+        const row = { query: String(t.query), answer: String(t.answer || "") };
+        if (pt > 0) {
+          row.last_prompt_tokens = pt;
+          row.usage_prompt_tokens = pt;
+        }
+        return row;
+      });
+  }
+  function fmtTokens(n) {
+    n = Math.max(0, Math.round(Number(n) || 0));
+    if (n >= 102400) return (n / 1024).toFixed(0) + "k";
+    if (n >= 1024) return (n / 1024).toFixed(1).replace(/\.0$/, "") + "k";
+    return String(n);
+  }
+  function estimateLocalTokens(turns, extraQ) {
+    const list = turns || [];
+    let chars = 0;
+    list.forEach((t) => {
+      chars += String(t.query || "").length + String(t.answer || "").length;
+    });
+    chars += String(extraQ || "").length;
+    const overhead = list.length || extraQ ? 8000 : 0;
+    const fromChars = Math.floor(chars / 2) + overhead;
+    let lastPt = 0;
+    let lastAns = "";
+    for (let i = list.length - 1; i >= 0; i--) {
+      const res = list[i].result && typeof list[i].result === "object" ? list[i].result : {};
+      lastPt = Number(res.last_prompt_tokens || res.usage_prompt_tokens || 0) || 0;
+      lastAns = String(list[i].answer || "");
+      if (lastPt > 0) break;
+    }
+    if (lastPt > 0) {
+      const extra = Math.floor(String(extraQ || "").length / 2) + Math.floor(lastAns.length / 2);
+      return Math.max(fromChars, lastPt + extra);
+    }
+    return fromChars;
+  }
+  function updateCtxBar(extraQ) {
+    const bar = $("ctx-bar");
+    const fill = $("ctx-bar-fill");
+    const label = $("ctx-bar-label");
+    if (!bar || !fill || !label) return;
+    const used = estimateLocalTokens(currentTurns, extraQ || "");
+    const max = maxContext || 0;
+    const limit = max > 0 ? Math.max(1, max - (contextReserve || 0)) : 0;
+    const pct = max > 0 ? Math.min(100, (used / max) * 100) : 0;
+    fill.style.width = (max ? pct : 0) + "%";
+    bar.classList.remove("warn", "danger", "over");
+    if (max && used >= limit) bar.classList.add("over");
+    else if (pct >= 90) bar.classList.add("danger");
+    else if (pct >= 70) bar.classList.add("warn");
+    if (!max) {
+      label.textContent = "上下文 —";
+      return;
+    }
+    const model = contextModel ? ` · ${contextModel}` : "";
+    label.textContent = `上下文 ${fmtTokens(used)} / ${fmtTokens(max)}${model}`;
+    bar.title = `当前会话预计占用 ${used} / ${max} tokens（模型窗口 ${max}，预留 ${contextReserve}）`;
+  }
+  async function loadContextInfo() {
+    try {
+      const info = await apiJson("GET", "/api/context", null, { silent: true });
+      maxContext = Number(info.max_context_tokens) || 0;
+      contextReserve = Number(info.reserve_tokens) || 4096;
+      contextModel = info.model || "";
+    } catch (_) {}
+    updateCtxBar();
+  }
+  function contextWouldOverflow(extraQ) {
+    if (!maxContext) return false;
+    const used = estimateLocalTokens(currentTurns, extraQ || "");
+    const limit = Math.max(1, maxContext - (contextReserve || 0));
+    return used >= limit;
+  }
+
   async function streamQuery(q, timeoutMs) {
     activeCtrl = new AbortController();
     abortReason = "";
@@ -600,7 +950,7 @@ ${esc(clip(c.result || "", 280))}</p>`;
           Accept: "text/event-stream",
           ...authHeader(),
         },
-        body: JSON.stringify({ query: q, mode }),
+        body: JSON.stringify({ query: q, mode, history: historyPayload() }),
         signal: activeCtrl.signal,
       });
       if (res.status === 401) {
@@ -609,7 +959,7 @@ ${esc(clip(c.result || "", 280))}</p>`;
       }
       if (res.status === 404) {
         const spec = MODES[mode];
-        return await apiPost(spec.path, spec.body(q), timeoutMs);
+        return await apiPost(spec.path, { ...spec.body(q), history: historyPayload() }, timeoutMs);
       }
       if (!res.ok) {
         let detail = res.statusText;
@@ -663,17 +1013,20 @@ ${esc(clip(c.result || "", 280))}</p>`;
     const pass = $("login-pass").value;
     const btn = $("login-btn");
     btn.disabled = true;
-    authUser = user;
-    authToken = btoa(unescape(encodeURIComponent(`${user}:${pass}`)));
-    const ok = await probe();
-    btn.disabled = false;
-    if (ok) {
+    try {
+      const data = await apiJson("POST", "/api/auth/login", { username: user, password: pass }, { silent: true });
+      authToken = data.token;
+      authUser = data.username || user;
+      persistAuth();
       $("login-pass").value = "";
       showApp();
-    } else {
+    } catch (err) {
       authToken = null;
       authUser = "";
-      showGate("用户名或密钥不正确。");
+      persistAuth();
+      showGate(err.message === "unauthorized" ? "用户名或密钥不正确。" : (err.message || "登录失败"));
+    } finally {
+      btn.disabled = false;
     }
   });
 
@@ -682,6 +1035,67 @@ ${esc(clip(c.result || "", 280))}</p>`;
     e.stopPropagation();
     showGate("");
   });
+  $("btn-new-chat").addEventListener("click", (e) => {
+    e.preventDefault();
+    startDraft();
+    closeMobileSidebar();
+    $("query-input").focus();
+  });
+  $("session-search").addEventListener("input", () => renderSessionList());
+  $("session-nav").addEventListener("click", async (e) => {
+    const item = e.target.closest(".session-item");
+    if (!item) return;
+    const id = item.dataset.id;
+    const act = e.target.closest("button[data-act]");
+    try {
+      if (act && act.dataset.act === "rename") {
+        e.preventDefault();
+        const cur = conversations.find((c) => c.id === id);
+        const title = window.prompt("对话标题", (cur && cur.title) || "");
+        if (!title || !title.trim()) return;
+        await apiJson("PATCH", `/api/conversations/${id}`, { title: title.trim() });
+        await refreshSessions();
+        if (conversationId === id && $("session-title")) {
+          $("session-title").textContent = title.trim();
+        }
+        return;
+      }
+      if (act && act.dataset.act === "delete") {
+        e.preventDefault();
+        if (!window.confirm("删除这条对话？不可恢复。")) return;
+        await apiJson("DELETE", `/api/conversations/${id}`);
+        if (conversationId === id) startDraft();
+        await refreshSessions();
+        return;
+      }
+      if (id && id !== conversationId) await loadConversation(id);
+    } catch (err) {
+      if (err.message !== "unauthorized") window.alert(err.message || "操作失败");
+    }
+  });
+  answerBody.addEventListener("click", (e) => {
+    const qel = e.target.closest(".turn-q");
+    if (!qel) return;
+    const block = qel.closest(".turn-block");
+    if (!block) return;
+    const id = Number(block.dataset.turn);
+    const turn = currentTurns.find((t) => t.id === id);
+    if (!turn) return;
+    if (viewingTurnId === turn.id) return;
+    answerBody.querySelectorAll(".turn-block").forEach((el) => {
+      el.classList.toggle("on", el === block);
+    });
+    showTurnProcess(turn);
+  });
+  $("btn-sidebar-collapse").addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 860px)").matches) closeMobileSidebar();
+    else setSidebarCollapsed(true);
+  });
+  $("btn-sidebar-open").addEventListener("click", () => {
+    if (window.matchMedia("(max-width: 860px)").matches) openMobileSidebar();
+    else setSidebarCollapsed(false);
+  });
+  $("sidebar-scrim").addEventListener("click", () => closeMobileSidebar());
   $("btn-settings").addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -728,9 +1142,18 @@ ${esc(clip(c.result || "", 280))}</p>`;
     if (asking) return;
     const q = $("query-input").value.trim();
     if (!q) return;
+    if (contextWouldOverflow(q)) {
+      updateCtxBar(q);
+      window.alert(
+        `当前对话上下文已达到回答模型上限（${fmtTokens(maxContext)} tokens，模型 ${contextModel || "LLM"}）。请点击左侧「新对话」开一个新会话再继续。`
+      );
+      return;
+    }
+    lastQuery = q;
     $("query-input").value = "";
     setAsking(true);
     waitingUi();
+    updateCtxBar(q);
     try {
       const data = await streamQuery(q, getTimeout() * 1000);
       processChip.textContent = "完成";
@@ -742,17 +1165,20 @@ ${esc(clip(c.result || "", 280))}</p>`;
           title: it.source || `命中 ${i + 1}`,
           preview: it.content || "",
         }));
-        answerBody.innerHTML = `<div class="answer-text">本模式不调用生成模型，只返回检索证据。共命中 ${items.length} 条，详见上方过程栏。</div>`;
-        answerMeta.textContent = `${items.length} 条`;
       } else if ($("live-trace") && $("live-trace").children.length) {
-        fillAnswer(data);
+        /* process already streamed */
       } else if (mode === "dual") renderDual(data);
       else if (mode === "agent") renderAgent(data);
       else if (mode === "agentic") renderAgentic(data);
       else renderRetrieve(data);
-      answerBody.scrollTop = 0;
+      await persistTurn(q, data);
     } catch (err) {
       if (err.message === "unauthorized") return;
+      if (String(err.message || "").includes("请点击「新对话」") || String(err.message || "").includes("已达到回答模型上限")) {
+        updateCtxBar(q);
+        window.alert(err.message);
+        return;
+      }
       const stopped = err.message === "已终止本次查询";
       processChip.textContent = stopped ? "已终止" : "失败";
       processChip.className = stopped ? "chip" : "chip err";
@@ -761,7 +1187,18 @@ ${esc(clip(c.result || "", 280))}</p>`;
         title: stopped ? "已停止" : "错误",
         preview: err.message,
       });
-      answerBody.innerHTML = `<div class="empty"><p>${stopped ? "本次查询已终止。" : "没有最终回答。"}</p></div>`;
+      try {
+        await persistTurn(q, {
+          status: 0,
+          answer: stopped ? "本次查询已终止。" : (err.message || "没有最终回答。"),
+        });
+      } catch (_) {
+        const pending = $("pending-turn");
+        if (pending) pending.remove();
+        if (!answerBody.querySelector(".turn-block")) {
+          answerBody.innerHTML = `<div class="empty"><p>${stopped ? "本次查询已终止。" : "没有最终回答。"}</p></div>`;
+        }
+      }
     } finally {
       stopTimer();
       setAsking(false);
@@ -849,4 +1286,19 @@ ${esc(clip(c.result || "", 280))}</p>`;
   pickMode("agentic");
   initSplit();
   document.body.dataset.view = "login";
+  (async () => {
+    try {
+      authToken = localStorage.getItem(TOKEN_KEY) || null;
+      authUser = localStorage.getItem(USER_KEY) || "";
+    } catch (_) {}
+    if (authToken && await probe()) {
+      persistAuth();
+      showApp();
+    } else {
+      authToken = null;
+      authUser = "";
+      persistAuth();
+      document.body.dataset.view = "login";
+    }
+  })();
 })();
