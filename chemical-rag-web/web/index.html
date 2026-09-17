@@ -13,7 +13,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20260917s" />
 </head>
 <body data-view="login">
   <div id="login-gate" class="gate">
@@ -72,7 +72,7 @@
       </div>
     </header>
 
-    <main class="workspace">
+    <main class="workspace" id="workspace">
       <section class="panel process-panel">
         <div class="panel-head">
           <h2>过程</h2>
@@ -85,6 +85,15 @@
           </div>
         </div>
       </section>
+
+      <div
+        class="split-gutter"
+        id="split-gutter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖动调整过程栏与最终回答栏大小"
+        tabindex="0"
+      ></div>
 
       <section class="panel answer-panel">
         <div class="panel-head">
@@ -142,6 +151,6 @@
     </footer>
   </div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260917s"></script>
 </body>
 </html>

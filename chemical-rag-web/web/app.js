@@ -1,6 +1,7 @@
 (() => {
   const TIMEOUT_KEY = "cgr_timeout";
   const THEME_KEY = "cgr_theme";
+  const SPLIT_KEY = "cgr_split";
   const MODES = {
     retrieve: {
       label: "Retrieve 仅检索",
@@ -55,6 +56,204 @@
   function clip(s, n) {
     s = String(s ?? "").trim();
     return s.length > n ? s.slice(0, n) + "…" : s;
+  }
+
+  function renderMarkdown(src) {
+    src = String(src ?? "").replace(/\r\n/g, "\n");
+    if (!src.trim()) return "";
+
+    const fences = [];
+    src = src.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      const token = `\u0000F${fences.length}\u0000`;
+      fences.push({ code: String(code || "").replace(/\n$/, "") });
+      return token;
+    });
+
+    const lines = src.split("\n");
+    const out = [];
+    let i = 0;
+    const fenceRe = /^\u0000F(\d+)\u0000\s*$/;
+
+    function inline(text) {
+      const codes = [];
+      let s = String(text ?? "");
+      s = s.replace(/`([^`]+)`/g, (_, c) => {
+        const t = `\u0000C${codes.length}\u0000`;
+        codes.push(esc(c));
+        return t;
+      });
+      s = esc(s);
+      s = s.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      );
+      s = s.replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>");
+      s = s.replace(/~~([\s\S]+?)~~/g, "<del>$1</del>");
+      s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
+      s = s.replace(/\u0000C(\d+)\u0000/g, (_, n) => `<code>${codes[Number(n)]}</code>`);
+      return s;
+    }
+
+    function splitCells(row) {
+      let r = String(row).trim();
+      if (r.startsWith("|")) r = r.slice(1);
+      if (r.endsWith("|")) r = r.slice(0, -1);
+      return r.split("|").map((c) => c.trim());
+    }
+    function isSepRow(line) {
+      if (!line || !line.includes("-")) return false;
+      const cells = splitCells(line);
+      return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c.replace(/\s/g, "")));
+    }
+    function listMatch(line) {
+      const m = /^(\s*)([-*+]|\d+\.)\s+(.*)$/.exec(line);
+      if (!m) return null;
+      return {
+        indent: m[1].replace(/\t/g, "    ").length,
+        ordered: /\d/.test(m[2]),
+        text: m[3],
+      };
+    }
+
+    function parseList() {
+      const items = [];
+      while (i < lines.length) {
+        const blank = lines[i].trim() === "";
+        if (blank) {
+          let j = i + 1;
+          while (j < lines.length && lines[j].trim() === "") j++;
+          if (j < lines.length && (listMatch(lines[j]) || /^\s{2,}\S/.test(lines[j]))) {
+            i++;
+            continue;
+          }
+          break;
+        }
+        const lm = listMatch(lines[i]);
+        if (lm) {
+          items.push({ ...lm, extra: [] });
+          i++;
+          continue;
+        }
+        if (items.length && /^\s{2,}\S/.test(lines[i])) {
+          items[items.length - 1].extra.push(lines[i].trim());
+          i++;
+          continue;
+        }
+        break;
+      }
+      function renderItems(from, minIndent) {
+        if (from >= items.length) return { html: "", next: from };
+        const ordered = items[from].ordered;
+        let html = ordered ? "<ol>" : "<ul>";
+        let k = from;
+        while (
+          k < items.length &&
+          items[k].indent === minIndent &&
+          items[k].ordered === ordered
+        ) {
+          let body = inline(items[k].text);
+          if (items[k].extra.length) body += " " + inline(items[k].extra.join(" "));
+          k++;
+          if (k < items.length && items[k].indent > minIndent) {
+            const nested = renderItems(k, items[k].indent);
+            body += nested.html;
+            k = nested.next;
+          }
+          html += `<li>${body}</li>`;
+        }
+        html += ordered ? "</ol>" : "</ul>";
+        if (k < items.length && items[k].indent === minIndent) {
+          const more = renderItems(k, minIndent);
+          html += more.html;
+          k = more.next;
+        }
+        return { html, next: k };
+      }
+      if (!items.length) return "";
+      const min = Math.min(...items.map((x) => x.indent));
+      return renderItems(0, min).html;
+    }
+
+    while (i < lines.length) {
+      const line = lines[i];
+      if (line.trim() === "") {
+        i++;
+        continue;
+      }
+      const fm = fenceRe.exec(line.trim());
+      if (fm) {
+        out.push(`<pre><code>${esc(fences[Number(fm[1])].code)}</code></pre>`);
+        i++;
+        continue;
+      }
+      const hm = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+      if (hm) {
+        const lv = Math.min(4, hm[1].length);
+        out.push(`<h${lv}>${inline(hm[2])}</h${lv}>`);
+        i++;
+        continue;
+      }
+      if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+        out.push("<hr>");
+        i++;
+        continue;
+      }
+      if (line.includes("|") && i + 1 < lines.length && isSepRow(lines[i + 1])) {
+        const heads = splitCells(line);
+        i += 2;
+        const rows = [];
+        while (
+          i < lines.length &&
+          lines[i].includes("|") &&
+          lines[i].trim() &&
+          !listMatch(lines[i])
+        ) {
+          rows.push(splitCells(lines[i]));
+          i++;
+        }
+        let table = '<div class="table-wrap"><table><thead><tr>';
+        heads.forEach((h) => {
+          table += `<th>${inline(h)}</th>`;
+        });
+        table += "</tr></thead><tbody>";
+        rows.forEach((r) => {
+          table += "<tr>";
+          for (let c = 0; c < heads.length; c++) table += `<td>${inline(r[c] || "")}</td>`;
+          table += "</tr>";
+        });
+        table += "</tbody></table></div>";
+        out.push(table);
+        continue;
+      }
+      if (/^\s*>/.test(line)) {
+        const qs = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) {
+          qs.push(lines[i].replace(/^\s*>\s?/, ""));
+          i++;
+        }
+        out.push(`<blockquote>${inline(qs.join(" "))}</blockquote>`);
+        continue;
+      }
+      if (listMatch(line)) {
+        out.push(parseList());
+        continue;
+      }
+      const paras = [];
+      while (i < lines.length) {
+        const L = lines[i];
+        if (L.trim() === "") break;
+        if (fenceRe.test(L.trim())) break;
+        if (/^(#{1,6})\s+/.test(L)) break;
+        if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(L)) break;
+        if (listMatch(L)) break;
+        if (L.includes("|") && i + 1 < lines.length && isSepRow(lines[i + 1])) break;
+        if (/^\s*>/.test(L)) break;
+        paras.push(L);
+        i++;
+      }
+      out.push(`<p>${inline(paras.join("\n")).replace(/\n/g, "<br>")}</p>`);
+    }
+    return out.join("");
   }
   function authHeader() {
     return authToken ? { Authorization: "Basic " + authToken } : {};
@@ -300,7 +499,7 @@ ${esc(clip(c.result || "", 280))}</p>`;
     const ok = Number(data.status) === 1;
     const ans = data.answer || "（空回答）";
     answerBody.innerHTML = `
-      <div class="answer-text">${esc(ans)}</div>
+      <div class="answer-md">${renderMarkdown(ans)}</div>
       ${sourcesHtml(data.retrieval_sources)}
       <p class="answer-meta-line">${
         [
@@ -576,8 +775,78 @@ ${esc(clip(c.result || "", 280))}</p>`;
     }
   });
 
+  function isNarrowSplit() {
+    return window.matchMedia("(max-width: 720px)").matches;
+  }
+  function applySplit(pct) {
+    pct = Math.min(78, Math.max(22, Number(pct) || 52));
+    const workspace = $("workspace");
+    if (workspace) workspace.style.setProperty("--split", pct + "%");
+    try { localStorage.setItem(SPLIT_KEY, String(Math.round(pct * 10) / 10)); } catch (_) {}
+    return pct;
+  }
+  function initSplit() {
+    const workspace = $("workspace");
+    const gutter = $("split-gutter");
+    let saved = 52;
+    try { saved = Number(localStorage.getItem(SPLIT_KEY) || 52); } catch (_) {}
+    applySplit(saved);
+    if (!workspace || !gutter) return;
+
+    const syncOri = () => {
+      gutter.setAttribute("aria-orientation", isNarrowSplit() ? "horizontal" : "vertical");
+    };
+    syncOri();
+    window.addEventListener("resize", syncOri);
+
+    let dragging = false;
+    const posToPct = (x, y) => {
+      const r = workspace.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return 52;
+      return isNarrowSplit()
+        ? ((y - r.top) / r.height) * 100
+        : ((x - r.left) / r.width) * 100;
+    };
+    const onMove = (ev) => {
+      if (!dragging) return;
+      const t = ev.touches ? ev.touches[0] : ev;
+      applySplit(posToPct(t.clientX, t.clientY));
+      ev.preventDefault();
+    };
+    const onUp = () => {
+      dragging = false;
+      document.body.classList.remove("is-resizing", "is-resizing-row");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+    const startDrag = (ev) => {
+      dragging = true;
+      document.body.classList.add(isNarrowSplit() ? "is-resizing-row" : "is-resizing");
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      window.addEventListener("touchmove", onMove, { passive: false });
+      window.addEventListener("touchend", onUp);
+      ev.preventDefault();
+    };
+    gutter.addEventListener("mousedown", startDrag);
+    gutter.addEventListener("touchstart", startDrag, { passive: false });
+    gutter.addEventListener("dblclick", () => applySplit(52));
+    gutter.addEventListener("keydown", (ev) => {
+      const cur = Number(String(workspace.style.getPropertyValue("--split") || "52").replace("%", "")) || 52;
+      const step = ev.shiftKey ? 8 : 3;
+      if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { applySplit(cur - step); ev.preventDefault(); }
+      else if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { applySplit(cur + step); ev.preventDefault(); }
+      else if (ev.key === "Home") { applySplit(22); ev.preventDefault(); }
+      else if (ev.key === "End") { applySplit(78); ev.preventDefault(); }
+      else if (ev.key === "Enter") { applySplit(52); ev.preventDefault(); }
+    });
+  }
+
   setTimeoutUi(getTimeout());
   applyTheme(getTheme());
   pickMode("agentic");
+  initSplit();
   document.body.dataset.view = "login";
 })();
