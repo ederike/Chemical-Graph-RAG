@@ -465,13 +465,17 @@
       result: data || {},
       stream_steps: liveSteps.slice(),
     });
-    await refreshSessions();
-    const full = await apiJson("GET", `/api/conversations/${conversationId}`);
-    currentTurns = Array.isArray(full.turns) ? full.turns : [];
-    const title = $("session-title");
-    if (title) title.textContent = full.title || "对话";
-    renderThread(currentTurns, currentTurns.length ? currentTurns[currentTurns.length - 1].id : null);
-    updateCtxBar();
+    try {
+      await refreshSessions();
+      const full = await apiJson("GET", `/api/conversations/${conversationId}`);
+      currentTurns = Array.isArray(full.turns) ? full.turns : [];
+      const title = $("session-title");
+      if (title) title.textContent = full.title || "对话";
+      renderThread(currentTurns, currentTurns.length ? currentTurns[currentTurns.length - 1].id : null);
+      updateCtxBar();
+    } catch (_) {
+      updateCtxBar();
+    }
   }
   function setSidebarCollapsed(on) {
     document.documentElement.classList.toggle("sidebar-collapsed", !!on);
@@ -782,6 +786,10 @@ ${esc(clip(c.result || "", 280))}</p>`;
       clearInterval(runTimerId);
       runTimerId = null;
     }
+    const el = $("run-timer");
+    const ta = $("query-input");
+    if (el) el.hidden = true;
+    if (ta) ta.classList.remove("has-timer");
   }
 
   function waitingUi() {
@@ -1037,12 +1045,14 @@ ${esc(clip(c.result || "", 280))}</p>`;
   });
   $("btn-new-chat").addEventListener("click", (e) => {
     e.preventDefault();
+    if (asking) return;
     startDraft();
     closeMobileSidebar();
     $("query-input").focus();
   });
   $("session-search").addEventListener("input", () => renderSessionList());
   $("session-nav").addEventListener("click", async (e) => {
+    if (asking) return;
     const item = e.target.closest(".session-item");
     if (!item) return;
     const id = item.dataset.id;
@@ -1154,6 +1164,7 @@ ${esc(clip(c.result || "", 280))}</p>`;
     setAsking(true);
     waitingUi();
     updateCtxBar(q);
+    let saved = false;
     try {
       const data = await streamQuery(q, getTimeout() * 1000);
       processChip.textContent = "完成";
@@ -1172,9 +1183,16 @@ ${esc(clip(c.result || "", 280))}</p>`;
       else if (mode === "agentic") renderAgentic(data);
       else renderRetrieve(data);
       await persistTurn(q, data);
+      saved = true;
     } catch (err) {
       if (err.message === "unauthorized") return;
       if (String(err.message || "").includes("请点击「新对话」") || String(err.message || "").includes("已达到回答模型上限")) {
+        $("query-input").value = q;
+        processChip.textContent = "待命";
+        processChip.className = "chip";
+        const pending = $("pending-turn");
+        if (pending) pending.remove();
+        if (!answerBody.querySelector(".turn-block")) emptyAnswer();
         updateCtxBar(q);
         window.alert(err.message);
         return;
@@ -1187,16 +1205,18 @@ ${esc(clip(c.result || "", 280))}</p>`;
         title: stopped ? "已停止" : "错误",
         preview: err.message,
       });
-      try {
-        await persistTurn(q, {
-          status: 0,
-          answer: stopped ? "本次查询已终止。" : (err.message || "没有最终回答。"),
-        });
-      } catch (_) {
-        const pending = $("pending-turn");
-        if (pending) pending.remove();
-        if (!answerBody.querySelector(".turn-block")) {
-          answerBody.innerHTML = `<div class="empty"><p>${stopped ? "本次查询已终止。" : "没有最终回答。"}</p></div>`;
+      if (!saved) {
+        try {
+          await persistTurn(q, {
+            status: 0,
+            answer: stopped ? "本次查询已终止。" : (err.message || "没有最终回答。"),
+          });
+        } catch (_) {
+          const pending = $("pending-turn");
+          if (pending) pending.remove();
+          if (!answerBody.querySelector(".turn-block")) {
+            answerBody.innerHTML = `<div class="empty"><p>${stopped ? "本次查询已终止。" : "没有最终回答。"}</p></div>`;
+          }
         }
       }
     } finally {

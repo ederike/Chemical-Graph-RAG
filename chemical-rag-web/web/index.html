@@ -18,7 +18,7 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/styles.css?v=20260917x" />
+  <link rel="stylesheet" href="/styles.css?v=20260921a" />
 </head>
 <body data-view="login">
   <div id="login-gate" class="gate">
@@ -29,11 +29,11 @@
       <form id="login-form" autocomplete="off">
         <label>
           <span>用户名</span>
-          <input id="login-user" name="username" type="text" spellcheck="false" required />
+          <input id="login-user" name="username" type="text" spellcheck="false" required maxlength="64" />
         </label>
         <label>
           <span>密钥</span>
-          <input id="login-pass" name="password" type="password" required />
+          <input id="login-pass" name="password" type="password" required maxlength="256" />
         </label>
         <button type="submit" class="btn-primary" id="login-btn">进入</button>
         <p class="gate-error" id="login-error" hidden></p>
@@ -145,6 +145,7 @@
               id="query-input"
               rows="3"
               placeholder="输入问题，例如：该产品的相对密度是多少？"
+              maxlength="8000"
               required
             ></textarea>
           </div>
@@ -181,6 +182,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=20260917x"></script>
+  <script src="/app.js?v=20260921a"></script>
 </body>
 </html>

@@ -10,4 +10,4 @@ COPY chemical-rag-web/web/ /usr/share/nginx/html/
 
 RUN chmod +x /docker-entrypoint.d/99-htpasswd.sh
 
-EXPOSE 80
+EXPOSE 8060

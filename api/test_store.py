@@ -61,6 +61,48 @@ class StoreIsolation(unittest.TestCase):
         self.store.revoke_token(token)
         self.assertIsNone(self.store.user_from_token(token))
 
+    def test_expired_and_malformed_token(self):
+        user = self.store.authenticate("admin", "kaiyin")
+        token = self.store.issue_token(user["id"])
+        conn = self.store.connect()
+        try:
+            conn.execute(
+                "UPDATE auth_tokens SET expires_at = ? WHERE token_hash = ?",
+                ("2000-01-01T00:00:00Z", self.store.hash_token(token)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertIsNone(self.store.user_from_token(token))
+
+        token2 = self.store.issue_token(user["id"])
+        conn = self.store.connect()
+        try:
+            conn.execute(
+                "UPDATE auth_tokens SET expires_at = ? WHERE token_hash = ?",
+                ("not-a-date", self.store.hash_token(token2)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertIsNone(self.store.user_from_token(token2))
+
+    def test_like_wildcards_are_literal(self):
+        alice = self.store.create_user("alice", "pw-a")
+        self.store.create_conversation(alice["id"], "hello50world")
+        self.store.create_conversation(alice["id"], "base 50% PVC")
+        hit = self.store.list_conversations(alice["id"], q="50%")
+        self.assertEqual(len(hit), 1)
+        self.assertEqual(hit[0]["title"], "base 50% PVC")
+        miss = self.store.list_conversations(alice["id"], q="hello_")
+        self.assertEqual(miss, [])
+
+    def test_password_too_long(self):
+        long_pw = "x" * (self.store.MAX_PASSWORD_LEN + 1)
+        with self.assertRaises(ValueError):
+            self.store.create_user("bob", long_pw)
+        self.assertIsNone(self.store.authenticate("admin", long_pw))
+
 
 if __name__ == "__main__":
     unittest.main()

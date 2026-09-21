@@ -34,6 +34,8 @@ WEB_ONLY = os.environ.get("CGR_WEB_ONLY", "").strip().lower() in {"1", "true", "
 
 from src.utils.config import AppConfig, Config
 from api.store import (
+    MAX_PASSWORD_LEN,
+    MAX_USERNAME_LEN,
     add_turn,
     authenticate,
     create_conversation,
@@ -48,6 +50,7 @@ from api.store import (
 )
 
 CONFIG_PATH = os.environ.get("DHMF_CONFIG", "example/a/config_open.yaml")
+QUERY_MAX_CHARS = 8000
 
 
 def _resolve_config_path() -> Path:
@@ -170,30 +173,30 @@ class HistoryTurn(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="用户问题")
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS, description="用户问题")
     mode: Literal["dual_path"] = "dual_path"
     history: Optional[List[HistoryTurn]] = None
 
 
 class MultihopQueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="用户问题")
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS, description="用户问题")
     history: Optional[List[HistoryTurn]] = None
 
 
 class AgenticQueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, description="用户问题")
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS, description="用户问题")
     history: Optional[List[HistoryTurn]] = None
 
 
 class RetrieveRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS)
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
     history: Optional[List[HistoryTurn]] = None
 
 
 class StreamRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS)
     mode: Literal["dual", "agent", "agentic", "retrieve"] = "dual"
     chunk_candidate_k: Optional[int] = None
     node_candidate_k: Optional[int] = None
@@ -402,6 +405,7 @@ def status():
 
 @app.get("/context")
 def llm_context(request: Request):
+    _require_user(request)
     info = dict(_llm_context(request))
     info.pop("base_url", None)
     return info
@@ -427,8 +431,8 @@ def health(request: Request):
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(..., min_length=1)
-    password: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1, max_length=MAX_USERNAME_LEN)
+    password: str = Field(..., min_length=1, max_length=MAX_PASSWORD_LEN)
 
 
 class ConversationCreate(BaseModel):
@@ -436,12 +440,12 @@ class ConversationCreate(BaseModel):
 
 
 class ConversationRename(BaseModel):
-    title: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1, max_length=80)
 
 
 class TurnCreate(BaseModel):
-    query: str = Field(..., min_length=1)
-    mode: str = "agentic"
+    query: str = Field(..., min_length=1, max_length=QUERY_MAX_CHARS)
+    mode: Literal["dual", "agent", "agentic", "retrieve"] = "agentic"
     answer: str = ""
     status: int = 0
     latency_s: Optional[float] = None
@@ -644,7 +648,8 @@ def _reject_if_over_context(request: Request, history, query: str) -> None:
 async def stream(req: StreamRequest, request: Request):
     """SSE 进度流。前端用于过程框实时打印。"""
     _require_user(request)
-    _reject_if_over_context(request, _history_dicts(req.history), req.query)
+    if req.mode != "retrieve":
+        _reject_if_over_context(request, _history_dicts(req.history), req.query)
     graph = _get_graph(request)
     q: Queue = Queue()
 

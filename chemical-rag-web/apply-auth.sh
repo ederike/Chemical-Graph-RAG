@@ -1,5 +1,6 @@
 #!/bin/bash
-# 修改 config.json 里的 username / password 后执行本脚本，凭据立即生效。
+# 把 web/ 同步到 nginx 根目录并 reload。网页登录已改走 API Bearer，
+# 改账号请用：python -m api.accounts ；本脚本写的 htpasswd 仅在旧 nginx 仍开 auth_basic 时有效。
 # 生产机内网 172.17.105.227，公网 http://182.92.85.174/ ；Docker 部署请改 .env 后重建 web 容器。
 #   bash /data/chemical-graph-rag/chemical-rag-web/apply-auth.sh
 set -euo pipefail

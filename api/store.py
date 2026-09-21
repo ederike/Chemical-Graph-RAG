@@ -21,7 +21,10 @@ DEFAULT_DB = ROOT / "chemical-rag-web" / "data" / "app.db"
 CONFIG_JSON = ROOT / "chemical-rag-web" / "config.json"
 
 PBKDF2_ITERS = 210_000
+PBKDF2_ITERS_MAX = 1_000_000
 TOKEN_DAYS = 30
+MAX_USERNAME_LEN = 64
+MAX_PASSWORD_LEN = 256
 
 _lock = threading.Lock()
 _db_path: Optional[Path] = None
@@ -31,9 +34,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_iso(s: str) -> datetime:
-    s = (s or "").replace("Z", "+00:00")
-    return datetime.fromisoformat(s)
+def _parse_iso(s: str) -> Optional[datetime]:
+    try:
+        s = (s or "").replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def _like_contains(q: str) -> str:
+    esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{esc}%"
 
 
 def hash_password(password: str) -> str:
@@ -50,13 +61,19 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, stored: str) -> bool:
     try:
+        if len(password) > MAX_PASSWORD_LEN:
+            return False
         kind, algo, iters_s, salt_hex, hash_hex = stored.split("$")
         if kind != "pbkdf2" or algo != "sha256":
             return False
         iters = int(iters_s)
+        if iters < 1 or iters > PBKDF2_ITERS_MAX:
+            return False
         salt = bytes.fromhex(salt_hex)
         expected = bytes.fromhex(hash_hex)
         got = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters)
+        if len(got) != len(expected):
+            return False
         return hmac.compare_digest(got, expected)
     except Exception:
         return False
@@ -162,12 +179,15 @@ def _seed_admin() -> None:
                 password = str(cfg.get("password") or password)
             except Exception:
                 pass
-        conn.execute(
-            "INSERT INTO users(username, password_hash, is_admin, disabled, created_at) "
-            "VALUES (?, ?, 1, 0, ?)",
-            (username, hash_password(password), _now()),
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                "INSERT INTO users(username, password_hash, is_admin, disabled, created_at) "
+                "VALUES (?, ?, 1, 0, ?)",
+                (username, hash_password(password), _now()),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            pass
     finally:
         conn.close()
 
@@ -190,10 +210,12 @@ def create_user(username: str, password: str, *, is_admin: bool = False) -> dict
         raise ValueError("用户名不能为空")
     if ":" in username or "/" in username or " " in username:
         raise ValueError("用户名不能包含空格、冒号或斜杠")
-    if len(username) > 64:
+    if len(username) > MAX_USERNAME_LEN:
         raise ValueError("用户名过长")
     if not password:
         raise ValueError("密码不能为空")
+    if len(password) > MAX_PASSWORD_LEN:
+        raise ValueError("密码过长")
     init_db()
     with _lock:
         conn = connect()
@@ -241,6 +263,8 @@ def get_user_by_name(username: str) -> Optional[dict]:
 def set_password(username: str, password: str) -> None:
     if not password:
         raise ValueError("密码不能为空")
+    if len(password) > MAX_PASSWORD_LEN:
+        raise ValueError("密码过长")
     init_db()
     with _lock:
         conn = connect()
@@ -276,6 +300,8 @@ def set_disabled(username: str, disabled: bool) -> None:
 
 
 def authenticate(username: str, password: str) -> Optional[dict]:
+    if not username or not password or len(password) > MAX_PASSWORD_LEN:
+        return None
     init_db()
     conn = connect()
     try:
@@ -299,6 +325,10 @@ def issue_token(user_id: int) -> str:
     with _lock:
         conn = connect()
         try:
+            conn.execute(
+                "DELETE FROM auth_tokens WHERE expires_at < ?",
+                (now.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+            )
             conn.execute(
                 "INSERT INTO auth_tokens(token_hash, user_id, created_at, expires_at, last_used_at) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -335,7 +365,8 @@ def user_from_token(token: str) -> Optional[dict]:
         ).fetchone()
         if meta is None:
             return None
-        if _parse_iso(meta["expires_at"]) < datetime.now(timezone.utc):
+        exp = _parse_iso(meta["expires_at"])
+        if exp is None or exp < datetime.now(timezone.utc):
             conn.execute(
                 "DELETE FROM auth_tokens WHERE token_hash = ?", (hash_token(token),)
             )
@@ -420,8 +451,12 @@ def list_conversations(user_id: int, q: str = "", limit: int = 200) -> list[dict
         args: list[Any] = [int(user_id)]
         q = (q or "").strip()
         if q:
-            sql += " AND (c.title LIKE ? OR EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.query LIKE ?))"
-            like = f"%{q}%"
+            sql += (
+                " AND (c.title LIKE ? ESCAPE '\\' OR EXISTS ("
+                "SELECT 1 FROM turns t WHERE t.conversation_id = c.id "
+                "AND t.query LIKE ? ESCAPE '\\'))"
+            )
+            like = _like_contains(q)
             args.extend([like, like])
         sql += " ORDER BY c.updated_at DESC LIMIT ?"
         args.append(int(limit))
