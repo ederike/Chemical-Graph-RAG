@@ -346,6 +346,10 @@ class SummaryConfig(BaseModel):
     """
     文档总结（insert 之后、chunk 之前，可独立运行）。
     对 doc.content 全文 LLM 总结 → 写入 hyperedge.content。
+
+    enable_prior_context：后半切片是否把同一源文件的前文识别正文塞进 prompt。
+    长 PDF 切片多时前文会撑爆上下文，可关。
+    prior_context_slices：开启时注入最近几段前文；0 = 全部前文（旧行为）。
     """
     api_key: str = ""
     base_url: str = ""
@@ -358,6 +362,8 @@ class SummaryConfig(BaseModel):
     use_cache: bool = True
     num_thread: int = 8
     flush_every: int = 500
+    enable_prior_context: bool = True
+    prior_context_slices: int = 1
     retry: RetryConfig = Field(
         default_factory=lambda: RetryConfig(max_attempt=3, wait=0.1, timeout=120.0)
     )
@@ -366,6 +372,16 @@ class SummaryConfig(BaseModel):
     @classmethod
     def _coerce_str(cls, v):
         return _none_to_empty(v)
+
+    @field_validator("enable_prior_context", mode="before")
+    @classmethod
+    def _coerce_prior(cls, v):
+        return _coerce_bool(v, True)
+
+    @field_validator("prior_context_slices", mode="before")
+    @classmethod
+    def _prior_n(cls, v):
+        return _nonneg_int(v, 1)
 
     @field_validator("flush_every", mode="before")
     @classmethod

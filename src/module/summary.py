@@ -6,8 +6,9 @@
 每条 doc 对应一条 hyperedge；分块时用 hyperedge 总结作为 head，
 doc 识别全文按 token 切成 body_n。
 
-长 PDF 页切片后的后半段文档：总结时注入同一源文件前文切片的识别正文，
-提示词要求结合前文、但重点突出本段。
+长 PDF 页切片后的后半段文档：可由 summary.enable_prior_context 决定
+是否注入同一源文件前文识别正文（prior_context_slices 控制带几段）。
+开启时提示词要求结合前文、但重点突出本段。
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -91,6 +92,21 @@ class Summary:
             return 'doc_summary'
         return name
 
+    def _include_prior_context(self) -> bool:
+        stage = getattr(self.config, 'summary', None)
+        if stage is None:
+            return True
+        return bool(getattr(stage, 'enable_prior_context', True))
+
+    def _prior_context_slices(self) -> int:
+        """0 = 全部前文；N = 只带紧邻的前 N 段。"""
+        stage = getattr(self.config, 'summary', None)
+        try:
+            n = int(getattr(stage, 'prior_context_slices', 1) or 0)
+        except (TypeError, ValueError):
+            n = 1
+        return max(0, n)
+
     def _existing_hyperedge_by_doc(self, doc_id) -> dict:
         rows = self.hyperedge_db.search('doc_id', doc_id) or []
         return rows[0] if rows else None
@@ -166,13 +182,17 @@ class Summary:
         }
 
     def _prior_slice_names(self, source_name: str, slice_index: int) -> List[str]:
-        """slice_index 之前所有前文切片的文档名（0 .. index-1）。"""
+        """slice_index 之前的前文切片名。prior_context_slices=0 取全部，否则取最近 N 段。"""
         if slice_index <= 0 or not source_name:
             return []
-        return [
+        names = [
             self.slice_doc_name(source_name, i)
             for i in range(slice_index)
         ]
+        n = self._prior_context_slices()
+        if n > 0:
+            names = names[-n:]
+        return names
 
     def _load_prior_recognition(
         self,
@@ -240,7 +260,7 @@ class Summary:
 
         prior_text = ''
         prior_names: List[str] = []
-        if slice_index > 0:
+        if slice_index > 0 and self._include_prior_context():
             prior_text, prior_names = self._load_prior_recognition(
                 source_name,
                 slice_index,
@@ -269,7 +289,7 @@ class Summary:
                 user_prompt = template.replace('{content}', content)
             else:
                 user_prompt = f"{template}\n\n{content}"
-            if slice_index > 0 and not prior_text:
+            if slice_index > 0 and self._include_prior_context() and not prior_text:
                 self.logger.warning(
                     f"Summary slice {name!r} has slice_index={slice_index} "
                     f"but no prior recognition loaded; fall back to "
@@ -454,9 +474,14 @@ class Summary:
         n_cont = sum(
             1 for d in self.tasks if self._slice_meta(d)['slice_index'] > 0
         )
+        if self._include_prior_context():
+            n_prior = self._prior_context_slices()
+            prior_note = f"on last={n_prior or 'all'}"
+        else:
+            prior_note = "off"
         self.logger.debug(
             f"Number of documents to summarize: {len(self.tasks)} "
-            f"(continuation_slices≈{n_cont})"
+            f"(continuation_slices≈{n_cont} prior_context={prior_note})"
         )
 
     def processing(self):
