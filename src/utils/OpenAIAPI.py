@@ -102,25 +102,31 @@ def _is_placeholder_key(api_key: str) -> bool:
 
 def _is_qwen3_family(model_id: str) -> bool:
     m = (model_id or "").lower()
-    return "qwen3" in m
+    if "qwen3" in m:
+        return True
+    # 网关 id 不含 qwen，权重仍是 Qwen3.8（/v1/models: llm-medium）。
+    # 不认这个别名时，yaml 里的 enable_thinking 会被剥掉且不会下发。
+    return m in {"llm-medium"}
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+# 空思考块的固定前缀。多出来的换行不在这里剥掉。
+_EMPTY_THINK_PREFIX = "<think>\n\n</think>\n\n"
+
 
 def _strip_think_tags(content: Optional[str]) -> str:
-    """
-    对齐 KyOpenAIServer：去掉本地 Qwen 返回的 <think>...</think> 前缀。
-    """
+    """去掉本地 Qwen 返回的 <think>...</think> 前缀，只留后面的正文。"""
     if content is None:
         return ""
     text = str(content)
-    if text.startswith("<think>\n\n</think>\n\n"):
-        return text[len("<think>\n\n</think>\n\n") :]
-    if text.startswith("<think>"):
-        end = text.find("</think>")
-        if end != -1:
-            rest = text[end + len("</think") :]
-            if rest.startswith(">"):
-                rest = rest[1:]
-            return rest.lstrip("\n")
-    return text
+    if text.startswith(_EMPTY_THINK_PREFIX):
+        return text[len(_EMPTY_THINK_PREFIX):]
+    if not text.startswith(_THINK_OPEN):
+        return text
+    end = text.find(_THINK_CLOSE)
+    if end == -1:
+        return text
+    return text[end + len(_THINK_CLOSE):].lstrip("\n")
 
 
 def _flatten_message_content(content: Any) -> str:
@@ -157,6 +163,29 @@ def _content_from_message(msg, *, local_mode: bool) -> str:
     r = str(reasoning)
     return _strip_think_tags(r) if local_mode else r
 
+def _explicit_enable_thinking(model_args: dict, extra_body: dict):
+    """显式的 enable_thinking。没写则 None。chat_template_kwargs 优先于顶层。"""
+    if "enable_thinking" in extra_body:
+        chosen = extra_body.get("enable_thinking")
+    elif "enable_thinking" in (model_args or {}):
+        chosen = model_args.get("enable_thinking")
+    else:
+        chosen = None
+    nested = extra_body.get("chat_template_kwargs")
+    if isinstance(nested, dict) and "enable_thinking" in nested:
+        chosen = nested.get("enable_thinking")
+    if chosen is None:
+        return None
+    return bool(chosen)
+
+
+def _drop_local_thinking_keys(create_kwargs: dict, extra_body: dict) -> None:
+    """本地 vLLM 不接受顶层 enable_thinking，丢掉以免 400。"""
+    for bucket in (extra_body, create_kwargs):
+        for key in _LOCAL_DROP_CREATE_KEYS:
+            bucket.pop(key, None)
+
+
 def _prepare_local_call(
     model_args: dict,
     *,
@@ -175,32 +204,17 @@ def _prepare_local_call(
     create_kwargs, extra_body = split_model_args(model_args)
     create_kwargs["model"] = resolved_model
 
-    enable_thinking = None
-    if "enable_thinking" in extra_body:
-        enable_thinking = bool(extra_body.get("enable_thinking"))
-    elif "enable_thinking" in (model_args or {}):
-        enable_thinking = bool(model_args.get("enable_thinking"))
-    # 已写在 chat_template_kwargs 里的显式值优先保留语义
-    ctk_in = extra_body.get("chat_template_kwargs")
-    if isinstance(ctk_in, dict) and "enable_thinking" in ctk_in:
-        enable_thinking = bool(ctk_in.get("enable_thinking"))
-
+    enable_thinking = _explicit_enable_thinking(model_args, extra_body)
     if strip_thinking_extra:
-        for k in list(extra_body.keys()):
-            if k in _LOCAL_DROP_CREATE_KEYS:
-                extra_body.pop(k, None)
-        for k in _LOCAL_DROP_CREATE_KEYS:
-            create_kwargs.pop(k, None)
+        _drop_local_thinking_keys(create_kwargs, extra_body)
 
-    msgs = messages
     # 缺省关思考（enable_thinking is not True）
-    want_think = enable_thinking is True
     if inject_no_think and _is_qwen3_family(resolved_model):
-        ctk = dict(extra_body.get("chat_template_kwargs") or {})
-        ctk["enable_thinking"] = want_think
-        extra_body["chat_template_kwargs"] = ctk
+        nested = dict(extra_body.get("chat_template_kwargs") or {})
+        nested["enable_thinking"] = enable_thinking is True
+        extra_body["chat_template_kwargs"] = nested
 
-    return create_kwargs, extra_body, msgs
+    return create_kwargs, extra_body, messages
 
 
 def _tool_calls_from_message(msg) -> list:

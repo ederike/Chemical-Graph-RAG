@@ -15,6 +15,19 @@ from ..utils.utils import Retry, TQDM_BAR_FORMAT
 _TASK_COLUMNS = ('id', 'content', 'embedding_content')
 
 
+def _index_param_suffix(vdb, idx_type, idx_quant) -> str:
+    """prepare 与构建小结共用的索引参数片段，文案保持原样。"""
+    suffix = f" quant={idx_quant}"
+    if str(idx_type).lower() != 'hnsw':
+        return suffix
+    return (
+        suffix
+        + f" hnsw_M={getattr(vdb, 'hnsw_M', '?')}"
+        + f" efConstruction={getattr(vdb, 'hnsw_efConstruction', '?')}"
+        + f" efSearch={getattr(vdb, 'hnsw_efSearch', '?')}"
+    )
+
+
 class Vectorization:
     def _append_embedding(self, task_id, emb):
         """Append one result; flush in-memory when buffer reaches flush_every."""
@@ -173,13 +186,7 @@ class Vectorization:
                 f"shards use {idx_quant}; new vectors follow the on-disk encoding. "
                 f"vectorization_clear to rebuild as {req_quant}."
             )
-        hnsw_info = f" quant={idx_quant}"
-        if str(idx_type).lower() == 'hnsw':
-            hnsw_info += (
-                f" hnsw_M={getattr(vdb, 'hnsw_M', '?')}"
-                f" efConstruction={getattr(vdb, 'hnsw_efConstruction', '?')}"
-                f" efSearch={getattr(vdb, 'hnsw_efSearch', '?')}"
-            )
+        hnsw_info = _index_param_suffix(vdb, idx_type, idx_quant)
         shard_info = ''
         if hasattr(vdb, 'shard_stats'):
             try:
@@ -564,13 +571,7 @@ class Vectorization:
             add_s = float(getattr(self.task_vdb, 'index_add_seconds', 0.0) or add_s)
             add_n = int(getattr(self.task_vdb, 'index_add_count', 0) or add_n)
         per_1k = (add_s / add_n * 1000.0) if add_n else 0.0
-        hnsw_extra = f" quant={idx_quant}"
-        if str(idx_type).lower() == 'hnsw':
-            hnsw_extra += (
-                f" hnsw_M={getattr(self.task_vdb, 'hnsw_M', '?')}"
-                f" efConstruction={getattr(self.task_vdb, 'hnsw_efConstruction', '?')}"
-                f" efSearch={getattr(self.task_vdb, 'hnsw_efSearch', '?')}"
-            )
+        hnsw_extra = _index_param_suffix(self.task_vdb, idx_type, idx_quant)
         self.logger.info(
             f"[vectorization] index_build_summary table={table} "
             f"index_type={idx_type}{hnsw_extra} "
