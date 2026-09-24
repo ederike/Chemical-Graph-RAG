@@ -1,5 +1,5 @@
 ---
-description: "FastAPI 服务：登录、按账号隔离的会话，以及检索、双路问答、多跳规划和工具循环。进程内只加载一份 FAISS。"
+description: "问答网站的 HTTP 进程。负责登录、按用户隔离会话，并把检索、双路问答、多跳规划和工具循环放进同一个线程池。向量索引只在这一个进程里加载一份。"
 kind: "package-reference"
 ---
 
@@ -9,14 +9,16 @@ kind: "package-reference"
 
 ## Summary
 
-`api` 把 `DHMF` 包成 HTTP，并托管 `chemical-rag-web/web` 的静态页。问答在线程池里跑，进度经 SSE 推给页面。账号不能在网页上注册，只能用本目录的命令在服务器上创建。uvicorn 的 worker 数固定为 1，避免一个进程里出现多份向量索引。
+浏览器不直接调用 `DHMF`。`api` 在启动时按 `DHMF_CONFIG` 加载 YAML，构造一个进程内共享的 `DHMF`，再把页面静态文件挂到站点根路径。提问时，请求线程只负责鉴权和写 SSE；真正的检索和生成在名为 `dhmf-api` 的线程池里执行，这样事件循环不会被 FAISS 和模型请求堵住。
+
+账号不能在页面上注册。用户、令牌和会话在 SQLite 里，默认文件是 `chemical-rag-web/data/app.db`。知识库的 `main.db` 和这份账号库不是同一个文件。
 
 ## Table of Contents
 
 - [Use this package](#use-this-package)
-- [Source map](#source-map)
+- [Understand the implementation](#understand-the-implementation)
 - [Routes](#routes)
-- [Further Exploration](#further-exploration)
+- [Known Limitations](#known-limitations)
 - [Dev Note](#dev-note)
 
 -----
@@ -25,14 +27,16 @@ kind: "package-reference"
 
 ## Use this package
 
-在项目根目录启动。配置路径用环境变量 `DHMF_CONFIG`，默认 `example/a/config_open.yaml`。线程池大小、端口和 CORS 来自该文件的 `app_config`，不另设环境变量。
+在仓库根目录启动。端口、CORS 和线程池大小来自 YAML 的 `app_config`（开发配置是 `0.0.0.0:8000`、CORS `*`、线程池 4）。uvicorn 的进程数在 `run()` 里写成 1，不读取 `app_config.workers` 当作进程数。`workers` 只决定线程池能同时跑几路问答。
 
 ```text
 export DHMF_CONFIG=example/a/config_open.yaml
 python -m api
 ```
 
-账号库默认是 `chemical-rag-web/data/app.db`，可用 `CGR_WEB_DB` 改位置。管理命令：
+配置文件不存在时，`lifespan` 直接抛出 `FileNotFoundError`，进程起不来。文件存在时，启动末尾调用 `pin_retrieve_indexes()`，把 `search_range` 覆盖的分片读进这个进程；退出时 `unpin`。因此不要在同一个进程里边跑 `python -m api` 边跑 `vectorization()`。`GET /health` 在图已加载时返回 `ok: true` 和工作目录；`CGR_WEB_ONLY=1` 时不加载图，健康检查只表示网页试点模式。
+
+账号命令在同一套库上操作：
 
 ```text
 python -m api.accounts list
@@ -42,24 +46,39 @@ python -m api.accounts disable 用户名
 python -m api.accounts enable 用户名
 ```
 
-`passwd` 会使该用户已签发的登录令牌失效。隔离测试：`CGR_WEB_DB=/tmp/cgr-test.db python -m api.test_store`。
+`add --admin` 把该用户标成管理员。`passwd` 和 `disable` 会删掉该用户尚未过期的令牌，已打开的页面需要重新登录。空库第一次初始化时会种一个管理员，口令在 `store.py` 的 `_seed_admin` 里，部署后应立刻改掉。
 
-没有 nginx 时，页面请求的 `/api/*` 与去掉前缀的路径指向同一批处理函数。静态文件挂在 `/`，因此 API 路由要先注册。
+隔离测试不碰开发库：
+
+```text
+CGR_WEB_DB=/tmp/cgr-test.db python -m api.test_store
+```
+
+调用问答需要先 `POST /auth/login`，正文是 `{"username","password"}`，响应里的 `token` 之后放在 `Authorization: Bearer`。查询正文最长 8000 字。除纯检索外，服务会用最近一轮的 prompt token 粗算历史加当前问题；达到模型上下文减预留值时返回 400，文案要求用户新开对话。
 
 -----
 
-<a id="source-map"></a>
+<a id="understand-the-implementation"></a>
 
-## Source map
+## Understand the implementation
 
-| 文件 | 职责 |
-| --- | --- |
-| [`__main__.py`](__main__.py) | `python -m api` 入口，调用 `run()` |
-| [`__init__.py`](__init__.py) | 包说明 |
-| [`app.py`](app.py) | FastAPI 应用、路由、线程池、SSE、静态页挂载 |
-| [`store.py`](store.py) | 账号、令牌、会话和回合的 SQLite。密码与令牌只存摘要 |
-| [`accounts.py`](accounts.py) | 命令行开户、改密、停用。不提供网页注册 |
-| [`test_store.py`](test_store.py) | 账号与会话按用户隔离的测试 |
+启动顺序在 `app.py`：解析 `DHMF_CONFIG`（相对路径相对仓库根）、构造 `Config`、按 `app_config` 建立线程池、在 lifespan 里构造 `DHMF` 并探测 `/v1/models` 得到回答模型的 `max_model_len`。探测失败时上下文上限退回 `agentic.max_prompt_tokens`，再没有则用 131072。这个数只用于拒绝过长会话，不改变模型本身。
+
+`_alias_api_prefix` 给每条已注册的业务路由复制一条 `/api` 前缀。页面写的是 `/api/query`，本机没有 nginx 时和 `/query` 执行同一个函数。复制发生在静态文件挂载之前，所以 `/api/...` 不会被 `web/` 吃掉。`CGR_WEB_ONLY=1` 时不加载 `DHMF`，只能看页面。
+
+一次 `POST /stream` 的过程：
+
+1. 校验令牌，非检索模式检查上下文长度。
+2. 开一个 `Queue`。工作线程里 `progress.bind` 把 `emit` 放进这个队列。
+3. 按 `mode` 调用 `graph.query`（`dual`）、`graph.agent_query`（`agent`）、`graph.agentic_query`（`agentic`），或其他值时只调 `retrieve_items`。
+4. 结束时放入 `{"type":"done","data":...}`，异常放入 `{"type":"error"}`，最后放入 `None`。
+5. 异步生成器把队列里的对象写成 SSE，直到遇到 `None`。
+
+检索模式的问句会先经 `expand_retrieve_query`，把追问补全后再检索。生成模式把 `history` 交给 `DHMF`，由各条路径自己决定怎么用。
+
+会话写入发生在页面拿到最终答案之后，由 `POST /conversations/{id}/turns` 完成，而不是由 `/stream` 顺带写库。因此流被浏览器中断时，这一轮不会出现在历史里。`turns` 保存问句、模式、答案、状态、耗时、来源 JSON、完整结果 JSON，以及过程栏用的 `stream_steps_json`。
+
+令牌只存 SHA-256。校验时哈希后查找，并检查 `expires_at` 和用户是否被 `disabled`。密码同样只存摘要。
 
 -----
 
@@ -67,31 +86,38 @@ python -m api.accounts enable 用户名
 
 ## Routes
 
-除登录外，下列路径都要带 `Authorization: Bearer`。`/stream` 的 `mode` 决定走哪条问答。
-
 | 方法与路径 | 作用 |
 | --- | --- |
-| `POST /auth/login`、`POST /auth/logout`、`GET /auth/me` | 签发、作废、查看令牌 |
-| `GET/POST /conversations`、`GET/PATCH/DELETE /conversations/{id}` | 当前用户自己的会话 |
-| `POST /conversations/{id}/turns` | 追加一问一答 |
-| `POST /query` | `DHMF.query`，双路检索后生成 |
+| `POST /auth/login` | 校验用户名和密码，签发令牌 |
+| `POST /auth/logout` | 作废当前令牌 |
+| `GET /auth/me` | 返回当前用户 |
+| `GET /conversations?q=` | 当前用户的会话，按更新时间，最多 200 条。`q` 是标题子串 |
+| `POST /conversations` | 新建会话 |
+| `GET /conversations/{id}` | 会话及其回合。不是本人的 id 返回 404 |
+| `PATCH /conversations/{id}` | 改标题，并标记为人工标题，之后不再被首问覆盖 |
+| `DELETE /conversations/{id}` | 删除会话及其回合 |
+| `POST /conversations/{id}/turns` | 追加一轮。正文含问句、模式、答案、来源和过程步骤 |
+| `POST /query` | `mode` 默认 `dual_path`，调用 `DHMF.query` |
 | `POST /multihop-query` | `DHMF.agent_query` |
 | `POST /agentic-query` | `DHMF.agentic_query` |
-| `POST /retrieve` | 只返回命中，不生成答案 |
+| `POST /retrieve` | 只要命中列表。可带 `chunk_candidate_k`、`node_candidate_k` |
 | `POST /stream` | SSE。`mode` 为 `dual`、`agent`、`agentic` 或检索 |
-| `GET /health`、`GET /status`、`GET /context` | 进程是否起来、配置是否加载、回答模型的上下文长度 |
+| `GET /health` | 进程与配置是否可用 |
+| `GET /status` | 稍详细的运行信息 |
+| `GET /context` | 回答模型名、上下文长度、预留 token、数字从哪来（配置或 `/v1/models`） |
 
-查询正文上限 8000 字。非检索模式会估算历史加当前问题的 token，接近模型上下文时拒绝并提示新开对话。
+除登录外，上表都要 Bearer 令牌。
 
 -----
 
-<a id="further-exploration"></a>
+<a id="known-limitations"></a>
 
-## Further Exploration
+## Known Limitations
 
-- [`docs/API入门.md`](../docs/API入门.md) — 调用示例。
-- [`chemical-rag-web/README.md`](../chemical-rag-web/README.md) — 页面和账号库文件放在哪。
-- [`src/README.md`](../src/README.md) — 三条问答在库里的差别。
+- 线程池里的任务不能被 HTTP 断连取消。浏览器停止等待后，这一轮的模型请求仍会跑完，只是结果不再写入会话。
+- `/health` 返回 200 只说明进程、配置和图对象在，并且分片已经 pin。它不探测模型服务和嵌入服务是否可达，那要等一次真实问答。
+- 上下文估算用的是上一轮接口报告的 prompt token，不是对历史正文重新做 tokenizer。第一轮没有这个数，不会因为估算被拒绝。
+- 多进程部署会让每份进程各加载一份 FAISS。`run()` 因此固定 `workers=1`。
 
 <a id="dev-note"></a>
 
@@ -100,8 +126,8 @@ python -m api.accounts enable 用户名
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
-- `run()` 里 `workers=1` 是有意的。多进程会各自 `faiss.read_index`，内存成倍并且互不同步。
-- `CGR_WEB_ONLY=1` 时可以只看页面、不加载图。不要在这个模式下期待 `/query` 能回答。
-- 进度事件通过 `progress.bind` 绑在工作线程上。新的长步骤若要出现在过程栏，就在该线程里 `emit`，不要在异步端点里直接改页面状态。
+- 新路由若要给页面用，直接写在 `/api` 前缀复制之前。不要只注册 `/api/...` 又假设命令行能打到不带前缀的路径，除非你接受两边不一致。
+- 过程栏的新步骤在业务代码里 `progress.emit`，不要在路由函数里组装 HTML。
+- 账号库和知识库的路径不要混用。测试一律设置 `CGR_WEB_DB`。
 
 </details>
