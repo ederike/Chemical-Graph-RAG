@@ -12,8 +12,8 @@ if __name__ == '__main__':
     # graph.insert_default()
     # graph.summary()
     # graph.chunk()
-    graph.extract()
-    graph.build() 
+    # graph.extract()
+    # graph.build() 
     graph.vectorization()
 
     # graph.pin_retrieve_indexes()
@@ -27,3 +27,4 @@ if __name__ == '__main__':
     # print(res["answer"])
     # graph.unpin_retrieve_indexes()
 
+    

@@ -1,7 +1,7 @@
 # benchmark_agentic_1 独立配置。路径一律相对仓库根目录，不要指向 useless/。
 run:
   # generate | evaluate | report | excel | all
-  mode: report
+  mode: all
 
 dhmf:
   config_path: example/a/config_open.yaml
@@ -10,7 +10,7 @@ dhmf:
 
 paths:
   db_path: example/a/DB/main.db
-  output_dir: results/benchmark_agentic_1_含专利
+  output_dir: results/benchmark_agentic_1_仅msds
 
   questions_filename: questions.json
   questions_path: null          # 非空则覆盖 output_dir/filename
@@ -35,18 +35,18 @@ generate:
   # doc 表 id 闭区间；null / 0 = 该端不限制。也可用 doc_id_range: [1, 25367]
   doc_id_min: 0
   doc_id_max: null
-  doc_id_range: null
+  doc_id_range: [57033,257613]
   seed: 44
   max_chars_per_doc: -1
   max_retries: 3
   sleep_between: 0.0
-  num_thread: 4
+  num_thread: 5
   use_cache: false
   # QUESTION_GEN_USER | QUESTION_GEN_Fuzzy_Matching | default | fuzzy
   question_gen_prompt: QUESTION_GEN_USER
   api_key: null
   base_url: null
-  timeout: 600
+  timeout: 6000
   model_args:
     model: null
     temperature: 0.2
@@ -60,12 +60,12 @@ evaluate:
   max_source_chars: -1
   max_retries: 2
   sleep_between: 0.0
-  num_thread: 4
+  num_thread: 1
   use_cache: false
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
-  timeout: 300
+  timeout: 3000
   model_args:
     model: null
     temperature: 0.0
@@ -76,7 +76,7 @@ evaluate:
   llm_only:
     api_key: null
     base_url: null
-    timeout: 300
+    timeout: 3000
     max_retries: 3
     use_cache: false
     model_args:
