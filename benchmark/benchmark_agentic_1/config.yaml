@@ -65,7 +65,7 @@ evaluate:
   dhmf_retrieve_use_cache: null
   api_key: null
   base_url: null
-  timeout: 3000
+  timeout: 21600
   model_args:
     model: null
     temperature: 0.0
@@ -76,7 +76,7 @@ evaluate:
   llm_only:
     api_key: null
     base_url: null
-    timeout: 3000
+    timeout: 10800
     max_retries: 3
     use_cache: false
     model_args:
