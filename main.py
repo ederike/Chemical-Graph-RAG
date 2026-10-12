@@ -14,7 +14,7 @@ if __name__ == '__main__':
     # graph.chunk()
     # graph.extract()
     # graph.build() 
-    graph.vectorization()
+    # graph.vectorization()
 
     # graph.pin_retrieve_indexes()
     # print(graph.query('...', mode='dual_path', pretty=True))

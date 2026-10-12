@@ -71,6 +71,10 @@ class Doc:
         self.save()
 
     def processing(self):
+        self.begin_file_hash_dedup()
+        self._pending_hash = {}
+        self._pending_names = set()
+        self._pending_content = set()
         n = len(self.tasks)
         bar = tqdm(
             self.tasks,
@@ -95,12 +99,15 @@ class Doc:
 
     def clear(self):
         self.doc_db.clear()
+        self._refresh_doc_columns()
+        self._reset_file_hash_dedup()
 
     def __init__(self, db: Dict[str, BaseDB], logger: logging.Logger, config: Config):
         self.config = config
         self.doc_db = db['doc']
         self.logger = logger
         self._flushed_count = 0
+        self._reset_file_hash_dedup()
         if self.config.doc.count_token:
             self.tokener = tiktoken.get_encoding('cl100k_base')
 
@@ -238,22 +245,250 @@ class Doc:
         return f'data:{mime};base64,{b64}'
 
     def get_existing_doc_names(self) -> set:
-        """Set of file names already present in the doc table."""
-        rows = self.doc_db.search_all() or []
-        return {r['name'] for r in rows if r.get('name')}
+        """Doc names already stored. Loads the name column only."""
+        self.begin_file_hash_dedup()
+        return self._known_names
 
     def get_docs_by_name(self, name: str):
         return self.doc_db.search('name', name) or []
 
-    def is_already_inserted(self, name: str = None, content_hash: str = None) -> bool:
-        """True if a doc with the same name or content hash already exists."""
-        if name and self.get_docs_by_name(name):
-            return True
-        if content_hash:
-            rows = self.doc_db.search('hash', content_hash) or []
-            if rows:
+    def is_already_inserted(
+        self,
+        name: str = None,
+        content_hash: str = None,
+        file_hash: str = None,
+        source_name: str = None,
+    ) -> bool:
+        """
+        True when this source should not be inserted.
+
+        file_hash (raw-byte MD5) wins: another source already owns those bytes.
+        With no file hash, fall back to the doc name or recognized-text hash.
+        """
+        self.begin_file_hash_dedup()
+        digest = str(file_hash or '').strip().lower()
+        if digest:
+            source = source_name or self.slice_family_base(name or '')
+            if self._hash_owned_by_other(digest, source, {}):
                 return True
+            return bool(name) and name in self._known_names
+        if name and name in self._known_names:
+            return True
+        if content_hash and content_hash in self._content_hash_set():
+            return True
         return False
+
+    def _reset_file_hash_dedup(self):
+        self._file_hash_ready = False
+        self._file_hash_owners = {}
+        self._known_names = set()
+        self._known_content_hashes = None
+        self._pending_hash = {}
+        self._pending_names = set()
+        self._pending_content = set()
+        self._dedup_skip_logs = {}
+
+    def _refresh_doc_columns(self):
+        cols = self.doc_db.db.execute(f"PRAGMA table_info({self.doc_db.table})")
+        self.doc_db.table_columns = [col['name'] for col in cols]
+
+    @staticmethod
+    def file_md5(path, chunk: int = 1024 * 1024) -> str:
+        """MD5 of file bytes, streamed. Not the OSS object name."""
+        h = hashlib.md5()
+        with open(path, 'rb') as f:
+            while True:
+                buf = f.read(chunk)
+                if not buf:
+                    break
+                h.update(buf)
+        return h.hexdigest()
+
+    def begin_file_hash_dedup(self):
+        """
+        Prepare hash dedup once per insert run.
+
+        Loads file_hash + name through a covering index. Does not read
+        doc.content. Backfill of the column runs in id batches, and only
+        while some rows still have a NULL file_hash.
+        """
+        if self._file_hash_ready:
+            return
+        self._ensure_file_hash_schema()
+        self._backfill_file_hash_column()
+        self._load_file_hash_owners()
+        self._load_known_names()
+        self._file_hash_ready = True
+
+    def _ensure_file_hash_schema(self):
+        table = self.doc_db.table
+        cols = self.doc_db.db.execute(f"PRAGMA table_info({table})")
+        names = {col['name'] for col in cols}
+        if 'file_hash' not in names:
+            self.doc_db.db.execute(
+                f"ALTER TABLE {table} ADD COLUMN file_hash TEXT"
+            )
+        # (file_hash, name) covers the owner lookup. name alone covers
+        # the idempotent name check. The partial index finds rows that
+        # still need backfill without scanning finished rows.
+        self.doc_db.db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_doc_file_hash_name "
+            f"ON {table}(file_hash, name)"
+        )
+        self.doc_db.db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_doc_name ON {table}(name)"
+        )
+        self.doc_db.db.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_doc_file_hash_pending "
+            f"ON {table}(id) WHERE file_hash IS NULL"
+        )
+        self._refresh_doc_columns()
+
+    def _backfill_file_hash_column(self, batch: int = 2000):
+        """Copy extra.file_hash onto the column. NULL means not visited yet."""
+        table = self.doc_db.table
+        filled = 0
+        while True:
+            rows = self.doc_db.db.execute(
+                f"SELECT id FROM {table} INDEXED BY idx_doc_file_hash_pending "
+                f"WHERE file_hash IS NULL ORDER BY id LIMIT ?",
+                (int(batch),),
+            )
+            if not rows:
+                break
+            ids = [row['id'] for row in rows]
+            marks = ','.join('?' * len(ids))
+            self.doc_db.db.execute(
+                f"UPDATE {table} SET file_hash = lower(COALESCE("
+                f"json_extract(extra, '$.file_hash'), '')) "
+                f"WHERE id IN ({marks})",
+                tuple(ids),
+            )
+            filled += len(ids)
+            self.logger.info(
+                f"[doc] backfill file_hash rows={filled} last_id={ids[-1]}"
+            )
+
+    def _load_file_hash_owners(self):
+        table = self.doc_db.table
+        rows = self.doc_db.db.execute(
+            f"SELECT file_hash, name FROM {table} "
+            f"INDEXED BY idx_doc_file_hash_name "
+            f"WHERE file_hash IS NOT NULL AND file_hash != ''"
+        )
+        owners = {}
+        for row in rows:
+            digest = str(row.get('file_hash') or '').strip().lower()
+            if not digest:
+                continue
+            source = self.slice_family_base(row.get('name') or '')
+            if source:
+                owners.setdefault(digest, set()).add(source)
+        self._file_hash_owners = owners
+
+    def _load_known_names(self):
+        table = self.doc_db.table
+        rows = self.doc_db.db.execute(
+            f"SELECT name FROM {table} INDEXED BY idx_doc_name"
+        )
+        self._known_names = {row['name'] for row in rows if row.get('name')}
+
+    def _content_hash_set(self) -> set:
+        """Recognized-text hashes. Loaded only when a row has no file hash."""
+        if self._known_content_hashes is None:
+            table = self.doc_db.table
+            rows = self.doc_db.db.execute(
+                f"SELECT hash FROM {table} "
+                f"WHERE hash IS NOT NULL AND hash != ''"
+            )
+            self._known_content_hashes = {
+                row['hash'] for row in rows if row.get('hash')
+            }
+        return self._known_content_hashes
+
+    def _task_file_hash(self, task) -> str:
+        digest = task.get('file_hash') or ''
+        if not digest:
+            digest = self._parse_doc_extra(task.get('extra')).get('file_hash') or ''
+        return str(digest or '').strip().lower()
+
+    def _task_source_name(self, task) -> str:
+        source = task.get('source_name') or ''
+        if not source:
+            source = self._parse_doc_extra(task.get('extra')).get('source_name') or ''
+        if not source:
+            source = task.get('name') or ''
+        return self.slice_family_base(source)
+
+    def _hash_owned_by_other(self, digest: str, source: str, pending: dict) -> bool:
+        """True when these bytes are already kept under a different source name."""
+        claimed = pending.get(digest)
+        if claimed and claimed != source:
+            return True
+        owners = self._file_hash_owners.get(digest) or ()
+        return bool(owners) and source not in owners
+
+    def _skip_reason(self, task, pending_hash, pending_names, pending_content):
+        """
+        None → insert. Otherwise 'file_hash', 'name', or 'content_hash'.
+
+        A raw-byte MD5 is the only key when present. The same source's
+        page slices share that MD5 and are all kept. Name and recognized-text
+        hash apply only when the file has no MD5.
+        """
+        name = task.get('name') or ''
+        digest = self._task_file_hash(task)
+        source = self._task_source_name(task)
+        if digest:
+            if self._hash_owned_by_other(digest, source, pending_hash):
+                return 'file_hash'
+            if name and (name in self._known_names or name in pending_names):
+                return 'name'
+            pending_hash[digest] = source
+            if name:
+                pending_names.add(name)
+            return None
+        if name and (name in self._known_names or name in pending_names):
+            return 'name'
+        content_hash = task.get('hash') or (
+            hash_str(task.get('content') or '') if task.get('content') else ''
+        )
+        if content_hash and (
+            content_hash in pending_content
+            or content_hash in self._content_hash_set()
+        ):
+            return 'content_hash'
+        if name:
+            pending_names.add(name)
+        if content_hash:
+            pending_content.add(content_hash)
+        return None
+
+    def _remember_inserted(self, task):
+        name = task.get('name') or ''
+        if name:
+            self._known_names.add(name)
+        digest = self._task_file_hash(task)
+        source = self._task_source_name(task)
+        if digest and source:
+            self._file_hash_owners.setdefault(digest, set()).add(source)
+        elif self._known_content_hashes is not None:
+            content_hash = task.get('hash') or hash_str(task.get('content') or '')
+            if content_hash:
+                self._known_content_hashes.add(content_hash)
+
+    def _log_dedup_skip(self, kind: str, message: str):
+        n = int(self._dedup_skip_logs.get(kind) or 0) + 1
+        self._dedup_skip_logs[kind] = n
+        if n <= 20:
+            self.logger.info(message)
+            return
+        if n == 21:
+            self.logger.info(
+                f"Further {kind} skips are logged at debug "
+                f"(first 20 were info)."
+            )
+        self.logger.debug(message)
 
     def _open_pdf_validated(self, pdf_path: Path):
         """Open PDF after basic existence / magic checks. Caller must close."""
@@ -894,8 +1129,9 @@ class Doc:
                 total_pages = unit['total_pages']
                 doc_name = unit['doc_name']
 
-        raw_bytes = pdf_path.read_bytes()
-        file_hash = hashlib.md5(raw_bytes).hexdigest()
+        file_hash = str(kwargs.get('file_hash') or '').strip().lower()
+        if not file_hash:
+            file_hash = self.file_md5(pdf_path)
         recog = self.config.doc.recognition
         cache_key = self._recognition_cache_key(
             pdf_path,
@@ -1121,14 +1357,22 @@ class Doc:
                 f"No PDF/image files found under {self.resolve_doc_dir()} "
             )
 
-        existing_names = self.get_existing_doc_names() if skip_existing else set()
+        self.begin_file_hash_dedup()
+        self._dedup_skip_logs = {}
+        existing_names = self._known_names if skip_existing else set()
         to_process = []  # list of slice units
         skipped = []  # doc_name already in DB
+        skipped_hash = []  # source file name dropped by raw-byte MD5
+        skipped_hash_slices = []
         invalid = []  # (name, reason) 假 PDF / 空文件 / 规划失败
         max_pages = self.max_pages_per_doc()
         n_source_files = 0
         n_sliced_files = 0
         n_image_files = 0
+        n_hashed = 0
+        # Claims live only for this call. A source is recorded in the DB
+        # map later, when a slice is actually inserted.
+        hash_claims = {}
 
         for p in pdf_paths:
             kind = self.classify_source_kind(p)
@@ -1147,28 +1391,61 @@ class Doc:
             n_source_files += 1
             if len(units) > 1:
                 n_sliced_files += 1
+            pending_units = []
             for unit in units:
                 name = unit['doc_name']
                 if skip_existing and name in existing_names:
                     skipped.append(name)
                     continue
+                pending_units.append(unit)
+            if not pending_units:
+                continue
+            digest = ''
+            try:
+                digest = self.file_md5(p)
+            except OSError as e:
+                self.logger.warning(
+                    f"Cannot hash {p.name} ({e}); "
+                    f"insert will use the name/content fallback."
+                )
+            n_hashed += 1
+            if n_hashed % 1000 == 0:
+                self.logger.info(
+                    f"[doc] file-hash dedup hashed {n_hashed} source file(s)"
+                )
+            source = p.name
+            if digest and self._hash_owned_by_other(digest, source, hash_claims):
+                skipped_hash.append(source)
+                for unit in pending_units:
+                    skipped_hash_slices.append(unit['doc_name'])
+                continue
+            if digest:
+                hash_claims[digest] = source
+            for unit in pending_units:
+                unit['file_hash'] = digest
                 to_process.append(unit)
 
+        if skipped_hash:
+            self.logger.info(
+                f"Skip {len(skipped_hash)} source file(s) with a raw-byte MD5 "
+                f"already kept under another name: "
+                f"{skipped_hash[:10]}{'...' if len(skipped_hash) > 10 else ''}"
+            )
         if skipped:
             self.logger.info(
                 f"Skip {len(skipped)} slice doc(s) already in doc table: "
                 f"{skipped[:10]}{'...' if len(skipped) > 10 else ''}"
             )
-            if self.metrics is not None:
-                for name in skipped:
-                    self.metrics.record(
-                        'recognize',
-                        0.0,
-                        skipped=True,
-                        name=name,
-                        log=False,
-                        accumulate_time=False,
-                    )
+        if self.metrics is not None:
+            for name in skipped + skipped_hash_slices:
+                self.metrics.record(
+                    'recognize',
+                    0.0,
+                    skipped=True,
+                    name=name,
+                    log=False,
+                    accumulate_time=False,
+                )
 
         if invalid:
             self.logger.warning(
@@ -1239,6 +1516,7 @@ class Doc:
                     slice_index=unit['slice_index'],
                     n_slices=unit['n_slices'],
                     total_pages=unit['total_pages'],
+                    file_hash=unit.get('file_hash') or '',
                 )
             except NonRetryableError as e:
                 self.logger.warning(
@@ -1275,6 +1553,7 @@ class Doc:
             f"Recognition start: backend={backend}, sources={n_source_files} "
             f"(images={n_image_files}), "
             f"slices={len(to_process)}, sliced_files={n_sliced_files}, "
+            f"hash_skipped_sources={len(skipped_hash)}, "
             f"max_pages_per_doc={max_pages}, workers={num_thread}, "
             f"http_timeout={http_timeout:.0f}s "
             f"(PDF page-slice or raw image per unit)"
@@ -1382,7 +1661,9 @@ class Doc:
             f"Recognized {len(results)}/{len(to_process)} valid slice docs "
             f"(backend={backend}, sources={n_source_files}, "
             f"images={n_image_files}, sliced_files={n_sliced_files}, "
-            f"skipped existing={len(skipped)}, invalid={len(invalid)}, "
+            f"skipped existing={len(skipped)}, "
+            f"hash_skipped_sources={len(skipped_hash)}, "
+            f"invalid={len(invalid)}, "
             f"max_pages_per_doc={max_pages}, workers={num_thread}, "
             f"wall_time={wall:.3f}s)."
         )
@@ -1390,26 +1671,40 @@ class Doc:
 
     def processing_single_task(self, task):
         """
-        Insert one recognized document (full plain-text content).
-        Skip if the same file name or content hash already exists.
+        Insert one recognized document.
+
+        Raw-byte MD5 (file_hash) dedups different file names of the same
+        bytes. Page slices of the kept source share that MD5 and stay.
+        Name and recognized-text hash are used only when file_hash is empty.
         """
+        self.begin_file_hash_dedup()
         text = task['content']
         file_name = task['name']
         content_hash = task.get('hash') or hash_str(text)
-
-        existing_by_name = self.get_docs_by_name(file_name)
-        if existing_by_name:
-            self.logger.info(
-                f"Skip insert (name already in DB): {file_name} "
-                f"-> existing id(s)={[r['id'] for r in existing_by_name]}"
+        file_hash = self._task_file_hash(task)
+        reason = self._skip_reason(
+            task,
+            self._pending_hash,
+            self._pending_names,
+            self._pending_content,
+        )
+        if reason == 'file_hash':
+            self._log_dedup_skip(
+                'file_hash',
+                f"Skip insert (file MD5 already kept): {file_name} "
+                f"hash={file_hash} source={self._task_source_name(task)}",
             )
             return
-
-        existing_by_hash = self.doc_db.search('hash', content_hash) or []
-        if existing_by_hash:
-            self.logger.info(
-                f"Skip insert (content hash already in DB): {file_name} "
-                f"-> existing name(s)={[r['name'] for r in existing_by_hash]}"
+        if reason == 'name':
+            self._log_dedup_skip(
+                'name',
+                f"Skip insert (name already in DB): {file_name}",
+            )
+            return
+        if reason == 'content_hash':
+            self._log_dedup_skip(
+                'content_hash',
+                f"Skip insert (content hash already in DB): {file_name}",
             )
             return
 
@@ -1417,6 +1712,7 @@ class Doc:
             'name': file_name,
             'content': text,
             'hash': content_hash,
+            'file_hash': file_hash,
             'status': 'new',
         }
 
@@ -1431,7 +1727,8 @@ class Doc:
                 self.doc_extra_payload(
                     page_count=int(task.get('page_count') or 0),
                     source_pdf=str(task.get('source_pdf') or ''),
-                    file_hash=str(task.get('file_hash') or ''),
+                    source_name=str(task.get('source_name') or ''),
+                    file_hash=file_hash,
                 ),
                 ensure_ascii=False,
             )
@@ -1440,22 +1737,54 @@ class Doc:
             add_doc['tokens'] = len(self.tokener.encode(text))
 
         self.doc_db.buffer.append(add_doc)
+        self._remember_inserted(task)
         self._maybe_flush()
 
     def prepare(self, doc_list):
-        """Filter out already-inserted docs before buffering."""
-        existing_names = self.get_existing_doc_names()
+        """
+        Drop documents that must not be inserted.
+
+        file_hash (raw-byte MD5) is decisive. Without it, fall back to the
+        doc name and the recognized-text hash.
+        """
+        self.begin_file_hash_dedup()
+        self._dedup_skip_logs = {}
+        pending_hash = {}
+        pending_names = set()
+        pending_content = set()
         filtered = []
+        counts = {'file_hash': 0, 'name': 0, 'content_hash': 0}
         for item in doc_list:
-            name = item.get('name')
-            if name and name in existing_names:
-                self.logger.info(f"Skip prepare (already in DB): {name}")
+            reason = self._skip_reason(
+                item, pending_hash, pending_names, pending_content,
+            )
+            if reason:
+                counts[reason] = counts.get(reason, 0) + 1
+                name = item.get('name')
+                if reason == 'file_hash':
+                    self._log_dedup_skip(
+                        'file_hash',
+                        f"Skip prepare (file MD5 already kept): {name} "
+                        f"hash={self._task_file_hash(item)}",
+                    )
+                elif reason == 'name':
+                    self._log_dedup_skip(
+                        'name',
+                        f"Skip prepare (already in DB): {name}",
+                    )
+                else:
+                    self._log_dedup_skip(
+                        'content_hash',
+                        f"Skip prepare (content hash already in DB): {name}",
+                    )
                 continue
             filtered.append(item)
         self.tasks = filtered
         self.doc_db.buffer_clear()
         self._flushed_count = 0
-        self.logger.debug(
-            f"Number of documents to insert: {len(self.tasks)} "
-            f"(filtered from {len(doc_list)})"
+        self.logger.info(
+            f"Insert dedup: keep={len(filtered)}/{len(doc_list)} "
+            f"skip_file_hash={counts['file_hash']} "
+            f"skip_name={counts['name']} "
+            f"skip_content_hash={counts['content_hash']}"
         )

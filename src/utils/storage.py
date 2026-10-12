@@ -27,7 +27,8 @@ class DocDB(BaseDB):
                 tokens INT,
                 embedding_content TEXT,
                 embedding_status TEXT DEFAULT 'undone', 
-                hash TEXT UNIQUE
+                hash TEXT UNIQUE,
+                file_hash TEXT
             );
             """
         super().__init__(db_path,name,create_table_sql)

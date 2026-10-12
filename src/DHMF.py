@@ -304,6 +304,8 @@ class DHMF:
 
         skip_existing: 按切片文档名跳过已在 doc 表中的段（默认 True），
                        重跑时只补缺切片，不会因首段已存在而整文件跳过。
+        同一份字节的 MD5 若已由别的文件名占用，整份源文件不再识别。
+        算不出 MD5 时才退回文件名和识别正文哈希。
         """
         self.begin_build()
         self.logger.info(
@@ -367,7 +369,8 @@ class DHMF:
     def insert(self, doc_list):
         """
         Insert documents into doc table.
-        Already-existing names/hashes are skipped inside Doc.prepare / processing.
+        Raw-byte MD5 dedup runs in Doc.prepare / processing. Name and
+        recognized-text hash are the fallback when that MD5 is missing.
         """
         self.begin_build()
         self.logger.info(f"Start inserting documents. Candidates: {len(doc_list)}")

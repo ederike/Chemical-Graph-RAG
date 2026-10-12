@@ -59,7 +59,7 @@ items = graph.retrieve_module.retrieve_items("丙酮 CAS 67-64-1 沸点")
 
 ### 识别 `doc.py`
 
-`insert_pdfs` 扫描 `working_path/doc`。PDF 页数超过 `recognition.max_pages_per_doc` 时切成多段独立文档：第一段保持原文件名，后面是 `原文件名_1`、`原文件名_2`。图片不切片。`skip_existing=True` 时按切片后的文档名跳过，所以长 PDF 只入库了第一段时，后面的段还会补。
+`insert_pdfs` 扫描 `working_path/doc`。PDF 页数超过 `recognition.max_pages_per_doc` 时切成多段独立文档：第一段保持原文件名，后面是 `原文件名_1`、`原文件名_2`。图片不切片。插入前对源文件字节算 MD5（不是 OSS 对象名）。同一个 MD5 只保留先遇到的那份源文件，它的各段切片仍然都入库；算不出 MD5 时才按文档名和识别正文哈希跳过。`skip_existing=True` 时已在表里的切片名直接跳过，长 PDF 只入库了第一段时，后面的段还会补。
 
 每一段把页面渲成图片，连同 `prompt.py` 里的 `pdf_recognize` 提示词送给视觉模型。提示词要求中文叙述，CAS、化学式、型号、单位和数值范围保持原样。`enable_thinking` 在这一步被强制关掉，并且去掉 `response_format`，因为识别要的是纯文本不是 JSON。失败按 `recognition.retry` 重试。`use_paddleocr` 为真时改走 `utils/paddleocr_vl.py`，默认可关闭。
 
