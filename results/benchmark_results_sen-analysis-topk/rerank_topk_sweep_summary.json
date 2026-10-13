@@ -1,0 +1,1994 @@
+{
+  "meta": {
+    "results_root": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk",
+    "n_runs": 26,
+    "rerank_top_ks": [
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+    ]
+  },
+  "runs": [
+    {
+      "rerank_top_k": 5,
+      "dir": "benchmark_result_topk=5",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=5/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.825,
+      "n_judged": 200,
+      "n_correct": 165,
+      "n_wrong": 35,
+      "mean_recall": 0.6625,
+      "mean_query_s": 90.92648561309997,
+      "mean_retrieve_s": 11.572074657395003,
+      "mean_rerank_s": 2.20407046,
+      "mean_wall_s": 90.98280770636502,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 81,
+            "错误": 19
+          },
+          "accuracy": 0.81,
+          "mean_query_latency_s": 63.98287769096,
+          "mean_retrieve_latency_s": 9.216376027720006,
+          "mean_precompute_s": 2.13e-06,
+          "mean_rewrite_s": 5.78e-06,
+          "mean_embed_s": 0.60190531,
+          "mean_chunk_s": 0.76263459,
+          "mean_node_s": 0.42957408999999996,
+          "mean_keyword_s": 5.51756193,
+          "mean_expand_s": 0.01204205,
+          "mean_rerank_s": 1.89165473,
+          "mean_doc_recall": 0.67
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 42,
+            "错误": 8
+          },
+          "accuracy": 0.84,
+          "mean_query_latency_s": 109.23735443579997,
+          "mean_retrieve_latency_s": 12.242344661279976,
+          "mean_precompute_s": 2.94e-06,
+          "mean_rewrite_s": 8.419999999999999e-06,
+          "mean_embed_s": 0.8186593999999999,
+          "mean_chunk_s": 0.7216251800000001,
+          "mean_node_s": 0.5022040799999999,
+          "mean_keyword_s": 7.81223076,
+          "mean_expand_s": 0.02011764,
+          "mean_rerank_s": 2.36599724,
+          "mean_doc_recall": 0.79
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 42,
+            "错误": 8
+          },
+          "accuracy": 0.84,
+          "mean_query_latency_s": 126.50283263467989,
+          "mean_retrieve_latency_s": 15.613201912860022,
+          "mean_precompute_s": 3.38e-06,
+          "mean_rewrite_s": 8.88e-06,
+          "mean_embed_s": 0.9109375,
+          "mean_chunk_s": 1.00423356,
+          "mean_node_s": 0.51934872,
+          "mean_keyword_s": 10.48944384,
+          "mean_expand_s": 0.020416840000000002,
+          "mean_rerank_s": 2.66697514,
+          "mean_doc_recall": 0.52
+        }
+      }
+    },
+    {
+      "rerank_top_k": 6,
+      "dir": "benchmark_result_topk=6",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=6/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.825,
+      "n_judged": 200,
+      "n_correct": 165,
+      "n_wrong": 35,
+      "mean_recall": 0.6916666666666668,
+      "mean_query_s": 106.5417693713849,
+      "mean_retrieve_s": 11.886720320275082,
+      "mean_rerank_s": 2.121188085,
+      "mean_wall_s": 106.558617291785,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 84,
+            "错误": 16
+          },
+          "accuracy": 0.84,
+          "mean_query_latency_s": 84.5800075554999,
+          "mean_retrieve_latency_s": 9.641548391400065,
+          "mean_precompute_s": 3.7299999999999994e-06,
+          "mean_rewrite_s": 5.950000000000001e-06,
+          "mean_embed_s": 0.59662919,
+          "mean_chunk_s": 0.64110265,
+          "mean_node_s": 0.40618696,
+          "mean_keyword_s": 6.277464660000001,
+          "mean_expand_s": 0.011624220000000001,
+          "mean_rerank_s": 1.70724016,
+          "mean_doc_recall": 0.71
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 40,
+            "错误": 10
+          },
+          "accuracy": 0.8,
+          "mean_query_latency_s": 126.03859410751993,
+          "mean_retrieve_latency_s": 13.639718534820167,
+          "mean_precompute_s": 3.04e-06,
+          "mean_rewrite_s": 8.400000000000001e-06,
+          "mean_embed_s": 0.7983792599999999,
+          "mean_chunk_s": 0.60398688,
+          "mean_node_s": 0.39397916,
+          "mean_keyword_s": 9.49388776,
+          "mean_expand_s": 0.0154737,
+          "mean_rerank_s": 2.33223298,
+          "mean_doc_recall": 0.82
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 41,
+            "错误": 9
+          },
+          "accuracy": 0.82,
+          "mean_query_latency_s": 130.96846826701992,
+          "mean_retrieve_latency_s": 14.624065963480025,
+          "mean_precompute_s": 3.5799999999999996e-06,
+          "mean_rewrite_s": 1.046e-05,
+          "mean_embed_s": 0.94860394,
+          "mean_chunk_s": 1.0274855999999999,
+          "mean_node_s": 0.50435044,
+          "mean_keyword_s": 9.3855804,
+          "mean_expand_s": 0.01797702,
+          "mean_rerank_s": 2.73803904,
+          "mean_doc_recall": 0.5266666666666666
+        }
+      }
+    },
+    {
+      "rerank_top_k": 7,
+      "dir": "benchmark_result_topk=7",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=7/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.855,
+      "n_judged": 200,
+      "n_correct": 171,
+      "n_wrong": 29,
+      "mean_recall": 0.7125,
+      "mean_query_s": 108.36915186932485,
+      "mean_retrieve_s": 11.894582219470113,
+      "mean_rerank_s": 2.189110465,
+      "mean_wall_s": 108.3865808762901,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 88,
+            "错误": 12
+          },
+          "accuracy": 0.88,
+          "mean_query_latency_s": 90.31526342186999,
+          "mean_retrieve_latency_s": 10.090454097120181,
+          "mean_precompute_s": 2.26e-06,
+          "mean_rewrite_s": 7.54e-06,
+          "mean_embed_s": 0.60015915,
+          "mean_chunk_s": 0.61234643,
+          "mean_node_s": 0.29295750000000004,
+          "mean_keyword_s": 6.7629639,
+          "mean_expand_s": 0.010627679999999999,
+          "mean_rerank_s": 1.81004446,
+          "mean_doc_recall": 0.73
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 44,
+            "错误": 6
+          },
+          "accuracy": 0.88,
+          "mean_query_latency_s": 120.41315862805953,
+          "mean_retrieve_latency_s": 13.301725816459948,
+          "mean_precompute_s": 2.9999999999999997e-06,
+          "mean_rewrite_s": 9.06e-06,
+          "mean_embed_s": 0.81402648,
+          "mean_chunk_s": 0.7071520800000001,
+          "mean_node_s": 0.40968829999999995,
+          "mean_keyword_s": 8.9131122,
+          "mean_expand_s": 0.01451362,
+          "mean_rerank_s": 2.44138318,
+          "mean_doc_recall": 0.81
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 39,
+            "错误": 11
+          },
+          "accuracy": 0.78,
+          "mean_query_latency_s": 132.43292200549993,
+          "mean_retrieve_latency_s": 14.095694867180136,
+          "mean_precompute_s": 3.66e-06,
+          "mean_rewrite_s": 9.72e-06,
+          "mean_embed_s": 0.90053586,
+          "mean_chunk_s": 0.83919624,
+          "mean_node_s": 0.50653278,
+          "mean_keyword_s": 9.13574298,
+          "mean_expand_s": 0.016742319999999998,
+          "mean_rerank_s": 2.69496976,
+          "mean_doc_recall": 0.58
+        }
+      }
+    },
+    {
+      "rerank_top_k": 8,
+      "dir": "benchmark_result_topk=8",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=8/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.865,
+      "n_judged": 200,
+      "n_correct": 173,
+      "n_wrong": 27,
+      "mean_recall": 0.7416666666666667,
+      "mean_query_s": 103.76876879753009,
+      "mean_retrieve_s": 11.082246655924791,
+      "mean_rerank_s": 2.15957713,
+      "mean_wall_s": 103.78721358835004,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 87,
+            "错误": 13
+          },
+          "accuracy": 0.87,
+          "mean_query_latency_s": 90.12478411265005,
+          "mean_retrieve_latency_s": 10.126554631219914,
+          "mean_precompute_s": 2.1499999999999997e-06,
+          "mean_rewrite_s": 5.6e-06,
+          "mean_embed_s": 0.87719646,
+          "mean_chunk_s": 0.76204759,
+          "mean_node_s": 0.28111587,
+          "mean_keyword_s": 6.441026379999999,
+          "mean_expand_s": 0.010604240000000001,
+          "mean_rerank_s": 1.75323488,
+          "mean_doc_recall": 0.78
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 42,
+            "错误": 8
+          },
+          "accuracy": 0.84,
+          "mean_query_latency_s": 111.16634511894009,
+          "mean_retrieve_latency_s": 11.418691906679378,
+          "mean_precompute_s": 2.98e-06,
+          "mean_rewrite_s": 8.419999999999999e-06,
+          "mean_embed_s": 0.77624656,
+          "mean_chunk_s": 0.60730466,
+          "mean_node_s": 0.43119778,
+          "mean_keyword_s": 7.33466826,
+          "mean_expand_s": 0.01475612,
+          "mean_rerank_s": 2.25260294,
+          "mean_doc_recall": 0.82
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 44,
+            "错误": 6
+          },
+          "accuracy": 0.88,
+          "mean_query_latency_s": 123.65916184588015,
+          "mean_retrieve_latency_s": 12.657185454579958,
+          "mean_precompute_s": 3.48e-06,
+          "mean_rewrite_s": 9.12e-06,
+          "mean_embed_s": 0.9593307799999999,
+          "mean_chunk_s": 0.68162816,
+          "mean_node_s": 0.48889336,
+          "mean_keyword_s": 7.62775882,
+          "mean_expand_s": 0.01827296,
+          "mean_rerank_s": 2.87923582,
+          "mean_doc_recall": 0.5866666666666667
+        }
+      }
+    },
+    {
+      "rerank_top_k": 9,
+      "dir": "benchmark_result_topk=9",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=9/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.9,
+      "n_judged": 200,
+      "n_correct": 180,
+      "n_wrong": 20,
+      "mean_recall": 0.7633333333333333,
+      "mean_query_s": 110.93283655251491,
+      "mean_retrieve_s": 11.757059556475106,
+      "mean_rerank_s": 2.4817760950000003,
+      "mean_wall_s": 110.95010145275987,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 89,
+            "错误": 11
+          },
+          "accuracy": 0.89,
+          "mean_query_latency_s": 89.89033962585997,
+          "mean_retrieve_latency_s": 10.031045641159762,
+          "mean_precompute_s": 2.2899999999999997e-06,
+          "mean_rewrite_s": 5.860000000000001e-06,
+          "mean_embed_s": 0.59012475,
+          "mean_chunk_s": 0.58674864,
+          "mean_node_s": 0.34297185999999996,
+          "mean_keyword_s": 6.1280760899999995,
+          "mean_expand_s": 0.01163068,
+          "mean_rerank_s": 2.37005832,
+          "mean_doc_recall": 0.81
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 120.72332208639972,
+          "mean_retrieve_latency_s": 11.659059392941053,
+          "mean_precompute_s": 3.14e-06,
+          "mean_rewrite_s": 8.38e-06,
+          "mean_embed_s": 0.82750704,
+          "mean_chunk_s": 0.78639456,
+          "mean_node_s": 0.4133783,
+          "mean_keyword_s": 7.16223036,
+          "mean_expand_s": 0.01575674,
+          "mean_rerank_s": 2.4517253400000003,
+          "mean_doc_recall": 0.84
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 143.22734487194,
+          "mean_retrieve_latency_s": 15.307087550639844,
+          "mean_precompute_s": 3.3999999999999996e-06,
+          "mean_rewrite_s": 8.98e-06,
+          "mean_embed_s": 0.9236427,
+          "mean_chunk_s": 0.9982304399999999,
+          "mean_node_s": 0.47995078,
+          "mean_keyword_s": 10.150876779999999,
+          "mean_expand_s": 0.0169715,
+          "mean_rerank_s": 2.7352624000000003,
+          "mean_doc_recall": 0.5933333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 10,
+      "dir": "benchmark_result_topk=10",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=10/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.88,
+      "n_judged": 200,
+      "n_correct": 176,
+      "n_wrong": 24,
+      "mean_recall": 0.7658333333333333,
+      "mean_query_s": 113.04994167936009,
+      "mean_retrieve_s": 11.015371533024881,
+      "mean_rerank_s": 2.1524311700000003,
+      "mean_wall_s": 113.06591429207026,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 90,
+            "错误": 10
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 92.56399139193992,
+          "mean_retrieve_latency_s": 9.005703104719942,
+          "mean_precompute_s": 2.79e-06,
+          "mean_rewrite_s": 6.4900000000000005e-06,
+          "mean_embed_s": 0.57973829,
+          "mean_chunk_s": 0.53868964,
+          "mean_node_s": 0.4132362,
+          "mean_keyword_s": 5.74214821,
+          "mean_expand_s": 0.01085939,
+          "mean_rerank_s": 1.71961332,
+          "mean_doc_recall": 0.79
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 44,
+            "错误": 6
+          },
+          "accuracy": 0.88,
+          "mean_query_latency_s": 122.37216998828052,
+          "mean_retrieve_latency_s": 11.639402928379422,
+          "mean_precompute_s": 3.06e-06,
+          "mean_rewrite_s": 8.14e-06,
+          "mean_embed_s": 0.80825086,
+          "mean_chunk_s": 0.65230802,
+          "mean_node_s": 0.41502616,
+          "mean_keyword_s": 7.3508299,
+          "mean_expand_s": 0.01449802,
+          "mean_rerank_s": 2.39660356,
+          "mean_doc_recall": 0.85
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 42,
+            "错误": 8
+          },
+          "accuracy": 0.84,
+          "mean_query_latency_s": 144.69961394528,
+          "mean_retrieve_latency_s": 14.41067699428022,
+          "mean_precompute_s": 5.18e-06,
+          "mean_rewrite_s": 1.188e-05,
+          "mean_embed_s": 0.93664258,
+          "mean_chunk_s": 0.7470241400000001,
+          "mean_node_s": 0.6238596,
+          "mean_keyword_s": 9.3091549,
+          "mean_expand_s": 0.01758862,
+          "mean_rerank_s": 2.77389448,
+          "mean_doc_recall": 0.6333333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 11,
+      "dir": "benchmark_result_topk=11",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=11/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.875,
+      "n_judged": 200,
+      "n_correct": 175,
+      "n_wrong": 25,
+      "mean_recall": 0.7833333333333333,
+      "mean_query_s": 116.72865545379479,
+      "mean_retrieve_s": 11.103606887324785,
+      "mean_rerank_s": 2.148608205,
+      "mean_wall_s": 116.74499457357524,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 89,
+            "错误": 11
+          },
+          "accuracy": 0.89,
+          "mean_query_latency_s": 96.59154621584952,
+          "mean_retrieve_latency_s": 9.354375946479996,
+          "mean_precompute_s": 2.31e-06,
+          "mean_rewrite_s": 6.090000000000001e-06,
+          "mean_embed_s": 0.61088606,
+          "mean_chunk_s": 0.433937,
+          "mean_node_s": 0.31234863,
+          "mean_keyword_s": 6.160341089999999,
+          "mean_expand_s": 0.011212930000000001,
+          "mean_rerank_s": 1.82417394,
+          "mean_doc_recall": 0.83
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 129.34629272916018,
+          "mean_retrieve_latency_s": 12.257262543139804,
+          "mean_precompute_s": 2.98e-06,
+          "mean_rewrite_s": 8.419999999999999e-06,
+          "mean_embed_s": 0.79893076,
+          "mean_chunk_s": 0.62858902,
+          "mean_node_s": 0.4185222,
+          "mean_keyword_s": 8.0661515,
+          "mean_expand_s": 0.01460208,
+          "mean_rerank_s": 2.32853812,
+          "mean_doc_recall": 0.86
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 41,
+            "错误": 9
+          },
+          "accuracy": 0.82,
+          "mean_query_latency_s": 144.3852366543199,
+          "mean_retrieve_latency_s": 13.448413113199349,
+          "mean_precompute_s": 4.34e-06,
+          "mean_rewrite_s": 8.66e-06,
+          "mean_embed_s": 0.8785741,
+          "mean_chunk_s": 0.7578446200000001,
+          "mean_node_s": 0.44719512,
+          "mean_keyword_s": 8.728607,
+          "mean_expand_s": 0.016510419999999998,
+          "mean_rerank_s": 2.61754682,
+          "mean_doc_recall": 0.6133333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 12,
+      "dir": "benchmark_result_topk=12",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=12/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.88,
+      "n_judged": 200,
+      "n_correct": 176,
+      "n_wrong": 24,
+      "mean_recall": 0.8008333333333333,
+      "mean_query_s": 115.587740980665,
+      "mean_retrieve_s": 11.310103782185578,
+      "mean_rerank_s": 2.21525021,
+      "mean_wall_s": 115.60497349617482,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 87,
+            "错误": 13
+          },
+          "accuracy": 0.87,
+          "mean_query_latency_s": 97.77504257852058,
+          "mean_retrieve_latency_s": 10.087473487820752,
+          "mean_precompute_s": 2.2799999999999998e-06,
+          "mean_rewrite_s": 7.5699999999999995e-06,
+          "mean_embed_s": 0.6018142000000001,
+          "mean_chunk_s": 0.54361386,
+          "mean_node_s": 0.32135342,
+          "mean_keyword_s": 6.75900514,
+          "mean_expand_s": 0.01081615,
+          "mean_rerank_s": 1.84936106,
+          "mean_doc_recall": 0.84
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 121.91473950639948,
+          "mean_retrieve_latency_s": 11.006444186640001,
+          "mean_precompute_s": 2.9999999999999997e-06,
+          "mean_rewrite_s": 8.239999999999999e-06,
+          "mean_embed_s": 0.8079464000000001,
+          "mean_chunk_s": 0.5173064,
+          "mean_node_s": 0.3835502,
+          "mean_keyword_s": 6.916159619999999,
+          "mean_expand_s": 0.014559299999999999,
+          "mean_rerank_s": 2.36488356,
+          "mean_doc_recall": 0.89
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 43,
+            "错误": 7
+          },
+          "accuracy": 0.86,
+          "mean_query_latency_s": 144.88613925921933,
+          "mean_retrieve_latency_s": 14.059023966460808,
+          "mean_precompute_s": 5.279999999999999e-06,
+          "mean_rewrite_s": 9.04e-06,
+          "mean_embed_s": 0.90911282,
+          "mean_chunk_s": 0.8520018400000001,
+          "mean_node_s": 0.44447714,
+          "mean_keyword_s": 9.03674748,
+          "mean_expand_s": 0.01700832,
+          "mean_rerank_s": 2.7973951599999998,
+          "mean_doc_recall": 0.6333333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 13,
+      "dir": "benchmark_result_topk=13",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=13/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.92,
+      "n_judged": 200,
+      "n_correct": 184,
+      "n_wrong": 16,
+      "mean_recall": 0.7958333333333333,
+      "mean_query_s": 121.55746578161023,
+      "mean_retrieve_s": 11.6147446600251,
+      "mean_rerank_s": 2.233257235,
+      "mean_wall_s": 121.57448562741956,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 92,
+            "错误": 8
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 98.48286624836074,
+          "mean_retrieve_latency_s": 9.287635289239843,
+          "mean_precompute_s": 2.46e-06,
+          "mean_rewrite_s": 7.32e-06,
+          "mean_embed_s": 0.6034322799999999,
+          "mean_chunk_s": 0.53529705,
+          "mean_node_s": 0.29634628,
+          "mean_keyword_s": 6.02324537,
+          "mean_expand_s": 0.01129772,
+          "mean_rerank_s": 1.81644373,
+          "mean_doc_recall": 0.82
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 135.9218439750401,
+          "mean_retrieve_latency_s": 13.459727833181386,
+          "mean_precompute_s": 3.28e-06,
+          "mean_rewrite_s": 9.32e-06,
+          "mean_embed_s": 0.82815894,
+          "mean_chunk_s": 0.65624556,
+          "mean_node_s": 0.41201292,
+          "mean_keyword_s": 9.0036922,
+          "mean_expand_s": 0.0162939,
+          "mean_rerank_s": 2.5410675,
+          "mean_doc_recall": 0.89
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 153.34228665467933,
+          "mean_retrieve_latency_s": 14.423980228439323,
+          "mean_precompute_s": 3.4199999999999994e-06,
+          "mean_rewrite_s": 9.38e-06,
+          "mean_embed_s": 0.9213994,
+          "mean_chunk_s": 0.76881968,
+          "mean_node_s": 0.46203774000000003,
+          "mean_keyword_s": 9.49282656,
+          "mean_expand_s": 0.01742098,
+          "mean_rerank_s": 2.75907398,
+          "mean_doc_recall": 0.6533333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 14,
+      "dir": "benchmark_result_topk=14",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=14/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.91,
+      "n_judged": 200,
+      "n_correct": 182,
+      "n_wrong": 18,
+      "mean_recall": 0.8116666666666668,
+      "mean_query_s": 124.28210592811476,
+      "mean_retrieve_s": 11.422804242681087,
+      "mean_rerank_s": 2.45151385,
+      "mean_wall_s": 124.29897679859961,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 92,
+            "错误": 8
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 103.17466643165025,
+          "mean_retrieve_latency_s": 10.165339136651601,
+          "mean_precompute_s": 2.23e-06,
+          "mean_rewrite_s": 6.56e-06,
+          "mean_embed_s": 0.60929551,
+          "mean_chunk_s": 0.49335741,
+          "mean_node_s": 0.29001907,
+          "mean_keyword_s": 6.396709980000001,
+          "mean_expand_s": 0.01135954,
+          "mean_rerank_s": 2.3629528000000004,
+          "mean_doc_recall": 0.85
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 136.2071177429799,
+          "mean_retrieve_latency_s": 11.492665082819876,
+          "mean_precompute_s": 2.92e-06,
+          "mean_rewrite_s": 8e-06,
+          "mean_embed_s": 0.81181896,
+          "mean_chunk_s": 0.66575604,
+          "mean_node_s": 0.40178128,
+          "mean_keyword_s": 7.1857690000000005,
+          "mean_expand_s": 0.01377674,
+          "mean_rerank_s": 2.41185022,
+          "mean_doc_recall": 0.9
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 154.57197310617863,
+          "mean_retrieve_latency_s": 13.867873614601267,
+          "mean_precompute_s": 4.32e-06,
+          "mean_rewrite_s": 8.84e-06,
+          "mean_embed_s": 0.91660944,
+          "mean_chunk_s": 0.74414,
+          "mean_node_s": 0.45232788,
+          "mean_keyword_s": 9.06724744,
+          "mean_expand_s": 0.01692232,
+          "mean_rerank_s": 2.66829958,
+          "mean_doc_recall": 0.6466666666666666
+        }
+      }
+    },
+    {
+      "rerank_top_k": 15,
+      "dir": "benchmark_result_topk=15",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=15/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.92,
+      "n_judged": 200,
+      "n_correct": 184,
+      "n_wrong": 16,
+      "mean_recall": 0.8283333333333333,
+      "mean_query_s": 129.2196630120501,
+      "mean_retrieve_s": 12.12620828770916,
+      "mean_rerank_s": 2.4990759750000002,
+      "mean_wall_s": 129.2356490798096,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 93,
+            "错误": 7
+          },
+          "accuracy": 0.93,
+          "mean_query_latency_s": 103.97629050954026,
+          "mean_retrieve_latency_s": 10.2259150055598,
+          "mean_precompute_s": 2.31e-06,
+          "mean_rewrite_s": 7.35e-06,
+          "mean_embed_s": 0.6418408,
+          "mean_chunk_s": 0.62028013,
+          "mean_node_s": 0.40146377,
+          "mean_keyword_s": 6.80762555,
+          "mean_expand_s": 0.01118077,
+          "mean_rerank_s": 1.7418761800000002,
+          "mean_doc_recall": 0.87
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 143.05283491981945,
+          "mean_retrieve_latency_s": 13.158906568498933,
+          "mean_precompute_s": 3.26e-06,
+          "mean_rewrite_s": 8.44e-06,
+          "mean_embed_s": 0.8239960399999999,
+          "mean_chunk_s": 0.61798592,
+          "mean_node_s": 0.41031328,
+          "mean_keyword_s": 7.69904934,
+          "mean_expand_s": 0.015458959999999999,
+          "mean_rerank_s": 3.5898000000000003,
+          "mean_doc_recall": 0.92
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 165.87323610930034,
+          "mean_retrieve_latency_s": 14.894096571218107,
+          "mean_precompute_s": 3.66e-06,
+          "mean_rewrite_s": 1.096e-05,
+          "mean_embed_s": 1.00190652,
+          "mean_chunk_s": 0.7746645200000001,
+          "mean_node_s": 0.48132263999999997,
+          "mean_keyword_s": 9.6927762,
+          "mean_expand_s": 0.018041540000000002,
+          "mean_rerank_s": 2.9227515399999997,
+          "mean_doc_recall": 0.6533333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 16,
+      "dir": "benchmark_result_topk=16",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=16/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.945,
+      "n_judged": 200,
+      "n_correct": 189,
+      "n_wrong": 11,
+      "mean_recall": 0.8175,
+      "mean_query_s": 129.73654353963008,
+      "mean_retrieve_s": 11.506841110620444,
+      "mean_rerank_s": 2.174109675,
+      "mean_wall_s": 129.75343005861563,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 94,
+            "错误": 6
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 104.86282148378058,
+          "mean_retrieve_latency_s": 10.322948378909205,
+          "mean_precompute_s": 2.27e-06,
+          "mean_rewrite_s": 6.05e-06,
+          "mean_embed_s": 0.6020687800000001,
+          "mean_chunk_s": 0.77189411,
+          "mean_node_s": 0.50317307,
+          "mean_keyword_s": 6.65172537,
+          "mean_expand_s": 0.01122041,
+          "mean_rerank_s": 1.78114177,
+          "mean_doc_recall": 0.85
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 143.48264824570012,
+          "mean_retrieve_latency_s": 11.504618244041922,
+          "mean_precompute_s": 2.88e-06,
+          "mean_rewrite_s": 1.002e-05,
+          "mean_embed_s": 0.79194954,
+          "mean_chunk_s": 0.57309782,
+          "mean_node_s": 0.43003118,
+          "mean_keyword_s": 7.33727142,
+          "mean_expand_s": 0.01473732,
+          "mean_rerank_s": 2.3553515,
+          "mean_doc_recall": 0.91
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 165.73788294525903,
+          "mean_retrieve_latency_s": 13.876849440621445,
+          "mean_precompute_s": 8.64e-06,
+          "mean_rewrite_s": 1.216e-05,
+          "mean_embed_s": 0.93421244,
+          "mean_chunk_s": 0.61862492,
+          "mean_node_s": 0.45322471999999997,
+          "mean_keyword_s": 9.07161346,
+          "mean_expand_s": 0.01776848,
+          "mean_rerank_s": 2.77880366,
+          "mean_doc_recall": 0.66
+        }
+      }
+    },
+    {
+      "rerank_top_k": 17,
+      "dir": "benchmark_result_topk=17",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=17/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.94,
+      "n_judged": 200,
+      "n_correct": 188,
+      "n_wrong": 12,
+      "mean_recall": 0.835,
+      "mean_query_s": 131.4232233927946,
+      "mean_retrieve_s": 11.418420840380204,
+      "mean_rerank_s": 2.493785575,
+      "mean_wall_s": 131.43939140068971,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 95,
+            "错误": 5
+          },
+          "accuracy": 0.95,
+          "mean_query_latency_s": 111.58448106926967,
+          "mean_retrieve_latency_s": 10.577968342400126,
+          "mean_precompute_s": 2.14e-06,
+          "mean_rewrite_s": 5.71e-06,
+          "mean_embed_s": 0.59762498,
+          "mean_chunk_s": 0.60781045,
+          "mean_node_s": 0.32033667,
+          "mean_keyword_s": 7.20476167,
+          "mean_expand_s": 0.01114722,
+          "mean_rerank_s": 1.83458359,
+          "mean_doc_recall": 0.88
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 142.31128943967954,
+          "mean_retrieve_latency_s": 12.723538779019437,
+          "mean_precompute_s": 2.98e-06,
+          "mean_rewrite_s": 9.6e-06,
+          "mean_embed_s": 0.79103996,
+          "mean_chunk_s": 0.55225284,
+          "mean_node_s": 0.37863,
+          "mean_keyword_s": 7.448757,
+          "mean_expand_s": 0.014023520000000001,
+          "mean_rerank_s": 3.53664378,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 160.21264199295953,
+          "mean_retrieve_latency_s": 11.794207897701126,
+          "mean_precompute_s": 3.9399999999999995e-06,
+          "mean_rewrite_s": 1.0579999999999999e-05,
+          "mean_embed_s": 0.92349934,
+          "mean_chunk_s": 0.44942326,
+          "mean_node_s": 0.41174374,
+          "mean_keyword_s": 7.220724860000001,
+          "mean_expand_s": 0.01688454,
+          "mean_rerank_s": 2.76933134,
+          "mean_doc_recall": 0.64
+        }
+      }
+    },
+    {
+      "rerank_top_k": 18,
+      "dir": "benchmark_result_topk=18",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=18/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.955,
+      "n_judged": 200,
+      "n_correct": 191,
+      "n_wrong": 9,
+      "mean_recall": 0.8483333333333333,
+      "mean_query_s": 135.58489986492523,
+      "mean_retrieve_s": 11.60315726916051,
+      "mean_rerank_s": 2.2325684050000003,
+      "mean_wall_s": 135.6009171112554,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 96,
+            "错误": 4
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 110.59549390867004,
+          "mean_retrieve_latency_s": 10.21654703506123,
+          "mean_precompute_s": 2.32e-06,
+          "mean_rewrite_s": 9.76e-06,
+          "mean_embed_s": 0.61116869,
+          "mean_chunk_s": 0.56852671,
+          "mean_node_s": 0.33701887999999997,
+          "mean_keyword_s": 6.817609559999999,
+          "mean_expand_s": 0.011601779999999999,
+          "mean_rerank_s": 1.86885341,
+          "mean_doc_recall": 0.9
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 147.0987074000403,
+          "mean_retrieve_latency_s": 12.236160369539867,
+          "mean_precompute_s": 6.56e-06,
+          "mean_rewrite_s": 8.66e-06,
+          "mean_embed_s": 0.8007786400000001,
+          "mean_chunk_s": 0.46883463999999997,
+          "mean_node_s": 0.42549958,
+          "mean_keyword_s": 8.15909828,
+          "mean_expand_s": 0.01463086,
+          "mean_rerank_s": 2.36496452,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 174.04990424232062,
+          "mean_retrieve_latency_s": 13.743374636979716,
+          "mean_precompute_s": 3.8400000000000005e-06,
+          "mean_rewrite_s": 1.142e-05,
+          "mean_embed_s": 0.95707982,
+          "mean_chunk_s": 0.63273454,
+          "mean_node_s": 0.440075,
+          "mean_keyword_s": 8.86516766,
+          "mean_expand_s": 0.01806812,
+          "mean_rerank_s": 2.82760228,
+          "mean_doc_recall": 0.6533333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 19,
+      "dir": "benchmark_result_topk=19",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=19/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.915,
+      "n_judged": 200,
+      "n_correct": 183,
+      "n_wrong": 17,
+      "mean_recall": 0.8408333333333333,
+      "mean_query_s": 138.05700721661546,
+      "mean_retrieve_s": 11.460313773529052,
+      "mean_rerank_s": 2.26370593,
+      "mean_wall_s": 138.07356040170947,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 93,
+            "错误": 7
+          },
+          "accuracy": 0.93,
+          "mean_query_latency_s": 113.437923591141,
+          "mean_retrieve_latency_s": 10.520149023399426,
+          "mean_precompute_s": 2.49e-06,
+          "mean_rewrite_s": 6.3100000000000006e-06,
+          "mean_embed_s": 0.58875359,
+          "mean_chunk_s": 0.69181132,
+          "mean_node_s": 0.29629584999999997,
+          "mean_keyword_s": 7.073693070000001,
+          "mean_expand_s": 0.01076335,
+          "mean_rerank_s": 1.8571236500000001,
+          "mean_doc_recall": 0.89
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 44,
+            "错误": 6
+          },
+          "accuracy": 0.88,
+          "mean_query_latency_s": 152.88878813137998,
+          "mean_retrieve_latency_s": 11.481267426058185,
+          "mean_precompute_s": 3.92e-06,
+          "mean_rewrite_s": 8.82e-06,
+          "mean_embed_s": 0.80234416,
+          "mean_chunk_s": 0.48473776,
+          "mean_node_s": 0.3741236,
+          "mean_keyword_s": 7.41604656,
+          "mean_expand_s": 0.01440732,
+          "mean_rerank_s": 2.38719044,
+          "mean_doc_recall": 0.93
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 172.46339355279983,
+          "mean_retrieve_latency_s": 13.319689621259167,
+          "mean_precompute_s": 4.7399999999999995e-06,
+          "mean_rewrite_s": 1.196e-05,
+          "mean_embed_s": 0.9383279600000001,
+          "mean_chunk_s": 0.532415,
+          "mean_node_s": 0.44579194,
+          "mean_keyword_s": 8.42956554,
+          "mean_expand_s": 0.017518,
+          "mean_rerank_s": 2.9533859799999997,
+          "mean_doc_recall": 0.6533333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 20,
+      "dir": "benchmark_result_topk=20",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=20/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.97,
+      "n_judged": 200,
+      "n_correct": 194,
+      "n_wrong": 6,
+      "mean_recall": 0.8566666666666667,
+      "mean_query_s": 136.73124598561014,
+      "mean_retrieve_s": 11.5282246991359,
+      "mean_rerank_s": 2.203204305,
+      "mean_wall_s": 136.74773850408477,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 96,
+            "错误": 4
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 113.22271964550048,
+          "mean_retrieve_latency_s": 9.377151629490836,
+          "mean_precompute_s": 2.13e-06,
+          "mean_rewrite_s": 5.91e-06,
+          "mean_embed_s": 0.59240273,
+          "mean_chunk_s": 0.55340351,
+          "mean_node_s": 0.28440214999999996,
+          "mean_keyword_s": 6.133730379999999,
+          "mean_expand_s": 0.010836479999999999,
+          "mean_rerank_s": 1.80068655,
+          "mean_doc_recall": 0.9
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 153.2189346141179,
+          "mean_retrieve_latency_s": 12.599671827003476,
+          "mean_precompute_s": 3.04e-06,
+          "mean_rewrite_s": 1.022e-05,
+          "mean_embed_s": 0.83445808,
+          "mean_chunk_s": 0.54258082,
+          "mean_node_s": 0.40495897999999997,
+          "mean_keyword_s": 8.41955114,
+          "mean_expand_s": 0.014912700000000001,
+          "mean_rerank_s": 2.3807753,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 50,
+            "错误": 0
+          },
+          "accuracy": 1.0,
+          "mean_query_latency_s": 167.26061003732175,
+          "mean_retrieve_latency_s": 14.758923710558447,
+          "mean_precompute_s": 3.3399999999999998e-06,
+          "mean_rewrite_s": 9.58e-06,
+          "mean_embed_s": 0.9090035799999999,
+          "mean_chunk_s": 0.7381321200000001,
+          "mean_node_s": 0.47284038,
+          "mean_keyword_s": 9.7890471,
+          "mean_expand_s": 0.01650914,
+          "mean_rerank_s": 2.83066882,
+          "mean_doc_recall": 0.6866666666666665
+        }
+      }
+    },
+    {
+      "rerank_top_k": 21,
+      "dir": "benchmark_result_topk=21",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=21/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.945,
+      "n_judged": 200,
+      "n_correct": 189,
+      "n_wrong": 11,
+      "mean_recall": 0.8858333333333333,
+      "mean_query_s": 146.97647034395604,
+      "mean_retrieve_s": 13.171503540176055,
+      "mean_rerank_s": 2.2346175400000003,
+      "mean_wall_s": 147.02987682740553,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 95,
+            "错误": 5
+          },
+          "accuracy": 0.95,
+          "mean_query_latency_s": 116.45419035940053,
+          "mean_retrieve_latency_s": 10.718306710913312,
+          "mean_precompute_s": 2.61e-06,
+          "mean_rewrite_s": 4.93e-06,
+          "mean_embed_s": 0.60268926,
+          "mean_chunk_s": 0.50406173,
+          "mean_node_s": 0.39683172,
+          "mean_keyword_s": 7.37308011,
+          "mean_expand_s": 0.015142929999999999,
+          "mean_rerank_s": 1.82517364,
+          "mean_doc_recall": 0.95
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 178.38874128128168,
+          "mean_retrieve_latency_s": 14.891138026337138,
+          "mean_precompute_s": 3.86e-06,
+          "mean_rewrite_s": 8.16e-06,
+          "mean_embed_s": 0.91235468,
+          "mean_chunk_s": 0.52874012,
+          "mean_node_s": 0.6393878000000001,
+          "mean_keyword_s": 10.17521458,
+          "mean_expand_s": 0.0400786,
+          "mean_rerank_s": 2.5934982000000004,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 176.60875937574136,
+          "mean_retrieve_latency_s": 16.358262712540455,
+          "mean_precompute_s": 2.64e-06,
+          "mean_rewrite_s": 6.72e-06,
+          "mean_embed_s": 0.9279982,
+          "mean_chunk_s": 1.12717408,
+          "mean_node_s": 0.55245386,
+          "mean_keyword_s": 11.02396772,
+          "mean_expand_s": 0.030081880000000002,
+          "mean_rerank_s": 2.69462468,
+          "mean_doc_recall": 0.6933333333333332
+        }
+      }
+    },
+    {
+      "rerank_top_k": 22,
+      "dir": "benchmark_result_topk=22",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=22/evals_complex.json",
+      "n_results": 193,
+      "eval_done": false,
+      "accuracy": 0.9481865284974094,
+      "n_judged": 193,
+      "n_correct": 183,
+      "n_wrong": 10,
+      "mean_recall": 0.8721934369602764,
+      "mean_query_s": 146.3935886210098,
+      "mean_retrieve_s": 12.980182163538279,
+      "mean_rerank_s": 2.2122311398963728,
+      "mean_wall_s": 146.41088705719613,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 95,
+            "错误": 5
+          },
+          "accuracy": 0.95,
+          "mean_query_latency_s": 123.4975968936499,
+          "mean_retrieve_latency_s": 10.79202133191924,
+          "mean_precompute_s": 1.74e-06,
+          "mean_rewrite_s": 3.28e-06,
+          "mean_embed_s": 0.6460514700000001,
+          "mean_chunk_s": 0.6981455400000001,
+          "mean_node_s": 0.37782682,
+          "mean_keyword_s": 7.12160137,
+          "mean_expand_s": 0.026265570000000002,
+          "mean_rerank_s": 1.92139236,
+          "mean_doc_recall": 0.91
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 162.7364977200987,
+          "mean_retrieve_latency_s": 14.879235970120062,
+          "mean_precompute_s": 2.0599999999999998e-06,
+          "mean_rewrite_s": 4.7e-06,
+          "mean_embed_s": 0.79592462,
+          "mean_chunk_s": 0.89051972,
+          "mean_node_s": 0.42976433999999997,
+          "mean_keyword_s": 10.45430726,
+          "mean_expand_s": 0.02665666,
+          "mean_rerank_s": 2.2810799399999997,
+          "mean_doc_recall": 0.96
+        },
+        "3": {
+          "n": 43,
+          "llm_acc_counts": {
+            "正确": 40,
+            "错误": 3
+          },
+          "accuracy": 0.9302325581395349,
+          "mean_query_latency_s": 180.6366983368596,
+          "mean_retrieve_latency_s": 15.86072618290606,
+          "mean_precompute_s": 2.5581395348837207e-06,
+          "mean_rewrite_s": 6.930232558139534e-06,
+          "mean_embed_s": 0.9131326744186047,
+          "mean_chunk_s": 0.6483740465116279,
+          "mean_node_s": 0.7917472325581395,
+          "mean_keyword_s": 10.657368395348838,
+          "mean_expand_s": 0.0399523488372093,
+          "mean_rerank_s": 2.8085436511627906,
+          "mean_doc_recall": 0.6821705426356589
+        }
+      }
+    },
+    {
+      "rerank_top_k": 23,
+      "dir": "benchmark_result_topk=23",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=23/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.92,
+      "n_judged": 200,
+      "n_correct": 184,
+      "n_wrong": 16,
+      "mean_recall": 0.8533333333333333,
+      "mean_query_s": 143.28553910636984,
+      "mean_retrieve_s": 13.435697567483293,
+      "mean_rerank_s": 2.686442505,
+      "mean_wall_s": 143.34603013734974,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 90,
+            "错误": 10
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 114.79853673472942,
+          "mean_retrieve_latency_s": 14.377879784177058,
+          "mean_precompute_s": 1.68e-06,
+          "mean_rewrite_s": 6.169999999999999e-06,
+          "mean_embed_s": 0.64142284,
+          "mean_chunk_s": 2.1627312,
+          "mean_node_s": 2.88460031,
+          "mean_keyword_s": 6.28055179,
+          "mean_expand_s": 0.05852623999999999,
+          "mean_rerank_s": 2.3487118899999997,
+          "mean_doc_recall": 0.9
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 161.00552846670382,
+          "mean_retrieve_latency_s": 12.764104456003988,
+          "mean_precompute_s": 2.0599999999999998e-06,
+          "mean_rewrite_s": 6.14e-06,
+          "mean_embed_s": 0.85649614,
+          "mean_chunk_s": 1.09069676,
+          "mean_node_s": 1.4942922,
+          "mean_keyword_s": 6.364097040000001,
+          "mean_expand_s": 0.0968831,
+          "mean_rerank_s": 2.8592952200000004,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 48,
+            "错误": 2
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 182.53955448931666,
+          "mean_retrieve_latency_s": 12.222926245575072,
+          "mean_precompute_s": 2.42e-06,
+          "mean_rewrite_s": 7.66e-06,
+          "mean_embed_s": 0.9438543,
+          "mean_chunk_s": 1.13841354,
+          "mean_node_s": 1.20306344,
+          "mean_keyword_s": 5.6781593,
+          "mean_expand_s": 0.06814809999999999,
+          "mean_rerank_s": 3.18905102,
+          "mean_doc_recall": 0.6733333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 24,
+      "dir": "benchmark_result_topk=24",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=24/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.93,
+      "n_judged": 200,
+      "n_correct": 186,
+      "n_wrong": 14,
+      "mean_recall": 0.8583333333333333,
+      "mean_query_s": 149.95573047146578,
+      "mean_retrieve_s": 11.943064561780483,
+      "mean_rerank_s": 2.5862537850000002,
+      "mean_wall_s": 149.98072382607586,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 93,
+            "错误": 7
+          },
+          "accuracy": 0.93,
+          "mean_query_latency_s": 120.08438770169974,
+          "mean_retrieve_latency_s": 9.651308675571345,
+          "mean_precompute_s": 1.74e-06,
+          "mean_rewrite_s": 5.39e-06,
+          "mean_embed_s": 0.6045254099999999,
+          "mean_chunk_s": 0.8382201600000001,
+          "mean_node_s": 0.7435775499999999,
+          "mean_keyword_s": 5.248303,
+          "mean_expand_s": 0.04851358,
+          "mean_rerank_s": 2.16663271,
+          "mean_doc_recall": 0.9
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 173.47917385849752,
+          "mean_retrieve_latency_s": 13.24254501604708,
+          "mean_precompute_s": 1.96e-06,
+          "mean_rewrite_s": 5.98e-06,
+          "mean_embed_s": 0.79011948,
+          "mean_chunk_s": 1.2370421,
+          "mean_node_s": 1.0855574799999999,
+          "mean_keyword_s": 7.31234652,
+          "mean_expand_s": 0.05365296,
+          "mean_rerank_s": 2.7613825,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 186.17497262396617,
+          "mean_retrieve_latency_s": 15.227095879932167,
+          "mean_precompute_s": 2.26e-06,
+          "mean_rewrite_s": 7.4799999999999995e-06,
+          "mean_embed_s": 0.9190904799999999,
+          "mean_chunk_s": 1.3797491,
+          "mean_node_s": 1.7567424,
+          "mean_keyword_s": 7.813887019999999,
+          "mean_expand_s": 0.10535952,
+          "mean_rerank_s": 3.25036722,
+          "mean_doc_recall": 0.6933333333333332
+        }
+      }
+    },
+    {
+      "rerank_top_k": 25,
+      "dir": "benchmark_result_topk=25",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=25/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.935,
+      "n_judged": 200,
+      "n_correct": 187,
+      "n_wrong": 13,
+      "mean_recall": 0.8608333333333333,
+      "mean_query_s": 152.48290066226065,
+      "mean_retrieve_s": 12.6586344146583,
+      "mean_rerank_s": 2.65697587,
+      "mean_wall_s": 152.50416782122105,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 95,
+            "错误": 5
+          },
+          "accuracy": 0.95,
+          "mean_query_latency_s": 124.3317313498311,
+          "mean_retrieve_latency_s": 11.772402564230141,
+          "mean_precompute_s": 2.22e-06,
+          "mean_rewrite_s": 3.79e-06,
+          "mean_embed_s": 0.61478375,
+          "mean_chunk_s": 0.8885710899999999,
+          "mean_node_s": 1.11443425,
+          "mean_keyword_s": 6.83077993,
+          "mean_expand_s": 0.07568989,
+          "mean_rerank_s": 2.2467726999999997,
+          "mean_doc_recall": 0.91
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 170.22175145718154,
+          "mean_retrieve_latency_s": 13.700111078680493,
+          "mean_precompute_s": 2.24e-06,
+          "mean_rewrite_s": 5.199999999999999e-06,
+          "mean_embed_s": 0.79687402,
+          "mean_chunk_s": 0.90970224,
+          "mean_node_s": 0.9002132199999999,
+          "mean_keyword_s": 8.24441874,
+          "mean_expand_s": 0.04690164,
+          "mean_rerank_s": 2.80034902,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 191.0463884921989,
+          "mean_retrieve_latency_s": 13.389621451492422,
+          "mean_precompute_s": 2.46e-06,
+          "mean_rewrite_s": 6.38e-06,
+          "mean_embed_s": 0.91596506,
+          "mean_chunk_s": 1.4281395399999999,
+          "mean_node_s": 1.20937744,
+          "mean_keyword_s": 6.431035919999999,
+          "mean_expand_s": 0.06899414,
+          "mean_rerank_s": 3.33400906,
+          "mean_doc_recall": 0.6733333333333333
+        }
+      }
+    },
+    {
+      "rerank_top_k": 26,
+      "dir": "benchmark_result_topk=26",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=26/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.925,
+      "n_judged": 200,
+      "n_correct": 185,
+      "n_wrong": 15,
+      "mean_recall": 0.8583333333333333,
+      "mean_query_s": 159.0401085353404,
+      "mean_retrieve_s": 11.637546644023386,
+      "mean_rerank_s": 2.675778305,
+      "mean_wall_s": 159.06134107738646,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 94,
+            "错误": 6
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 132.11834490817157,
+          "mean_retrieve_latency_s": 11.01985262471775,
+          "mean_precompute_s": 1.89e-06,
+          "mean_rewrite_s": 5.16e-06,
+          "mean_embed_s": 0.61917083,
+          "mean_chunk_s": 0.953315,
+          "mean_node_s": 0.84806188,
+          "mean_keyword_s": 6.33754939,
+          "mean_expand_s": 0.03451733,
+          "mean_rerank_s": 2.22516372,
+          "mean_doc_recall": 0.9
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 180.89647966718067,
+          "mean_retrieve_latency_s": 12.886052271381486,
+          "mean_precompute_s": 2.42e-06,
+          "mean_rewrite_s": 1.27e-05,
+          "mean_embed_s": 0.8342182800000001,
+          "mean_chunk_s": 1.0356639799999998,
+          "mean_node_s": 0.8335634199999999,
+          "mean_keyword_s": 7.23725554,
+          "mean_expand_s": 0.029379879999999997,
+          "mean_rerank_s": 2.91285464,
+          "mean_doc_recall": 0.94
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 191.0272646578378,
+          "mean_retrieve_latency_s": 11.62442905527656,
+          "mean_precompute_s": 2.96e-06,
+          "mean_rewrite_s": 9.26e-06,
+          "mean_embed_s": 0.9726418800000001,
+          "mean_chunk_s": 0.8789746599999999,
+          "mean_node_s": 0.8002691799999999,
+          "mean_keyword_s": 5.59733576,
+          "mean_expand_s": 0.0318417,
+          "mean_rerank_s": 3.33993114,
+          "mean_doc_recall": 0.6933333333333332
+        }
+      }
+    },
+    {
+      "rerank_top_k": 27,
+      "dir": "benchmark_result_topk=27",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=27/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.94,
+      "n_judged": 200,
+      "n_correct": 188,
+      "n_wrong": 12,
+      "mean_recall": 0.8808333333333332,
+      "mean_query_s": 152.7792211448963,
+      "mean_retrieve_s": 10.523981128347224,
+      "mean_rerank_s": 2.4850001649999998,
+      "mean_wall_s": 152.79722401734819,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 98,
+            "错误": 2
+          },
+          "accuracy": 0.98,
+          "mean_query_latency_s": 122.42817769353977,
+          "mean_retrieve_latency_s": 8.764163834915962,
+          "mean_precompute_s": 1.8200000000000002e-06,
+          "mean_rewrite_s": 5.32e-06,
+          "mean_embed_s": 0.6001608900000001,
+          "mean_chunk_s": 0.6658372,
+          "mean_node_s": 0.5530744200000001,
+          "mean_keyword_s": 4.86468097,
+          "mean_expand_s": 0.01660261,
+          "mean_rerank_s": 2.06179967,
+          "mean_doc_recall": 0.94
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 171.9730486999813,
+          "mean_retrieve_latency_s": 12.340864726994187,
+          "mean_precompute_s": 2.1999999999999997e-06,
+          "mean_rewrite_s": 6.88e-06,
+          "mean_embed_s": 0.80382098,
+          "mean_chunk_s": 0.8586611000000001,
+          "mean_node_s": 0.7961693400000001,
+          "mean_keyword_s": 7.16684164,
+          "mean_expand_s": 0.022054140000000003,
+          "mean_rerank_s": 2.69068624,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 194.28748049252434,
+          "mean_retrieve_latency_s": 12.22673211656278,
+          "mean_precompute_s": 2.6399999999999997e-06,
+          "mean_rewrite_s": 7.96e-06,
+          "mean_embed_s": 0.90453352,
+          "mean_chunk_s": 1.04791468,
+          "mean_node_s": 0.84001124,
+          "mean_keyword_s": 6.281191280000001,
+          "mean_expand_s": 0.024265639999999998,
+          "mean_rerank_s": 3.12571508,
+          "mean_doc_recall": 0.6933333333333332
+        }
+      }
+    },
+    {
+      "rerank_top_k": 28,
+      "dir": "benchmark_result_topk=28",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=28/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.955,
+      "n_judged": 200,
+      "n_correct": 191,
+      "n_wrong": 9,
+      "mean_recall": 0.8708333333333332,
+      "mean_query_s": 160.0843377313821,
+      "mean_retrieve_s": 11.392705952930847,
+      "mean_rerank_s": 2.492033825,
+      "mean_wall_s": 160.10218355699237,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 98,
+            "错误": 2
+          },
+          "accuracy": 0.98,
+          "mean_query_latency_s": 132.0251624967059,
+          "mean_retrieve_latency_s": 10.003365221207495,
+          "mean_precompute_s": 1.6e-06,
+          "mean_rewrite_s": 5.37e-06,
+          "mean_embed_s": 0.58257593,
+          "mean_chunk_s": 0.88927673,
+          "mean_node_s": 0.68318785,
+          "mean_keyword_s": 5.801494689999999,
+          "mean_expand_s": 0.014282999999999999,
+          "mean_rerank_s": 2.03043437,
+          "mean_doc_recall": 0.92
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 174.46008471317822,
+          "mean_retrieve_latency_s": 11.956883289689431,
+          "mean_precompute_s": 2.48e-06,
+          "mean_rewrite_s": 7.06e-06,
+          "mean_embed_s": 0.81550464,
+          "mean_chunk_s": 0.7456743,
+          "mean_node_s": 0.6632740800000001,
+          "mean_keyword_s": 6.9192456600000005,
+          "mean_expand_s": 0.01992988,
+          "mean_rerank_s": 2.79022918,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 201.82694121893846,
+          "mean_retrieve_latency_s": 13.607210079618962,
+          "mean_precompute_s": 2.54e-06,
+          "mean_rewrite_s": 7.599999999999999e-06,
+          "mean_embed_s": 0.9077950199999999,
+          "mean_chunk_s": 1.14547578,
+          "mean_node_s": 0.9153746599999999,
+          "mean_keyword_s": 7.4950785,
+          "mean_expand_s": 0.023407439999999998,
+          "mean_rerank_s": 3.1170373799999997,
+          "mean_doc_recall": 0.6933333333333332
+        }
+      }
+    },
+    {
+      "rerank_top_k": 29,
+      "dir": "benchmark_result_topk=29",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=29/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.945,
+      "n_judged": 200,
+      "n_correct": 189,
+      "n_wrong": 11,
+      "mean_recall": 0.8691666666666668,
+      "mean_query_s": 164.10180499133946,
+      "mean_retrieve_s": 12.064661092538735,
+      "mean_rerank_s": 2.5454335,
+      "mean_wall_s": 164.11936407823347,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 96,
+            "错误": 4
+          },
+          "accuracy": 0.96,
+          "mean_query_latency_s": 137.13946633066982,
+          "mean_retrieve_latency_s": 10.573927834356436,
+          "mean_precompute_s": 1.72e-06,
+          "mean_rewrite_s": 5.63e-06,
+          "mean_embed_s": 0.60842657,
+          "mean_chunk_s": 0.7620815000000001,
+          "mean_node_s": 0.63658195,
+          "mean_keyword_s": 6.42844117,
+          "mean_expand_s": 0.016515349999999998,
+          "mean_rerank_s": 2.1198494,
+          "mean_doc_recall": 0.91
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 180.12910042179982,
+          "mean_retrieve_latency_s": 12.217906112145865,
+          "mean_precompute_s": 2.3799999999999997e-06,
+          "mean_rewrite_s": 1e-05,
+          "mean_embed_s": 0.8147462400000001,
+          "mean_chunk_s": 1.03356838,
+          "mean_node_s": 0.89659818,
+          "mean_keyword_s": 6.659329179999999,
+          "mean_expand_s": 0.020215999999999998,
+          "mean_rerank_s": 2.79068668,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 201.99918688221834,
+          "mean_retrieve_latency_s": 14.892882589296205,
+          "mean_precompute_s": 2.58e-06,
+          "mean_rewrite_s": 1.166e-05,
+          "mean_embed_s": 0.9413019800000001,
+          "mean_chunk_s": 1.1350410000000002,
+          "mean_node_s": 0.8550507199999999,
+          "mean_keyword_s": 8.78432836,
+          "mean_expand_s": 0.02235246,
+          "mean_rerank_s": 3.1513485200000004,
+          "mean_doc_recall": 0.7066666666666667
+        }
+      }
+    },
+    {
+      "rerank_top_k": 30,
+      "dir": "benchmark_result_topk=30",
+      "evals_path": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/benchmark_result_topk=30/evals_complex.json",
+      "n_results": 200,
+      "eval_done": true,
+      "accuracy": 0.935,
+      "n_judged": 200,
+      "n_correct": 187,
+      "n_wrong": 13,
+      "mean_recall": 0.8808333333333332,
+      "mean_query_s": 168.79535166594957,
+      "mean_retrieve_s": 12.057025255557674,
+      "mean_rerank_s": 2.697250575,
+      "mean_wall_s": 168.81332532479516,
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 94,
+            "错误": 6
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 141.01198640794843,
+          "mean_retrieve_latency_s": 10.194227567829657,
+          "mean_precompute_s": 1.72e-06,
+          "mean_rewrite_s": 5.71e-06,
+          "mean_embed_s": 0.62001557,
+          "mean_chunk_s": 0.7080842300000001,
+          "mean_node_s": 0.61644708,
+          "mean_keyword_s": 5.993947080000001,
+          "mean_expand_s": 0.014850380000000002,
+          "mean_rerank_s": 2.23863375,
+          "mean_doc_recall": 0.93
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 192.1188918085827,
+          "mean_retrieve_latency_s": 12.842031839622651,
+          "mean_precompute_s": 2.52e-06,
+          "mean_rewrite_s": 7.680000000000001e-06,
+          "mean_embed_s": 0.8393025199999999,
+          "mean_chunk_s": 0.98371598,
+          "mean_node_s": 0.83486666,
+          "mean_keyword_s": 7.22116568,
+          "mean_expand_s": 0.021744140000000002,
+          "mean_rerank_s": 2.93817506,
+          "mean_doc_recall": 0.95
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 46,
+            "错误": 4
+          },
+          "accuracy": 0.92,
+          "mean_query_latency_s": 201.0385420393187,
+          "mean_retrieve_latency_s": 14.99761404694873,
+          "mean_precompute_s": 2.76e-06,
+          "mean_rewrite_s": 9.2e-06,
+          "mean_embed_s": 0.9614522,
+          "mean_chunk_s": 1.07278674,
+          "mean_node_s": 0.8526826,
+          "mean_keyword_s": 8.70832294,
+          "mean_expand_s": 0.02539542,
+          "mean_rerank_s": 3.37355974,
+          "mean_doc_recall": 0.7133333333333333
+        }
+      }
+    }
+  ],
+  "plots": {
+    "acc_recall": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/rerank_topk_acc_recall.png",
+    "latency": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/rerank_topk_latency.png"
+  },
+  "tables": {
+    "csv": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/rerank_topk_sweep_summary.csv",
+    "xlsx": "/root/projects/Chemical-Graph-RAG/benchmark_results_sen-analysis-topk/rerank_topk_sweep_summary.xlsx"
+  }
+}

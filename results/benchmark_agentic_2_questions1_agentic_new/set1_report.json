@@ -1,0 +1,2650 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-05T19:00:14",
+  "meta": {
+    "eval_meta": {
+      "dataset": {
+        "created_at": "2026-09-04T16:09:20",
+        "source_excel": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx",
+        "schema": "set1",
+        "questions_sheet": "测试问题集",
+        "stats_sheet": "统计概览",
+        "n_questions": 1177,
+        "n_questions_full": 1177,
+        "n_limit": null,
+        "headers": [
+          "ID",
+          "难度等级",
+          "查询类型",
+          "推理跳数",
+          "问题维度",
+          "知识层",
+          "材料类别",
+          "产品类别",
+          "应用场景",
+          "问题描述",
+          "标准答案要点",
+          "预期检索路径",
+          "评估要点"
+        ],
+        "category_fields": [
+          "难度等级",
+          "查询类型",
+          "问题维度",
+          "推理跳数",
+          "知识层",
+          "材料类别",
+          "产品类别",
+          "应用场景"
+        ],
+        "dataset_id": "set1"
+      },
+      "config": {
+        "config_file": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_2/config.yaml",
+        "dhmf_config_path": "/root/projects/Chemical-Graph-RAG/example/a/config_open.yaml",
+        "query_mode": "agentic",
+        "active_dataset_id": "set1",
+        "excel_path": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx",
+        "n_limit": null,
+        "eval_num_thread": 3,
+        "enable_llm_only": true,
+        "enable_doc_recall": false,
+        "judge_model": "qwen3.6-27b",
+        "llm_only_timeout": 300.0,
+        "llm_only_model": "qwen3.6-27b",
+        "llm_only_enable_thinking": false
+      },
+      "enable_llm_only": true,
+      "enable_doc_recall": false,
+      "n_results": 1177
+    },
+    "stats_meta": {
+      "created_at": "2026-09-04T16:09:20",
+      "source_excel": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx",
+      "source_excel_name": "建筑涂料测试问题集1.xlsx",
+      "schema": "set1",
+      "questions_sheet": "测试问题集",
+      "stats_sheet": "统计概览",
+      "design_sheet": null,
+      "n_questions": 1177,
+      "n_questions_declared": 1177,
+      "title": "建筑涂料Graph-RAG测试问题集 - 统计概览",
+      "headers": [
+        "ID",
+        "难度等级",
+        "查询类型",
+        "推理跳数",
+        "问题维度",
+        "知识层",
+        "材料类别",
+        "产品类别",
+        "应用场景",
+        "问题描述",
+        "标准答案要点",
+        "预期检索路径",
+        "评估要点"
+      ],
+      "dataset_id": "set1"
+    },
+    "category_fields": [
+      "难度等级",
+      "查询类型",
+      "问题维度",
+      "推理跳数",
+      "知识层"
+    ]
+  },
+  "stats": {
+    "schema_version": 1,
+    "meta": {
+      "created_at": "2026-09-04T16:09:20",
+      "source_excel": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_2/data/建筑涂料测试问题集1.xlsx",
+      "source_excel_name": "建筑涂料测试问题集1.xlsx",
+      "schema": "set1",
+      "questions_sheet": "测试问题集",
+      "stats_sheet": "统计概览",
+      "design_sheet": null,
+      "n_questions": 1177,
+      "n_questions_declared": 1177,
+      "title": "建筑涂料Graph-RAG测试问题集 - 统计概览",
+      "headers": [
+        "ID",
+        "难度等级",
+        "查询类型",
+        "推理跳数",
+        "问题维度",
+        "知识层",
+        "材料类别",
+        "产品类别",
+        "应用场景",
+        "问题描述",
+        "标准答案要点",
+        "预期检索路径",
+        "评估要点"
+      ],
+      "dataset_id": "set1"
+    },
+    "design": {},
+    "category_fields": {
+      "primary": [
+        "难度等级",
+        "查询类型",
+        "问题维度",
+        "推理跳数",
+        "知识层"
+      ],
+      "extra": [
+        "材料类别",
+        "产品类别",
+        "应用场景"
+      ],
+      "all": [
+        "难度等级",
+        "查询类型",
+        "问题维度",
+        "推理跳数",
+        "知识层",
+        "材料类别",
+        "产品类别",
+        "应用场景"
+      ]
+    },
+    "distributions": {
+      "难度等级": {
+        "field": "难度等级",
+        "source": "sheet",
+        "total": 1177,
+        "items": [
+          {
+            "label": "困难",
+            "count": 420,
+            "ratio": 0.357
+          },
+          {
+            "label": "中等",
+            "count": 380,
+            "ratio": 0.323
+          },
+          {
+            "label": "简单",
+            "count": 377,
+            "ratio": 0.32
+          }
+        ]
+      },
+      "查询类型": {
+        "field": "查询类型",
+        "source": "sheet",
+        "total": 1177,
+        "items": [
+          {
+            "label": "有主体",
+            "count": 767,
+            "ratio": 0.652
+          },
+          {
+            "label": "无主体",
+            "count": 410,
+            "ratio": 0.348
+          }
+        ]
+      },
+      "问题维度": {
+        "field": "问题维度",
+        "source": "sheet",
+        "total": 1177,
+        "items": [
+          {
+            "label": "配方优化",
+            "count": 355,
+            "ratio": 0.302
+          },
+          {
+            "label": "材料性能",
+            "count": 267,
+            "ratio": 0.227
+          },
+          {
+            "label": "参数查询",
+            "count": 160,
+            "ratio": 0.136
+          },
+          {
+            "label": "替代建议",
+            "count": 115,
+            "ratio": 0.098
+          },
+          {
+            "label": "产品选型",
+            "count": 115,
+            "ratio": 0.098
+          },
+          {
+            "label": "跨文档关联",
+            "count": 100,
+            "ratio": 0.085
+          },
+          {
+            "label": "安全合规",
+            "count": 65,
+            "ratio": 0.055
+          }
+        ]
+      },
+      "推理跳数": {
+        "field": "推理跳数",
+        "source": "sheet",
+        "total": 1177,
+        "items": [
+          {
+            "label": "1-hop",
+            "count": 377,
+            "ratio": 0.32
+          },
+          {
+            "label": "2-hop",
+            "count": 380,
+            "ratio": 0.323
+          },
+          {
+            "label": "3-hop+",
+            "count": 335,
+            "ratio": 0.285
+          },
+          {
+            "label": "4-hop+",
+            "count": 85,
+            "ratio": 0.072
+          }
+        ]
+      },
+      "知识层": {
+        "field": "知识层",
+        "source": "sheet",
+        "total": 1177,
+        "items": [
+          {
+            "label": "产品层",
+            "count": 560,
+            "ratio": 0.476
+          },
+          {
+            "label": "原材料层",
+            "count": 387,
+            "ratio": 0.329
+          },
+          {
+            "label": "跨层",
+            "count": 230,
+            "ratio": 0.195
+          }
+        ]
+      }
+    },
+    "computed_distributions": {
+      "难度等级": {
+        "field": "难度等级",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 3,
+        "items": [
+          {
+            "label": "困难",
+            "count": 420,
+            "ratio": 0.356839
+          },
+          {
+            "label": "中等",
+            "count": 380,
+            "ratio": 0.322855
+          },
+          {
+            "label": "简单",
+            "count": 377,
+            "ratio": 0.320306
+          }
+        ]
+      },
+      "查询类型": {
+        "field": "查询类型",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 2,
+        "items": [
+          {
+            "label": "有主体",
+            "count": 767,
+            "ratio": 0.651657
+          },
+          {
+            "label": "无主体",
+            "count": 410,
+            "ratio": 0.348343
+          }
+        ]
+      },
+      "问题维度": {
+        "field": "问题维度",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 7,
+        "items": [
+          {
+            "label": "配方优化",
+            "count": 355,
+            "ratio": 0.301614
+          },
+          {
+            "label": "材料性能",
+            "count": 267,
+            "ratio": 0.226848
+          },
+          {
+            "label": "参数查询",
+            "count": 160,
+            "ratio": 0.135939
+          },
+          {
+            "label": "产品选型",
+            "count": 115,
+            "ratio": 0.097706
+          },
+          {
+            "label": "替代建议",
+            "count": 115,
+            "ratio": 0.097706
+          },
+          {
+            "label": "跨文档关联",
+            "count": 100,
+            "ratio": 0.084962
+          },
+          {
+            "label": "安全合规",
+            "count": 65,
+            "ratio": 0.055225
+          }
+        ]
+      },
+      "推理跳数": {
+        "field": "推理跳数",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 4,
+        "items": [
+          {
+            "label": "2-hop",
+            "count": 380,
+            "ratio": 0.322855
+          },
+          {
+            "label": "1-hop",
+            "count": 377,
+            "ratio": 0.320306
+          },
+          {
+            "label": "3-hop+",
+            "count": 335,
+            "ratio": 0.284622
+          },
+          {
+            "label": "4-hop+",
+            "count": 85,
+            "ratio": 0.072218
+          }
+        ]
+      },
+      "知识层": {
+        "field": "知识层",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 3,
+        "items": [
+          {
+            "label": "产品层",
+            "count": 560,
+            "ratio": 0.475786
+          },
+          {
+            "label": "原材料层",
+            "count": 387,
+            "ratio": 0.328802
+          },
+          {
+            "label": "跨层",
+            "count": 230,
+            "ratio": 0.195412
+          }
+        ]
+      },
+      "材料类别": {
+        "field": "材料类别",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 6,
+        "items": [
+          {
+            "label": "NA",
+            "count": 710,
+            "ratio": 0.603229
+          },
+          {
+            "label": "助剂",
+            "count": 125,
+            "ratio": 0.106202
+          },
+          {
+            "label": "树脂",
+            "count": 104,
+            "ratio": 0.08836
+          },
+          {
+            "label": "颜料",
+            "count": 100,
+            "ratio": 0.084962
+          },
+          {
+            "label": "填料",
+            "count": 85,
+            "ratio": 0.072218
+          },
+          {
+            "label": "溶剂",
+            "count": 53,
+            "ratio": 0.04503
+          }
+        ]
+      },
+      "产品类别": {
+        "field": "产品类别",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 7,
+        "items": [
+          {
+            "label": "NA",
+            "count": 472,
+            "ratio": 0.40102
+          },
+          {
+            "label": "外墙",
+            "count": 178,
+            "ratio": 0.151232
+          },
+          {
+            "label": "功能性",
+            "count": 163,
+            "ratio": 0.138488
+          },
+          {
+            "label": "内墙",
+            "count": 134,
+            "ratio": 0.113849
+          },
+          {
+            "label": "质感",
+            "count": 116,
+            "ratio": 0.098556
+          },
+          {
+            "label": "木器",
+            "count": 59,
+            "ratio": 0.050127
+          },
+          {
+            "label": "地坪",
+            "count": 55,
+            "ratio": 0.046729
+          }
+        ]
+      },
+      "应用场景": {
+        "field": "应用场景",
+        "source": "computed",
+        "total": 1177,
+        "n_labels": 60,
+        "items": [
+          {
+            "label": "NA",
+            "count": 737,
+            "ratio": 0.626168
+          },
+          {
+            "label": "体育馆木地板",
+            "count": 25,
+            "ratio": 0.02124
+          },
+          {
+            "label": "高层住宅外墙",
+            "count": 23,
+            "ratio": 0.019541
+          },
+          {
+            "label": "屋顶防水",
+            "count": 21,
+            "ratio": 0.017842
+          },
+          {
+            "label": "历史建筑保护",
+            "count": 20,
+            "ratio": 0.016992
+          },
+          {
+            "label": "工业厂房",
+            "count": 19,
+            "ratio": 0.016143
+          },
+          {
+            "label": "桥梁钢结构",
+            "count": 19,
+            "ratio": 0.016143
+          },
+          {
+            "label": "地下室墙面",
+            "count": 19,
+            "ratio": 0.016143
+          },
+          {
+            "label": "食品加工厂",
+            "count": 19,
+            "ratio": 0.016143
+          },
+          {
+            "label": "电子厂洁净房",
+            "count": 18,
+            "ratio": 0.015293
+          },
+          {
+            "label": "厨房卫生间",
+            "count": 18,
+            "ratio": 0.015293
+          },
+          {
+            "label": "住宅外墙",
+            "count": 17,
+            "ratio": 0.014444
+          },
+          {
+            "label": "商业建筑内墙",
+            "count": 16,
+            "ratio": 0.013594
+          },
+          {
+            "label": "医院病房",
+            "count": 16,
+            "ratio": 0.013594
+          },
+          {
+            "label": "阳台防水",
+            "count": 15,
+            "ratio": 0.012744
+          },
+          {
+            "label": "商业建筑外墙",
+            "count": 15,
+            "ratio": 0.012744
+          },
+          {
+            "label": "沿海地区建筑",
+            "count": 15,
+            "ratio": 0.012744
+          },
+          {
+            "label": "隧道墙面",
+            "count": 15,
+            "ratio": 0.012744
+          },
+          {
+            "label": "地下车库",
+            "count": 15,
+            "ratio": 0.012744
+          },
+          {
+            "label": "别墅外墙",
+            "count": 14,
+            "ratio": 0.011895
+          },
+          {
+            "label": "住宅内墙装修",
+            "count": 13,
+            "ratio": 0.011045
+          },
+          {
+            "label": "保温系统",
+            "count": 13,
+            "ratio": 0.011045
+          },
+          {
+            "label": "酒店大堂",
+            "count": 13,
+            "ratio": 0.011045
+          },
+          {
+            "label": "学校教室",
+            "count": 11,
+            "ratio": 0.009346
+          },
+          {
+            "label": "制药车间",
+            "count": 9,
+            "ratio": 0.007647
+          },
+          {
+            "label": "旧墙翻新",
+            "count": 7,
+            "ratio": 0.005947
+          },
+          {
+            "label": "地下室墙面/商业建筑外墙",
+            "count": 2,
+            "ratio": 0.001699
+          },
+          {
+            "label": "桥梁钢结构/厨房卫生间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "地下室墙面/学校教室",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "制药车间/地下车库",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "商业建筑外墙/住宅外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "历史建筑保护/厨房卫生间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅外墙/电子厂洁净房",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "商业建筑内墙/体育馆木地板",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "屋顶防水/商业建筑内墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "历史建筑保护/住宅外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "酒店大堂/食品加工厂",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "制药车间/高层住宅外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "医院病房/商业建筑外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "厨房卫生间/商业建筑内墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "体育馆木地板/厨房卫生间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "隧道墙面/历史建筑保护",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "厨房卫生间/体育馆木地板",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "电子厂洁净房/桥梁钢结构",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅外墙/隧道墙面",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "阳台防水/制药车间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "保温系统/食品加工厂",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅外墙/医院病房",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "食品加工厂/住宅内墙装修",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "隧道墙面/屋顶防水",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅内墙装修/沿海地区建筑",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "商业建筑外墙/制药车间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "学校教室/隧道墙面",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "商业建筑外墙/电子厂洁净房",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "学校教室/商业建筑内墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅外墙/高层住宅外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "保温系统/商业建筑外墙",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "住宅外墙/厨房卫生间",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "沿海地区建筑/住宅内墙装修",
+            "count": 1,
+            "ratio": 0.00085
+          },
+          {
+            "label": "隧道墙面/酒店大堂",
+            "count": 1,
+            "ratio": 0.00085
+          }
+        ]
+      }
+    },
+    "score_dimensions": {
+      "n_unique": 93,
+      "items": [
+        {
+          "label": "是否从多维度正确对比并给出适用场景建议",
+          "count": 50,
+          "ratio": 0.042481
+        },
+        {
+          "label": "是否给出了完整配方框架",
+          "count": 50,
+          "ratio": 0.042481
+        },
+        {
+          "label": "材料选择合理且有理由说明",
+          "count": 50,
+          "ratio": 0.042481
+        },
+        {
+          "label": "满足所有约束条件",
+          "count": 50,
+          "ratio": 0.042481
+        },
+        {
+          "label": "是否给出了正确的替代材料并分析了影响",
+          "count": 45,
+          "ratio": 0.038233
+        },
+        {
+          "label": "是否给出了正确的产品类型推荐和材料选择逻辑",
+          "count": 45,
+          "ratio": 0.038233
+        },
+        {
+          "label": "是否正确识别了材料功能和优势",
+          "count": 40,
+          "ratio": 0.033985
+        },
+        {
+          "label": "是否正确诊断了问题原因并给出了配方改进建议",
+          "count": 40,
+          "ratio": 0.033985
+        },
+        {
+          "label": "是否正确分析了原因",
+          "count": 40,
+          "ratio": 0.033985
+        },
+        {
+          "label": "给出了多个替代方案并对比了性能和成本",
+          "count": 40,
+          "ratio": 0.033985
+        },
+        {
+          "label": "是否给出了正确的用量范围",
+          "count": 35,
+          "ratio": 0.029737
+        },
+        {
+          "label": "是否正确解释了参数间的关系和平衡策略",
+          "count": 35,
+          "ratio": 0.029737
+        },
+        {
+          "label": "是否从指定维度正确分析了场景差异并给出了配方调整建议",
+          "count": 35,
+          "ratio": 0.029737
+        },
+        {
+          "label": "是否在多约束条件下给出了可行方案并分析了影响",
+          "count": 35,
+          "ratio": 0.029737
+        },
+        {
+          "label": "是否列出了主要成分并说明了各类成分的作用",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否给出了合理的参数范围和参考标准",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否正确识别了关键组分并给出了合理的调整方向",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否给出了多个替代选项并分析了优缺点",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否正确判断了材料与产品的关联关系",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否给出了正确的配方调整方向和具体建议",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否从指定维度正确对比了三种材料并给出了排序和理由",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否正确分析了3个根因并给出了可行方案和影响评估",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否给出了完整的涂装体系方案并说明了每层的参数和材料选择逻辑",
+          "count": 30,
+          "ratio": 0.025489
+        },
+        {
+          "label": "是否正确列出了适用场景",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否列举了正确的材料类型并说明了特点",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否正确判断了产品是否符合标准并识别了关键指标",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否给出了正确的升级方案",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "成本预估和性能影响分析",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否正确分析了相容性问题并评估了性能影响",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否从三个层面给出了降本方案并分析了性能影响",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否完成了四步推理链并给出了完整的分析",
+          "count": 25,
+          "ratio": 0.02124
+        },
+        {
+          "label": "是否正确识别了安全风险类别和防护措施",
+          "count": 20,
+          "ratio": 0.016992
+        },
+        {
+          "label": "是否正确列出了替代材料并说明可行性",
+          "count": 20,
+          "ratio": 0.016992
+        },
+        {
+          "label": "是否全面分析了可能原因并给出了解决方案",
+          "count": 20,
+          "ratio": 0.016992
+        },
+        {
+          "label": "是否正确识别了不合规组分并给出了替代方案和成本预估",
+          "count": 20,
+          "ratio": 0.016992
+        },
+        {
+          "label": "是否正确分析了季节影响并给出了配方调整和验证方案",
+          "count": 20,
+          "ratio": 0.016992
+        },
+        {
+          "label": "是否合理逆向分析了配方架构并给出了等效或更优方案",
+          "count": 15,
+          "ratio": 0.012744
+        },
+        {
+          "label": "是否给出了完整的产品线规划并包含配方定位和参数指标",
+          "count": 15,
+          "ratio": 0.012744
+        },
+        {
+          "label": "是否准确回答了pH的数值,与标准值匹配",
+          "count": 13,
+          "ratio": 0.011045
+        },
+        {
+          "label": "是否准确回答了固含量的数值,与标准值匹配",
+          "count": 11,
+          "ratio": 0.009346
+        },
+        {
+          "label": "是否准确回答了白度的数值,与标准值匹配",
+          "count": 10,
+          "ratio": 0.008496
+        },
+        {
+          "label": "是否准确回答了VOC指标值",
+          "count": 10,
+          "ratio": 0.008496
+        },
+        {
+          "label": "是否准确回答了水分的数值,与标准值匹配",
+          "count": 7,
+          "ratio": 0.005947
+        },
+        {
+          "label": "是否准确回答了吸油量的数值,与标准值匹配",
+          "count": 7,
+          "ratio": 0.005947
+        },
+        {
+          "label": "是否准确回答了耐水性指标值",
+          "count": 7,
+          "ratio": 0.005947
+        },
+        {
+          "label": "是否准确回答了耐人工老化指标值",
+          "count": 6,
+          "ratio": 0.005098
+        },
+        {
+          "label": "是否准确回答了活性物含量的数值,与标准值匹配",
+          "count": 5,
+          "ratio": 0.004248
+        },
+        {
+          "label": "是否准确回答了对比率指标值",
+          "count": 5,
+          "ratio": 0.004248
+        },
+        {
+          "label": "是否给出了正确的材料类型和功能说明",
+          "count": 5,
+          "ratio": 0.004248
+        },
+        {
+          "label": "是否准确回答了粘结强度指标值",
+          "count": 4,
+          "ratio": 0.003398
+        },
+        {
+          "label": "是否准确回答了MFFT的数值,与标准值匹配",
+          "count": 3,
+          "ratio": 0.002549
+        },
+        {
+          "label": "是否准确回答了TiO2含量的数值,与标准值匹配",
+          "count": 3,
+          "ratio": 0.002549
+        },
+        {
+          "label": "是否准确回答了粒径的数值,与标准值匹配",
+          "count": 3,
+          "ratio": 0.002549
+        },
+        {
+          "label": "是否准确回答了耐沾污性指标值",
+          "count": 3,
+          "ratio": 0.002549
+        },
+        {
+          "label": "是否准确回答了耐碱性指标值",
+          "count": 3,
+          "ratio": 0.002549
+        },
+        {
+          "label": "是否准确回答了Tg的数值,与标准值匹配",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了闪点的数值,与标准值匹配",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了沸点的数值,与标准值匹配",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了粘度规格的数值,与标准值匹配",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了筛余物的数值,与标准值匹配",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了断裂伸长率指标值",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了干燥时间指标值",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了耐洗刷指标值",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了附着力指标值",
+          "count": 2,
+          "ratio": 0.001699
+        },
+        {
+          "label": "是否准确回答了表面张力的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了硅酸镁含量的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了BaSO4含量的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了堆积密度的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了长径比的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了Fe2O3含量的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了Fe3O4含量的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了比表面积的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐候性的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐光性的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了着色力的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了径厚比的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了Fe2O3H2O含量的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了HLB值的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了溶解度的数值,与标准值匹配",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了铅笔硬度指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了涂布率指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了不透水性指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了气味指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了抗菌率指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了导热系数指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了容重指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐火极限指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了甲醛指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐磨性指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐沸水指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了延伸率指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了耐水煮沸指标值",
+          "count": 1,
+          "ratio": 0.00085
+        },
+        {
+          "label": "是否准确回答了透水率指标值",
+          "count": 1,
+          "ratio": 0.00085
+        }
+      ]
+    }
+  },
+  "summary": {
+    "created_at": "2026-09-05T19:00:14",
+    "n_results": 1177,
+    "systems": {
+      "agentic": {
+        "n_total": 1177,
+        "enable_doc_recall": false,
+        "pipeline": {
+          "n_query_fail": 1,
+          "n_judge_fail": 1,
+          "n_ok": 1175
+        },
+        "llm_acc": {
+          "counts": {
+            "正确": 1014,
+            "部分正确": 129,
+            "错误": 33,
+            "未知": 1
+          },
+          "accuracy": 0.8622448979591837,
+          "partial_rate": 0.1096938775510204,
+          "error_rate": 0.02806122448979592,
+          "n_judged": 1176,
+          "n_correct": 1014,
+          "n_partial": 129,
+          "n_wrong": 33,
+          "mean_score": 2.6488095238095237
+        },
+        "latency": {
+          "mean_query_s": 165.55625012593956,
+          "mean_retrieve_s": 34.97705263889364,
+          "mean_wall_s": 165.65457071423953,
+          "sum_query_s": 194859.70639823086,
+          "sum_retrieve_s": 41167.99095597782,
+          "sum_wall_s": 194975.42973065993,
+          "n_with_query_latency": 1177,
+          "mean_embed_s": 2.9236074944774852,
+          "mean_rerank_s": 5.541615844519966,
+          "mean_search_s": 7.107761500917602,
+          "mean_n_search": 7.305862361937129,
+          "mean_n_turns": 7.451146983857265,
+          "mean_n_read_doc": 0.7119796091758709,
+          "mean_n_graph_neighbors": 0.00594732370433305,
+          "sum_n_search": 8599,
+          "sum_n_turns": 8770,
+          "mean_turn_s": 22.232090049106034,
+          "mean_precompute_s": 5.844519966015293e-06,
+          "sum_precompute_s": 0.006879,
+          "mean_precompute_s_per_search": 8.466501028011356e-07,
+          "mean_rewrite_s": 2.7561597281223445e-05,
+          "sum_rewrite_s": 0.03244,
+          "mean_rewrite_s_per_search": 4.13944952536001e-06,
+          "sum_embed_s": 3441.086021,
+          "mean_embed_s_per_search": 0.40525777422164616,
+          "mean_chunk_s": 14.906855570093459,
+          "sum_chunk_s": 17545.369006,
+          "mean_chunk_s_per_search": 3.2170755204876325,
+          "mean_node_s": 5.390969135089209,
+          "sum_node_s": 6345.170671999999,
+          "mean_node_s_per_search": 1.0773499743411092,
+          "mean_keyword_s": 6.00118155480034,
+          "sum_keyword_s": 7063.39069,
+          "mean_keyword_s_per_search": 0.9657033209370943,
+          "mean_expand_s": 0.10510899405267629,
+          "sum_expand_s": 123.713286,
+          "mean_expand_s_per_search": 0.016229818218416375,
+          "sum_rerank_s": 6522.481849,
+          "mean_rerank_s_per_search": 1.3274330846021514,
+          "mean_total_s": 34.96390755989805,
+          "sum_total_s": 41152.519198,
+          "mean_total_s_per_search": 7.101885955276559,
+          "stages": {
+            "precompute_s": {
+              "label": "precompute",
+              "mean_per_question_s": 5.844519966015293e-06,
+              "sum_s": 0.006879,
+              "mean_per_search_s": 8.466501028011356e-07,
+              "n": 1177
+            },
+            "rewrite_s": {
+              "label": "rewrite",
+              "mean_per_question_s": 2.7561597281223445e-05,
+              "sum_s": 0.03244,
+              "mean_per_search_s": 4.13944952536001e-06,
+              "n": 1177
+            },
+            "embed_s": {
+              "label": "embed",
+              "mean_per_question_s": 2.9236074944774852,
+              "sum_s": 3441.086021,
+              "mean_per_search_s": 0.40525777422164616,
+              "n": 1177
+            },
+            "chunk_s": {
+              "label": "chunk",
+              "mean_per_question_s": 14.906855570093459,
+              "sum_s": 17545.369006,
+              "mean_per_search_s": 3.2170755204876325,
+              "n": 1177
+            },
+            "node_s": {
+              "label": "node",
+              "mean_per_question_s": 5.390969135089209,
+              "sum_s": 6345.170671999999,
+              "mean_per_search_s": 1.0773499743411092,
+              "n": 1177
+            },
+            "keyword_s": {
+              "label": "keyword",
+              "mean_per_question_s": 6.00118155480034,
+              "sum_s": 7063.39069,
+              "mean_per_search_s": 0.9657033209370943,
+              "n": 1177
+            },
+            "expand_s": {
+              "label": "expand",
+              "mean_per_question_s": 0.10510899405267629,
+              "sum_s": 123.713286,
+              "mean_per_search_s": 0.016229818218416375,
+              "n": 1177
+            },
+            "rerank_s": {
+              "label": "rerank",
+              "mean_per_question_s": 5.541615844519966,
+              "sum_s": 6522.481849,
+              "mean_per_search_s": 1.3274330846021514,
+              "n": 1177
+            },
+            "total_s": {
+              "label": "retrieve_total",
+              "mean_per_question_s": 34.96390755989805,
+              "sum_s": 41152.519198,
+              "mean_per_search_s": 7.101885955276559,
+              "n": 1177
+            }
+          }
+        },
+        "tokens": {
+          "sum_prompt": 161575453,
+          "sum_completion": 2253618,
+          "sum_total": 163829071,
+          "mean_prompt": 137277.36023789295,
+          "mean_completion": 1914.71367884452,
+          "sum_judge_prompt": 4981983,
+          "sum_judge_completion": 657792,
+          "sum_judge_total": 5639775
+        },
+        "by_hop": {
+          "1-hop": {
+            "n": 377,
+            "llm_acc": {
+              "counts": {
+                "正确": 288,
+                "部分正确": 71,
+                "错误": 18,
+                "未知": 0
+              },
+              "accuracy": 0.7639257294429708,
+              "partial_rate": 0.1883289124668435,
+              "error_rate": 0.04774535809018567,
+              "n_judged": 377,
+              "n_correct": 288,
+              "n_partial": 71,
+              "n_wrong": 18,
+              "mean_score": 2.3846153846153846
+            },
+            "mean_query_latency_s": 168.45060077502143,
+            "mean_retrieve_latency_s": 76.94303127522525,
+            "mean_wall_latency_s": 168.73708292477318,
+            "mean_search_s": 18.281919252617282,
+            "mean_n_search": 5.464190981432361,
+            "mean_n_turns": 6.8514588859416445
+          },
+          "2-hop": {
+            "n": 380,
+            "llm_acc": {
+              "counts": {
+                "正确": 323,
+                "部分正确": 45,
+                "错误": 12,
+                "未知": 0
+              },
+              "accuracy": 0.85,
+              "partial_rate": 0.11842105263157894,
+              "error_rate": 0.031578947368421054,
+              "n_judged": 380,
+              "n_correct": 323,
+              "n_partial": 45,
+              "n_wrong": 12,
+              "mean_score": 2.613157894736842
+            },
+            "mean_query_latency_s": 130.0223305445716,
+            "mean_retrieve_latency_s": 12.02752171634194,
+            "mean_wall_latency_s": 130.03250266830375,
+            "mean_search_s": 1.756216129535344,
+            "mean_n_search": 6.552631578947368,
+            "mean_n_turns": 7.6421052631578945
+          },
+          "3-hop+": {
+            "n": 335,
+            "llm_acc": {
+              "counts": {
+                "正确": 320,
+                "部分正确": 11,
+                "错误": 3,
+                "未知": 1
+              },
+              "accuracy": 0.9580838323353293,
+              "partial_rate": 0.03293413173652695,
+              "error_rate": 0.008982035928143712,
+              "n_judged": 334,
+              "n_correct": 320,
+              "n_partial": 11,
+              "n_wrong": 3,
+              "mean_score": 2.907185628742515
+            },
+            "mean_query_latency_s": 200.4928419050048,
+            "mean_retrieve_latency_s": 18.822601403266457,
+            "mean_wall_latency_s": 200.50271847886174,
+            "mean_search_s": 1.8307587209923044,
+            "mean_n_search": 10.029850746268657,
+            "mean_n_turns": 7.82089552238806
+          },
+          "4-hop+": {
+            "n": 85,
+            "llm_acc": {
+              "counts": {
+                "正确": 83,
+                "部分正确": 2,
+                "错误": 0,
+                "未知": 0
+              },
+              "accuracy": 0.9764705882352941,
+              "partial_rate": 0.023529411764705882,
+              "error_rate": 0.0,
+              "n_judged": 85,
+              "n_correct": 83,
+              "n_partial": 2,
+              "n_wrong": 0,
+              "mean_score": 2.9647058823529413
+            },
+            "mean_query_latency_s": 173.8852030698114,
+            "mean_retrieve_latency_s": 15.111040504867047,
+            "mean_wall_latency_s": 173.89162074878044,
+            "mean_search_s": 1.8285248233855809,
+            "mean_n_search": 8.105882352941176,
+            "mean_n_turns": 7.8
+          }
+        },
+        "by_category": {
+          "难度等级": {
+            "困难": {
+              "n": 420,
+              "llm_acc": {
+                "counts": {
+                  "正确": 403,
+                  "部分正确": 13,
+                  "错误": 3,
+                  "未知": 1
+                },
+                "accuracy": 0.9618138424821002,
+                "partial_rate": 0.031026252983293555,
+                "error_rate": 0.007159904534606206,
+                "n_judged": 419,
+                "n_correct": 403,
+                "n_partial": 13,
+                "n_wrong": 3,
+                "mean_score": 2.918854415274463
+              },
+              "mean_query_latency_s": 195.10796261692997,
+              "mean_wall_latency_s": 195.11713917634526,
+              "mean_n_turns": 7.816666666666666,
+              "mean_n_search": 9.64047619047619,
+              "mean_score": 2.918854415274463
+            },
+            "中等": {
+              "n": 380,
+              "llm_acc": {
+                "counts": {
+                  "正确": 323,
+                  "部分正确": 45,
+                  "错误": 12,
+                  "未知": 0
+                },
+                "accuracy": 0.85,
+                "partial_rate": 0.11842105263157894,
+                "error_rate": 0.031578947368421054,
+                "n_judged": 380,
+                "n_correct": 323,
+                "n_partial": 45,
+                "n_wrong": 12,
+                "mean_score": 2.613157894736842
+              },
+              "mean_query_latency_s": 130.0223305445716,
+              "mean_wall_latency_s": 130.03250266830375,
+              "mean_n_turns": 7.6421052631578945,
+              "mean_n_search": 6.552631578947368,
+              "mean_score": 2.613157894736842
+            },
+            "简单": {
+              "n": 377,
+              "llm_acc": {
+                "counts": {
+                  "正确": 288,
+                  "部分正确": 71,
+                  "错误": 18,
+                  "未知": 0
+                },
+                "accuracy": 0.7639257294429708,
+                "partial_rate": 0.1883289124668435,
+                "error_rate": 0.04774535809018567,
+                "n_judged": 377,
+                "n_correct": 288,
+                "n_partial": 71,
+                "n_wrong": 18,
+                "mean_score": 2.3846153846153846
+              },
+              "mean_query_latency_s": 168.45060077502143,
+              "mean_wall_latency_s": 168.73708292477318,
+              "mean_n_turns": 6.8514588859416445,
+              "mean_n_search": 5.464190981432361,
+              "mean_score": 2.3846153846153846
+            }
+          },
+          "查询类型": {
+            "有主体": {
+              "n": 767,
+              "llm_acc": {
+                "counts": {
+                  "正确": 648,
+                  "部分正确": 94,
+                  "错误": 24,
+                  "未知": 1
+                },
+                "accuracy": 0.8459530026109661,
+                "partial_rate": 0.1227154046997389,
+                "error_rate": 0.031331592689295036,
+                "n_judged": 766,
+                "n_correct": 648,
+                "n_partial": 94,
+                "n_wrong": 24,
+                "mean_score": 2.601827676240209
+              },
+              "mean_query_latency_s": 166.12860383521163,
+              "mean_wall_latency_s": 166.2581442489369,
+              "mean_n_turns": 7.357235984354628,
+              "mean_n_search": 7.073011734028683,
+              "mean_score": 2.601827676240209
+            },
+            "无主体": {
+              "n": 410,
+              "llm_acc": {
+                "counts": {
+                  "正确": 366,
+                  "部分正确": 35,
+                  "错误": 9,
+                  "未知": 0
+                },
+                "accuracy": 0.8926829268292683,
+                "partial_rate": 0.08536585365853659,
+                "error_rate": 0.02195121951219512,
+                "n_judged": 410,
+                "n_correct": 366,
+                "n_partial": 35,
+                "n_wrong": 9,
+                "mean_score": 2.7365853658536587
+              },
+              "mean_query_latency_s": 164.48552989420372,
+              "mean_wall_latency_s": 164.52544656518376,
+              "mean_n_turns": 7.626829268292683,
+              "mean_n_search": 7.741463414634146,
+              "mean_score": 2.7365853658536587
+            }
+          },
+          "问题维度": {
+            "配方优化": {
+              "n": 355,
+              "llm_acc": {
+                "counts": {
+                  "正确": 343,
+                  "部分正确": 9,
+                  "错误": 3,
+                  "未知": 0
+                },
+                "accuracy": 0.9661971830985916,
+                "partial_rate": 0.02535211267605634,
+                "error_rate": 0.008450704225352112,
+                "n_judged": 355,
+                "n_correct": 343,
+                "n_partial": 9,
+                "n_wrong": 3,
+                "mean_score": 2.9183098591549297
+              },
+              "mean_query_latency_s": 161.3524248853598,
+              "mean_wall_latency_s": 161.36260558213993,
+              "mean_n_turns": 7.208450704225352,
+              "mean_n_search": 8.143661971830985,
+              "mean_score": 2.9183098591549297
+            },
+            "材料性能": {
+              "n": 267,
+              "llm_acc": {
+                "counts": {
+                  "正确": 217,
+                  "部分正确": 38,
+                  "错误": 12,
+                  "未知": 0
+                },
+                "accuracy": 0.8127340823970037,
+                "partial_rate": 0.14232209737827714,
+                "error_rate": 0.0449438202247191,
+                "n_judged": 267,
+                "n_correct": 217,
+                "n_partial": 38,
+                "n_wrong": 12,
+                "mean_score": 2.50561797752809
+              },
+              "mean_query_latency_s": 119.02260025153032,
+              "mean_wall_latency_s": 119.12113983656214,
+              "mean_n_turns": 6.580524344569288,
+              "mean_n_search": 6.213483146067416,
+              "mean_score": 2.50561797752809
+            },
+            "参数查询": {
+              "n": 160,
+              "llm_acc": {
+                "counts": {
+                  "正确": 110,
+                  "部分正确": 39,
+                  "错误": 11,
+                  "未知": 0
+                },
+                "accuracy": 0.6875,
+                "partial_rate": 0.24375,
+                "error_rate": 0.06875,
+                "n_judged": 160,
+                "n_correct": 110,
+                "n_partial": 39,
+                "n_wrong": 11,
+                "mean_score": 2.1875
+              },
+              "mean_query_latency_s": 295.9954873649825,
+              "mean_wall_latency_s": 296.4724413455944,
+              "mean_n_turns": 8.875,
+              "mean_n_search": 7.3875,
+              "mean_score": 2.1875
+            },
+            "产品选型": {
+              "n": 115,
+              "llm_acc": {
+                "counts": {
+                  "正确": 100,
+                  "部分正确": 14,
+                  "错误": 1,
+                  "未知": 0
+                },
+                "accuracy": 0.8695652173913043,
+                "partial_rate": 0.12173913043478261,
+                "error_rate": 0.008695652173913044,
+                "n_judged": 115,
+                "n_correct": 100,
+                "n_partial": 14,
+                "n_wrong": 1,
+                "mean_score": 2.7304347826086954
+              },
+              "mean_query_latency_s": 138.6963172124547,
+              "mean_wall_latency_s": 138.75775832738017,
+              "mean_n_turns": 6.913043478260869,
+              "mean_n_search": 6.304347826086956,
+              "mean_score": 2.7304347826086954
+            },
+            "替代建议": {
+              "n": 115,
+              "llm_acc": {
+                "counts": {
+                  "正确": 98,
+                  "部分正确": 14,
+                  "错误": 2,
+                  "未知": 1
+                },
+                "accuracy": 0.8596491228070176,
+                "partial_rate": 0.12280701754385964,
+                "error_rate": 0.017543859649122806,
+                "n_judged": 114,
+                "n_correct": 98,
+                "n_partial": 14,
+                "n_wrong": 2,
+                "mean_score": 2.6140350877192984
+              },
+              "mean_query_latency_s": 153.17230105193067,
+              "mean_wall_latency_s": 153.1815538680009,
+              "mean_n_turns": 8.008695652173913,
+              "mean_n_search": 7.7043478260869565,
+              "mean_score": 2.6140350877192984
+            },
+            "跨文档关联": {
+              "n": 100,
+              "llm_acc": {
+                "counts": {
+                  "正确": 91,
+                  "部分正确": 6,
+                  "错误": 3,
+                  "未知": 0
+                },
+                "accuracy": 0.91,
+                "partial_rate": 0.06,
+                "error_rate": 0.03,
+                "n_judged": 100,
+                "n_correct": 91,
+                "n_partial": 6,
+                "n_wrong": 3,
+                "mean_score": 2.76
+              },
+              "mean_query_latency_s": 146.35107761029502,
+              "mean_wall_latency_s": 146.35800427627285,
+              "mean_n_turns": 7.86,
+              "mean_n_search": 7.07,
+              "mean_score": 2.76
+            },
+            "安全合规": {
+              "n": 65,
+              "llm_acc": {
+                "counts": {
+                  "正确": 55,
+                  "部分正确": 9,
+                  "错误": 1,
+                  "未知": 0
+                },
+                "accuracy": 0.8461538461538461,
+                "partial_rate": 0.13846153846153847,
+                "error_rate": 0.015384615384615385,
+                "n_judged": 65,
+                "n_correct": 55,
+                "n_partial": 9,
+                "n_wrong": 1,
+                "mean_score": 2.646153846153846
+              },
+              "mean_query_latency_s": 157.55822241443855,
+              "mean_wall_latency_s": 157.56843795764547,
+              "mean_n_turns": 8.184615384615384,
+              "mean_n_search": 8.446153846153846,
+              "mean_score": 2.646153846153846
+            }
+          },
+          "推理跳数": {
+            "2-hop": {
+              "n": 380,
+              "llm_acc": {
+                "counts": {
+                  "正确": 323,
+                  "部分正确": 45,
+                  "错误": 12,
+                  "未知": 0
+                },
+                "accuracy": 0.85,
+                "partial_rate": 0.11842105263157894,
+                "error_rate": 0.031578947368421054,
+                "n_judged": 380,
+                "n_correct": 323,
+                "n_partial": 45,
+                "n_wrong": 12,
+                "mean_score": 2.613157894736842
+              },
+              "mean_query_latency_s": 130.0223305445716,
+              "mean_wall_latency_s": 130.03250266830375,
+              "mean_n_turns": 7.6421052631578945,
+              "mean_n_search": 6.552631578947368,
+              "mean_score": 2.613157894736842
+            },
+            "1-hop": {
+              "n": 377,
+              "llm_acc": {
+                "counts": {
+                  "正确": 288,
+                  "部分正确": 71,
+                  "错误": 18,
+                  "未知": 0
+                },
+                "accuracy": 0.7639257294429708,
+                "partial_rate": 0.1883289124668435,
+                "error_rate": 0.04774535809018567,
+                "n_judged": 377,
+                "n_correct": 288,
+                "n_partial": 71,
+                "n_wrong": 18,
+                "mean_score": 2.3846153846153846
+              },
+              "mean_query_latency_s": 168.45060077502143,
+              "mean_wall_latency_s": 168.73708292477318,
+              "mean_n_turns": 6.8514588859416445,
+              "mean_n_search": 5.464190981432361,
+              "mean_score": 2.3846153846153846
+            },
+            "3-hop+": {
+              "n": 335,
+              "llm_acc": {
+                "counts": {
+                  "正确": 320,
+                  "部分正确": 11,
+                  "错误": 3,
+                  "未知": 1
+                },
+                "accuracy": 0.9580838323353293,
+                "partial_rate": 0.03293413173652695,
+                "error_rate": 0.008982035928143712,
+                "n_judged": 334,
+                "n_correct": 320,
+                "n_partial": 11,
+                "n_wrong": 3,
+                "mean_score": 2.907185628742515
+              },
+              "mean_query_latency_s": 200.4928419050048,
+              "mean_wall_latency_s": 200.50271847886174,
+              "mean_n_turns": 7.82089552238806,
+              "mean_n_search": 10.029850746268657,
+              "mean_score": 2.907185628742515
+            },
+            "4-hop+": {
+              "n": 85,
+              "llm_acc": {
+                "counts": {
+                  "正确": 83,
+                  "部分正确": 2,
+                  "错误": 0,
+                  "未知": 0
+                },
+                "accuracy": 0.9764705882352941,
+                "partial_rate": 0.023529411764705882,
+                "error_rate": 0.0,
+                "n_judged": 85,
+                "n_correct": 83,
+                "n_partial": 2,
+                "n_wrong": 0,
+                "mean_score": 2.9647058823529413
+              },
+              "mean_query_latency_s": 173.8852030698114,
+              "mean_wall_latency_s": 173.89162074878044,
+              "mean_n_turns": 7.8,
+              "mean_n_search": 8.105882352941176,
+              "mean_score": 2.9647058823529413
+            }
+          },
+          "知识层": {
+            "产品层": {
+              "n": 560,
+              "llm_acc": {
+                "counts": {
+                  "正确": 490,
+                  "部分正确": 56,
+                  "错误": 14,
+                  "未知": 0
+                },
+                "accuracy": 0.875,
+                "partial_rate": 0.1,
+                "error_rate": 0.025,
+                "n_judged": 560,
+                "n_correct": 490,
+                "n_partial": 56,
+                "n_wrong": 14,
+                "mean_score": 2.692857142857143
+              },
+              "mean_query_latency_s": 181.89368741413824,
+              "mean_wall_latency_s": 182.05119182267185,
+              "mean_n_turns": 7.598214285714286,
+              "mean_n_search": 7.535714285714286,
+              "mean_score": 2.692857142857143
+            },
+            "原材料层": {
+              "n": 387,
+              "llm_acc": {
+                "counts": {
+                  "正确": 305,
+                  "部分正确": 65,
+                  "错误": 17,
+                  "未知": 0
+                },
+                "accuracy": 0.7881136950904393,
+                "partial_rate": 0.16795865633074936,
+                "error_rate": 0.04392764857881137,
+                "n_judged": 387,
+                "n_correct": 305,
+                "n_partial": 65,
+                "n_wrong": 17,
+                "mean_score": 2.4392764857881137
+              },
+              "mean_query_latency_s": 136.65135361186623,
+              "mean_wall_latency_s": 136.7176635610424,
+              "mean_n_turns": 7.051679586563307,
+              "mean_n_search": 6.289405684754522,
+              "mean_score": 2.4392764857881137
+            },
+            "跨层": {
+              "n": 230,
+              "llm_acc": {
+                "counts": {
+                  "正确": 219,
+                  "部分正确": 8,
+                  "错误": 2,
+                  "未知": 1
+                },
+                "accuracy": 0.9563318777292577,
+                "partial_rate": 0.034934497816593885,
+                "error_rate": 0.008733624454148471,
+                "n_judged": 229,
+                "n_correct": 219,
+                "n_partial": 8,
+                "n_wrong": 2,
+                "mean_score": 2.8951965065502185
+              },
+              "mean_query_latency_s": 174.41377216748356,
+              "mean_wall_latency_s": 174.4218543993056,
+              "mean_n_turns": 7.765217391304348,
+              "mean_n_search": 8.456521739130435,
+              "mean_score": 2.8951965065502185
+            }
+          }
+        }
+      },
+      "llm_only": {
+        "n_total": 1177,
+        "enable_doc_recall": false,
+        "pipeline": {
+          "n_query_fail": 0,
+          "n_judge_fail": 1,
+          "n_ok": 1176
+        },
+        "llm_acc": {
+          "counts": {
+            "正确": 720,
+            "部分正确": 416,
+            "错误": 40,
+            "未知": 1
+          },
+          "accuracy": 0.6122448979591837,
+          "partial_rate": 0.35374149659863946,
+          "error_rate": 0.034013605442176874,
+          "n_judged": 1176,
+          "n_correct": 720,
+          "n_partial": 416,
+          "n_wrong": 40,
+          "mean_score": 1.7678571428571428
+        },
+        "latency": {
+          "mean_query_s": 56.15907429774551,
+          "mean_retrieve_s": null,
+          "mean_wall_s": 56.15908503357352,
+          "sum_query_s": 66099.23044844647,
+          "sum_retrieve_s": null,
+          "sum_wall_s": 66099.24308451603,
+          "n_with_query_latency": 1177,
+          "mean_embed_s": null,
+          "mean_rerank_s": null
+        },
+        "tokens": {
+          "sum_prompt": 174921,
+          "sum_completion": 1853154,
+          "sum_total": 2028075,
+          "mean_prompt": 148.6159728122345,
+          "mean_completion": 1574.4723874256586,
+          "sum_judge_prompt": 4981983,
+          "sum_judge_completion": 657792,
+          "sum_judge_total": 5639775
+        },
+        "by_hop": {
+          "1-hop": {
+            "n": 377,
+            "llm_acc": {
+              "counts": {
+                "正确": 264,
+                "部分正确": 91,
+                "错误": 22,
+                "未知": 0
+              },
+              "accuracy": 0.7002652519893899,
+              "partial_rate": 0.2413793103448276,
+              "error_rate": 0.058355437665782495,
+              "n_judged": 377,
+              "n_correct": 264,
+              "n_partial": 91,
+              "n_wrong": 22,
+              "mean_score": 2.0079575596816976
+            },
+            "mean_query_latency_s": 44.337335971873614,
+            "mean_retrieve_latency_s": null,
+            "mean_wall_latency_s": 44.337348040502114,
+            "mean_search_s": null,
+            "mean_n_search": null,
+            "mean_n_turns": null
+          },
+          "2-hop": {
+            "n": 380,
+            "llm_acc": {
+              "counts": {
+                "正确": 239,
+                "部分正确": 124,
+                "错误": 17,
+                "未知": 0
+              },
+              "accuracy": 0.6289473684210526,
+              "partial_rate": 0.3263157894736842,
+              "error_rate": 0.04473684210526316,
+              "n_judged": 380,
+              "n_correct": 239,
+              "n_partial": 124,
+              "n_wrong": 17,
+              "mean_score": 1.7105263157894737
+            },
+            "mean_query_latency_s": 52.89467145444145,
+            "mean_retrieve_latency_s": null,
+            "mean_wall_latency_s": 52.89468136453131,
+            "mean_search_s": null,
+            "mean_n_search": null,
+            "mean_n_turns": null
+          },
+          "3-hop+": {
+            "n": 335,
+            "llm_acc": {
+              "counts": {
+                "正确": 174,
+                "部分正确": 159,
+                "错误": 1,
+                "未知": 1
+              },
+              "accuracy": 0.5209580838323353,
+              "partial_rate": 0.47604790419161674,
+              "error_rate": 0.0029940119760479044,
+              "n_judged": 334,
+              "n_correct": 174,
+              "n_partial": 159,
+              "n_wrong": 1,
+              "mean_score": 1.6167664670658684
+            },
+            "mean_query_latency_s": 69.72759714504849,
+            "mean_retrieve_latency_s": null,
+            "mean_wall_latency_s": 69.7276075663389,
+            "mean_search_s": null,
+            "mean_n_search": null,
+            "mean_n_turns": null
+          },
+          "4-hop+": {
+            "n": 85,
+            "llm_acc": {
+              "counts": {
+                "正确": 43,
+                "部分正确": 42,
+                "错误": 0,
+                "未知": 0
+              },
+              "accuracy": 0.5058823529411764,
+              "partial_rate": 0.49411764705882355,
+              "error_rate": 0.0,
+              "n_judged": 85,
+              "n_correct": 43,
+              "n_partial": 42,
+              "n_wrong": 0,
+              "mean_score": 1.5529411764705883
+            },
+            "mean_query_latency_s": 69.70981871495434,
+            "mean_retrieve_latency_s": null,
+            "mean_wall_latency_s": 69.70982847060351,
+            "mean_search_s": null,
+            "mean_n_search": null,
+            "mean_n_turns": null
+          }
+        },
+        "by_category": {
+          "难度等级": {
+            "困难": {
+              "n": 420,
+              "llm_acc": {
+                "counts": {
+                  "正确": 217,
+                  "部分正确": 201,
+                  "错误": 1,
+                  "未知": 1
+                },
+                "accuracy": 0.5178997613365155,
+                "partial_rate": 0.4797136038186158,
+                "error_rate": 0.002386634844868735,
+                "n_judged": 419,
+                "n_correct": 217,
+                "n_partial": 201,
+                "n_wrong": 1,
+                "mean_score": 1.60381861575179
+              },
+              "mean_query_latency_s": 69.7239991294342,
+              "mean_wall_latency_s": 69.72400941601151,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.60381861575179
+            },
+            "中等": {
+              "n": 380,
+              "llm_acc": {
+                "counts": {
+                  "正确": 239,
+                  "部分正确": 124,
+                  "错误": 17,
+                  "未知": 0
+                },
+                "accuracy": 0.6289473684210526,
+                "partial_rate": 0.3263157894736842,
+                "error_rate": 0.04473684210526316,
+                "n_judged": 380,
+                "n_correct": 239,
+                "n_partial": 124,
+                "n_wrong": 17,
+                "mean_score": 1.7105263157894737
+              },
+              "mean_query_latency_s": 52.89467145444145,
+              "mean_wall_latency_s": 52.89468136453131,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.7105263157894737
+            },
+            "简单": {
+              "n": 377,
+              "llm_acc": {
+                "counts": {
+                  "正确": 264,
+                  "部分正确": 91,
+                  "错误": 22,
+                  "未知": 0
+                },
+                "accuracy": 0.7002652519893899,
+                "partial_rate": 0.2413793103448276,
+                "error_rate": 0.058355437665782495,
+                "n_judged": 377,
+                "n_correct": 264,
+                "n_partial": 91,
+                "n_wrong": 22,
+                "mean_score": 2.0079575596816976
+              },
+              "mean_query_latency_s": 44.337335971873614,
+              "mean_wall_latency_s": 44.337348040502114,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 2.0079575596816976
+            }
+          },
+          "查询类型": {
+            "有主体": {
+              "n": 767,
+              "llm_acc": {
+                "counts": {
+                  "正确": 476,
+                  "部分正确": 261,
+                  "错误": 29,
+                  "未知": 1
+                },
+                "accuracy": 0.6214099216710183,
+                "partial_rate": 0.34073107049608353,
+                "error_rate": 0.037859007832898174,
+                "n_judged": 766,
+                "n_correct": 476,
+                "n_partial": 261,
+                "n_wrong": 29,
+                "mean_score": 1.7924281984334203
+              },
+              "mean_query_latency_s": 53.64591337364933,
+              "mean_wall_latency_s": 53.64592441783264,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.7924281984334203
+            },
+            "无主体": {
+              "n": 410,
+              "llm_acc": {
+                "counts": {
+                  "正确": 244,
+                  "部分正确": 155,
+                  "错误": 11,
+                  "未知": 0
+                },
+                "accuracy": 0.5951219512195122,
+                "partial_rate": 0.3780487804878049,
+                "error_rate": 0.026829268292682926,
+                "n_judged": 410,
+                "n_correct": 244,
+                "n_partial": 155,
+                "n_wrong": 11,
+                "mean_score": 1.721951219512195
+              },
+              "mean_query_latency_s": 60.86052412404253,
+              "mean_wall_latency_s": 60.86053428302048,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.721951219512195
+            }
+          },
+          "问题维度": {
+            "配方优化": {
+              "n": 355,
+              "llm_acc": {
+                "counts": {
+                  "正确": 194,
+                  "部分正确": 160,
+                  "错误": 1,
+                  "未知": 0
+                },
+                "accuracy": 0.5464788732394367,
+                "partial_rate": 0.4507042253521127,
+                "error_rate": 0.0028169014084507044,
+                "n_judged": 355,
+                "n_correct": 194,
+                "n_partial": 160,
+                "n_wrong": 1,
+                "mean_score": 1.6056338028169015
+              },
+              "mean_query_latency_s": 63.71399775560991,
+              "mean_wall_latency_s": 63.71400813864361,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6056338028169015
+            },
+            "材料性能": {
+              "n": 267,
+              "llm_acc": {
+                "counts": {
+                  "正确": 188,
+                  "部分正确": 65,
+                  "错误": 14,
+                  "未知": 0
+                },
+                "accuracy": 0.704119850187266,
+                "partial_rate": 0.24344569288389514,
+                "error_rate": 0.052434456928838954,
+                "n_judged": 267,
+                "n_correct": 188,
+                "n_partial": 65,
+                "n_wrong": 14,
+                "mean_score": 1.9325842696629214
+              },
+              "mean_query_latency_s": 50.0866922537791,
+              "mean_wall_latency_s": 50.08670374959112,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.9325842696629214
+            },
+            "参数查询": {
+              "n": 160,
+              "llm_acc": {
+                "counts": {
+                  "正确": 100,
+                  "部分正确": 51,
+                  "错误": 9,
+                  "未知": 0
+                },
+                "accuracy": 0.625,
+                "partial_rate": 0.31875,
+                "error_rate": 0.05625,
+                "n_judged": 160,
+                "n_correct": 100,
+                "n_partial": 51,
+                "n_wrong": 9,
+                "mean_score": 1.96875
+              },
+              "mean_query_latency_s": 43.98576303305818,
+              "mean_wall_latency_s": 43.98577521104162,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.96875
+            },
+            "产品选型": {
+              "n": 115,
+              "llm_acc": {
+                "counts": {
+                  "正确": 62,
+                  "部分正确": 46,
+                  "错误": 7,
+                  "未知": 0
+                },
+                "accuracy": 0.5391304347826087,
+                "partial_rate": 0.4,
+                "error_rate": 0.06086956521739131,
+                "n_judged": 115,
+                "n_correct": 62,
+                "n_partial": 46,
+                "n_wrong": 7,
+                "mean_score": 1.6956521739130435
+              },
+              "mean_query_latency_s": 46.61727771431653,
+              "mean_wall_latency_s": 46.61728789681346,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6956521739130435
+            },
+            "替代建议": {
+              "n": 115,
+              "llm_acc": {
+                "counts": {
+                  "正确": 67,
+                  "部分正确": 44,
+                  "错误": 3,
+                  "未知": 1
+                },
+                "accuracy": 0.5877192982456141,
+                "partial_rate": 0.38596491228070173,
+                "error_rate": 0.02631578947368421,
+                "n_judged": 114,
+                "n_correct": 67,
+                "n_partial": 44,
+                "n_wrong": 3,
+                "mean_score": 1.6754385964912282
+              },
+              "mean_query_latency_s": 64.77348135104808,
+              "mean_wall_latency_s": 64.7734913005281,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6754385964912282
+            },
+            "跨文档关联": {
+              "n": 100,
+              "llm_acc": {
+                "counts": {
+                  "正确": 66,
+                  "部分正确": 32,
+                  "错误": 2,
+                  "未知": 0
+                },
+                "accuracy": 0.66,
+                "partial_rate": 0.32,
+                "error_rate": 0.02,
+                "n_judged": 100,
+                "n_correct": 66,
+                "n_partial": 32,
+                "n_wrong": 2,
+                "mean_score": 1.76
+              },
+              "mean_query_latency_s": 59.39865341137513,
+              "mean_wall_latency_s": 59.39866345340153,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.76
+            },
+            "安全合规": {
+              "n": 65,
+              "llm_acc": {
+                "counts": {
+                  "正确": 43,
+                  "部分正确": 18,
+                  "错误": 4,
+                  "未知": 0
+                },
+                "accuracy": 0.6615384615384615,
+                "partial_rate": 0.27692307692307694,
+                "error_rate": 0.06153846153846154,
+                "n_judged": 65,
+                "n_correct": 43,
+                "n_partial": 18,
+                "n_wrong": 4,
+                "mean_score": 1.7846153846153847
+              },
+              "mean_query_latency_s": 66.46291837695664,
+              "mean_wall_latency_s": 66.46292780547117,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.7846153846153847
+            }
+          },
+          "推理跳数": {
+            "2-hop": {
+              "n": 380,
+              "llm_acc": {
+                "counts": {
+                  "正确": 239,
+                  "部分正确": 124,
+                  "错误": 17,
+                  "未知": 0
+                },
+                "accuracy": 0.6289473684210526,
+                "partial_rate": 0.3263157894736842,
+                "error_rate": 0.04473684210526316,
+                "n_judged": 380,
+                "n_correct": 239,
+                "n_partial": 124,
+                "n_wrong": 17,
+                "mean_score": 1.7105263157894737
+              },
+              "mean_query_latency_s": 52.89467145444145,
+              "mean_wall_latency_s": 52.89468136453131,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.7105263157894737
+            },
+            "1-hop": {
+              "n": 377,
+              "llm_acc": {
+                "counts": {
+                  "正确": 264,
+                  "部分正确": 91,
+                  "错误": 22,
+                  "未知": 0
+                },
+                "accuracy": 0.7002652519893899,
+                "partial_rate": 0.2413793103448276,
+                "error_rate": 0.058355437665782495,
+                "n_judged": 377,
+                "n_correct": 264,
+                "n_partial": 91,
+                "n_wrong": 22,
+                "mean_score": 2.0079575596816976
+              },
+              "mean_query_latency_s": 44.337335971873614,
+              "mean_wall_latency_s": 44.337348040502114,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 2.0079575596816976
+            },
+            "3-hop+": {
+              "n": 335,
+              "llm_acc": {
+                "counts": {
+                  "正确": 174,
+                  "部分正确": 159,
+                  "错误": 1,
+                  "未知": 1
+                },
+                "accuracy": 0.5209580838323353,
+                "partial_rate": 0.47604790419161674,
+                "error_rate": 0.0029940119760479044,
+                "n_judged": 334,
+                "n_correct": 174,
+                "n_partial": 159,
+                "n_wrong": 1,
+                "mean_score": 1.6167664670658684
+              },
+              "mean_query_latency_s": 69.72759714504849,
+              "mean_wall_latency_s": 69.7276075663389,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6167664670658684
+            },
+            "4-hop+": {
+              "n": 85,
+              "llm_acc": {
+                "counts": {
+                  "正确": 43,
+                  "部分正确": 42,
+                  "错误": 0,
+                  "未知": 0
+                },
+                "accuracy": 0.5058823529411764,
+                "partial_rate": 0.49411764705882355,
+                "error_rate": 0.0,
+                "n_judged": 85,
+                "n_correct": 43,
+                "n_partial": 42,
+                "n_wrong": 0,
+                "mean_score": 1.5529411764705883
+              },
+              "mean_query_latency_s": 69.70981871495434,
+              "mean_wall_latency_s": 69.70982847060351,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.5529411764705883
+            }
+          },
+          "知识层": {
+            "产品层": {
+              "n": 560,
+              "llm_acc": {
+                "counts": {
+                  "正确": 310,
+                  "部分正确": 233,
+                  "错误": 17,
+                  "未知": 0
+                },
+                "accuracy": 0.5535714285714286,
+                "partial_rate": 0.4160714285714286,
+                "error_rate": 0.030357142857142857,
+                "n_judged": 560,
+                "n_correct": 310,
+                "n_partial": 233,
+                "n_wrong": 17,
+                "mean_score": 1.6821428571428572
+              },
+              "mean_query_latency_s": 56.00212269505407,
+              "mean_wall_latency_s": 56.00213308582939,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6821428571428572
+            },
+            "原材料层": {
+              "n": 387,
+              "llm_acc": {
+                "counts": {
+                  "正确": 268,
+                  "部分正确": 98,
+                  "错误": 21,
+                  "未知": 0
+                },
+                "accuracy": 0.6925064599483204,
+                "partial_rate": 0.2532299741602067,
+                "error_rate": 0.05426356589147287,
+                "n_judged": 387,
+                "n_correct": 268,
+                "n_partial": 98,
+                "n_wrong": 21,
+                "mean_score": 1.9328165374677002
+              },
+              "mean_query_latency_s": 51.408736433138955,
+              "mean_wall_latency_s": 51.40874805901403,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.9328165374677002
+            },
+            "跨层": {
+              "n": 230,
+              "llm_acc": {
+                "counts": {
+                  "正确": 142,
+                  "部分正确": 85,
+                  "错误": 2,
+                  "未知": 1
+                },
+                "accuracy": 0.6200873362445415,
+                "partial_rate": 0.37117903930131,
+                "error_rate": 0.008733624454148471,
+                "n_judged": 229,
+                "n_correct": 142,
+                "n_partial": 85,
+                "n_wrong": 2,
+                "mean_score": 1.6986899563318778
+              },
+              "mean_query_latency_s": 64.53417712865833,
+              "mean_wall_latency_s": 64.53418720701366,
+              "mean_n_turns": null,
+              "mean_n_search": null,
+              "mean_score": 1.6986899563318778
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "n_paired": 1176,
+      "both_correct": 590,
+      "agentic_only_correct": 424,
+      "llm_only_only_correct": 130,
+      "neither_correct": 32,
+      "crosstab": {
+        "Agentic正确_纯LLM正确": 590,
+        "Agentic正确_纯LLM部分正确": 391,
+        "Agentic正确_纯LLM错误": 33,
+        "Agentic部分正确_纯LLM正确": 106,
+        "Agentic错误_纯LLM正确": 24,
+        "Agentic错误_纯LLM部分正确": 5,
+        "Agentic部分正确_纯LLM部分正确": 20,
+        "Agentic错误_纯LLM错误": 4,
+        "Agentic部分正确_纯LLM错误": 3
+      },
+      "pairwise": {
+        "n": 1176,
+        "agentic_win": 950,
+        "llm_only_win": 207,
+        "tie": 19,
+        "agentic_win_rate": 0.8078231292517006,
+        "llm_only_win_rate": 0.1760204081632653,
+        "tie_rate": 0.016156462585034014
+      },
+      "mean_score_delta_agentic_minus_llm": 0.8809523809523809
+    },
+    "system_order": [
+      "agentic",
+      "llm_only"
+    ]
+  },
+  "n_results": 1177
+}

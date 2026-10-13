@@ -1,0 +1,264 @@
+# 公开示例。OSS AccessKey / Secret 与数据库密码已清空，使用前自行填写。
+settings:
+  working_path: 'example/a'
+  debug: False  
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+
+app_config:
+  workers: 4           #线程池数，进程池数只能是1
+  content_chars: 500   # retrieve 返回的正文截断长度
+  cors: '*'
+  host: '0.0.0.0'
+  port: 8000
+
+oss_download:
+  table: 'msds_information'
+  file_type: all #1/2/all
+  limit: -1
+  download_dir: 'doc'
+  bucket_key: 'ky-products-files'
+  num_thread: 8
+  dedupe_local: False
+
+doc:
+  count_token: True
+  source_type: 'pdf'
+  doc_dir: 'doc'
+  flush_every: 500
+  recognition:
+    api_key: 'EMPTY'
+    base_url: 'http://123.56.128.99:8030/v1'
+    model_args:
+      model: 'llm-medium'
+      temperature: 0.2
+      enable_thinking: false
+    use_cache: True
+    prompt: 'pdf_recognize'
+    image_format: 'jpeg'
+    dpi: 100
+    num_thread: 8                # 仅 VLM 切片并发；OCR 不用这个
+    max_pages_per_doc: 4
+
+    use_paddleocr: False
+    paddleocr_url: 'http://113.108.154.212:8001/v1'
+    paddleocr_model: 'PaddleOCR-VL-1.6'
+    paddleocr_concurrency: 16    # 仅 OCR VL HTTP 并发
+    paddleocr_dpi: 200
+
+    paddleocr_layout_url: 'http://113.108.154.212:8002' # 仅 OCR：空=本机 CPU；填了按远端 workers 切片并发
+    retry:
+      max_attempt: 3
+      wait: [30, 60, 90]
+      timeout: 600
+
+summary:
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+  model_args:
+    model: 'llm-medium'
+    temperature: 0.2
+    enable_thinking: false
+  prompt: 'doc_summary'
+  use_cache: True
+  num_thread: 8
+  flush_every: 500
+  enable_prior_context: false
+  prior_context_slices: 1
+  retry:
+    max_attempt: 3
+    wait: 30
+    timeout: 300
+
+chunk:
+  count_token: True
+  chunk_size_max: 512
+  chunk_overlap: 0.1
+  flush_every: 1000
+
+extract:
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+  model_args:
+    model: 'llm-medium'
+    temperature: 0.2
+    enable_thinking: false
+    response_format:
+      type: 'json_object'
+  extract_prompt: 'extract_product'
+  use_cache: True
+  num_thread: 16
+  flush_every: 2000
+  retry:
+    max_attempt: 3
+    wait: 30
+    timeout: 180
+
+
+build:
+  target:
+    - 'hyperedge'
+    - 'node'
+  flush_every: 500
+
+vectorization:
+  api_key: 'EMPTY'
+  base_url: 'http://182.92.180.215:9999/v1'
+  model_args:
+    model: 'embedding-medium'
+    dimension: 768
+  default_target:
+    - 'chunk'
+    - 'node'
+  use_cache: True
+  num_thread: 32           
+  batch_size: 32
+  shard_max_vectors: 100000
+  index_type: hnsw
+  index_quant: fp16
+  hnsw_M: 32
+  hnsw_efConstruction: 256
+  hnsw_efSearch: 128
+  retry:
+    max_attempt: 3
+    wait: 30
+    timeout: 600
+
+
+retrieve:
+  rerank_top_k: 20
+  chunk_candidate_k: 40
+  node_candidate_k: 40
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+  timeout: 10800
+  embedding_api_key: 'EMPTY'
+  embedding_base_url: 'http://182.92.180.215:9999/v1'
+  embedding_model_args:
+    model: 'embedding-medium'
+    dimension: 768
+  model_args:
+    model: 'llm-medium'
+    temperature: 0.2
+    enable_thinking: False
+  rewrite_model_args:
+    model: 'llm-medium'
+    enable_thinking: True
+    max_tokens: 128
+    temperature: 0.0
+  use_cache: False
+  enable_query_rewrite: False
+  enable_query_instruct: True
+  query_instruct: 'Given a web search query, retrieve relevant passages that answer the query'
+  enable_full_body_context: True
+  enable_slice_family_expand: False  
+  enable_keyword_exact: True
+  enable_keyword_minority: True   
+  enable_keyword_majority: False  
+  enable_parallel_paths: False
+
+  keyword_candidate_k: 20
+  keyword_top_k: 10
+  keyword_max_df: 2000 # 命中块数超过该值的词当停用词跳过。
+  keyword_extract_model_args:
+    model: 'llm-medium'
+    enable_thinking: false
+    max_tokens: 256
+    temperature: 0.0
+    response_format:
+      type: 'json_object'
+  enable_rerank: True
+  rerank_api_key: 'EMPTY'
+  rerank_base_url: 'http://182.92.180.215:9999/v1'  
+  rerank_model_args:
+    model: 'reranker-xsmall'
+  rerank_max_chars: 4000
+
+
+agent:
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+  timeout: 300
+  model_args:
+    model: 'llm-medium'
+    temperature: 0.2
+    enable_thinking: False
+  use_cache: False
+  max_steps: 6
+  enable_query_rewrite: False
+  enable_pure_llm: True
+  enable_direct_retrieve: False
+  chunk_candidate_k: null
+  node_candidate_k: null
+
+
+# agentic的独立配置文件，与以上配置不相关
+agentic:
+  api_key: 'EMPTY'
+  base_url: 'http://123.56.128.99:8030/v1'
+  timeout: 14400
+  model_args:
+    model: 'llm-medium'
+    temperature: 0.2
+    enable_thinking: False
+  use_cache: False
+  max_turns: 32
+  max_prompt_tokens: 101072   # 对齐 llm-medium 的 max_model_len；接近该值则强制作答；0=不按 token 停
+  prompt_token_reserve: 4096  # 预留给强制作答
+  log_trace: False          # 中间过程写入 {working_path}/log/agentic_时间戳.log
+  tool_protocol: auto      # auto | openai | json
+  force_answer_on_max_turns: True
+  search_preview_chars: 600
+  search_max_hits: 8
+  read_doc_max_chars: 16000
+  neighbors_limit: 20
+  enable_search: True
+  enable_read_doc: True
+  enable_read_chunk: True
+  enable_graph_neighbors: True
+  read_chunk_max_chars: 4000
+
+  # 旧工具结果压缩（按工具轮年龄；证据槽不压缩）
+  prune_tool_results: True
+  prune_keep_last_n_turns: 16     # 最近几轮工具结果保留全文
+  prune_soft_trim_chars: 4000     # 更早且超过该长度则留头尾
+  prune_soft_trim_head: 1200
+  prune_soft_trim_tail: 800
+  prune_hard_clear_age_turns: 28   # 达到该年龄只留 id 占位
+  # 证据槽条数：核实过的字段写在这里，压缩后仍在；满了丢最旧
+  enable_note_evidence: True     # 启用极小证据槽
+  evidence_slot_max: 10          # 证据槽最大条数
+
+  chunk_candidate_k: 20
+  node_candidate_k: 20
+  enable_query_rewrite: False
+  enable_keyword_exact: True
+  enable_keyword_minority: True
+  enable_keyword_majority: False
+  enable_parallel_paths: False
+  keyword_candidate_k: 20
+  keyword_top_k: 10
+  enable_rerank: True
+  rerank_top_k: 10
+  enable_full_body_context: False
+  enable_slice_family_expand: False
+
+
+search_range:  #doc id 范围参考：tds 0-33883，专利 33884-57032，msds 57033-257613
+  node_max_vectors: [4827585,24346941]       #[1551895,4827583]   # tds 0-1551894，专利 1551895-4827583，msds 4827584-24346941
+  chunk_max_vectors: [377542,1777008]       #[126912,377548]   # tds 0-126911，专利 126912-377548，msds 377542-1777008（doc 57033 起）
+
+
+dm_data_mysql:    # dev
+  db: dm_data
+  host: 192.168.110.253
+  password: ''
+  port: '3306'
+  user: dm_user
+
+ali_oss:
+  ky-products-files:
+    ACCESS_KEY: ''
+    SECRET_KEY: ''
+    END_POINT: http://oss-cn-beijing.aliyuncs.com
+    BUCKET_NAME: ky-products-files

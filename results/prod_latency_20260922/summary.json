@@ -1,0 +1,163 @@
+{
+  "meta": {
+    "base_url": "http://182.92.85.174:8060",
+    "seed": 20260922,
+    "n_per_set": 30,
+    "concurrency": 3,
+    "timeout_s": 900,
+    "started_at": "2026-09-22T09:40:34",
+    "finished_at": "2026-09-22T10:17:33",
+    "n_questions": 90
+  },
+  "wall_s": 2218.64,
+  "groups": {
+    "全部": {
+      "n": 90,
+      "n_ok": 89,
+      "n_fail": 1,
+      "success_rate": 0.9889,
+      "client_total_s": {
+        "n": 90,
+        "mean": 73.35,
+        "median": 61.66,
+        "p90": 125.59,
+        "max": 278.02
+      },
+      "first_event_s": {
+        "n": 90,
+        "mean": 19.01,
+        "median": 17.28,
+        "p90": 29.7,
+        "max": 76.88
+      },
+      "server_latency_s": {
+        "n": 90,
+        "mean": 72.66,
+        "median": 61.42,
+        "p90": 125.23,
+        "max": 277.79
+      },
+      "retrieve_latency_s": {
+        "n": 90,
+        "mean": 8.56,
+        "median": 6.72,
+        "p90": 17.73,
+        "max": 30.01
+      },
+      "n_turns_mean": 4.28,
+      "n_sources_mean": 18.31,
+      "answer_chars_mean": 1603.0
+    },
+    "库内自生成试题": {
+      "n": 30,
+      "n_ok": 30,
+      "n_fail": 0,
+      "success_rate": 1.0,
+      "client_total_s": {
+        "n": 30,
+        "mean": 44.6,
+        "median": 44.02,
+        "p90": 62.72,
+        "max": 84.72
+      },
+      "first_event_s": {
+        "n": 30,
+        "mean": 16.66,
+        "median": 15.45,
+        "p90": 25.69,
+        "max": 27.89
+      },
+      "server_latency_s": {
+        "n": 30,
+        "mean": 44.41,
+        "median": 43.76,
+        "p90": 62.51,
+        "max": 84.51
+      },
+      "retrieve_latency_s": {
+        "n": 30,
+        "mean": 9.1,
+        "median": 7.31,
+        "p90": 17.13,
+        "max": 21.16
+      },
+      "n_turns_mean": 4.1,
+      "n_sources_mean": 15.5,
+      "answer_chars_mean": 1326.0
+    },
+    "建筑涂料测试问题集1": {
+      "n": 30,
+      "n_ok": 29,
+      "n_fail": 1,
+      "success_rate": 0.9667,
+      "client_total_s": {
+        "n": 30,
+        "mean": 100.19,
+        "median": 89.3,
+        "p90": 175.85,
+        "max": 278.02
+      },
+      "first_event_s": {
+        "n": 30,
+        "mean": 21.27,
+        "median": 17.32,
+        "p90": 32.63,
+        "max": 76.88
+      },
+      "server_latency_s": {
+        "n": 30,
+        "mean": 100.0,
+        "median": 89.08,
+        "p90": 175.65,
+        "max": 277.79
+      },
+      "retrieve_latency_s": {
+        "n": 30,
+        "mean": 10.09,
+        "median": 7.02,
+        "p90": 21.63,
+        "max": 30.01
+      },
+      "n_turns_mean": 4.67,
+      "n_sources_mean": 24.93,
+      "answer_chars_mean": 1616.0
+    },
+    "专利配方试题": {
+      "n": 30,
+      "n_ok": 30,
+      "n_fail": 0,
+      "success_rate": 1.0,
+      "client_total_s": {
+        "n": 30,
+        "mean": 75.26,
+        "median": 73.13,
+        "p90": 109.7,
+        "max": 152.53
+      },
+      "first_event_s": {
+        "n": 30,
+        "mean": 19.11,
+        "median": 18.1,
+        "p90": 29.85,
+        "max": 37.72
+      },
+      "server_latency_s": {
+        "n": 30,
+        "mean": 73.58,
+        "median": 68.62,
+        "p90": 109.36,
+        "max": 152.3
+      },
+      "retrieve_latency_s": {
+        "n": 30,
+        "mean": 6.49,
+        "median": 6.15,
+        "p90": 12.66,
+        "max": 15.94
+      },
+      "n_turns_mean": 4.07,
+      "n_sources_mean": 14.5,
+      "answer_chars_mean": 1867.0
+    }
+  }
+}

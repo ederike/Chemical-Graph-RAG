@@ -1,0 +1,744 @@
+{
+  "seed": 20260922,
+  "n_per_set": 30,
+  "created_at": "2026-09-22T09:40:34",
+  "sets": [
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "path": "results/benchmark_agentic_1_含专利/questions.json"
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "path": "results/benchmark_agentic_2_questions1_agentic_new/set1_dataset.json"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "path": "results/benchmark_agentic_4_专利测试集/questions.json"
+    }
+  ],
+  "questions": [
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0035",
+      "question": "我们计划开发一款用于高端化妆品厚壁瓶（厚度约8mm）的包装方案，要求材料具备高透明度、良好的韧性且符合PET回收标准（如APR ASTM D7611）。同时，为了提升瓶身表面的耐候性和抗污能力，我们打算在瓶外表面喷涂一层基于专利CN 117186701 A的铝单板幕墙丙烯酸酯底漆色浆。请根据提供的资料，确认Eastman Cristal™ One Renew-25 MR是否满足包装基材的回收与物理性能要求？如果采用该专利色浆进行表面涂装，其配方中用于提升附着力和耐腐蚀性的关键助剂组合是什么？此外，在制备该色浆时，颜填料粉末的粒径控制上限是多少？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0023",
+      "question": "我们计划开发一款用于高端化妆品包装的厚壁容器，基材选用Eastman Cristal™ Renew GN071-100共聚聚酯。为了提升包装的抗跌落性能，我们考虑在注塑成型后，使用DOWSIL™ General Purpose Silicone Sealant对容器底部与标签背胶的接缝处进行辅助密封加固。请评估该方案在材料相容性和加工可行性上是否存在风险？具体而言，该密封胶是否兼容该聚酯基材？其施工温度范围是否覆盖了该聚酯的典型加工熔体温度？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0037",
+      "question": "我正在开发一款用于金属基材的水性防护涂料，需要解决两个关键问题：一是抑制施工过程中的闪锈，二是确保涂膜具有良好的流平性和光泽。请根据提供的资料，推荐一款合适的闪锈抑制剂及其推荐添加量范围，并说明如果我想使用 Eastman™ 2-Ethylhexanol 来改善流平性，它在常温（20℃）下的粘度是多少，以及它是否适合直接大量添加到此水性体系中？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0093",
+      "question": "我们计划使用科思创（Covestro）的 Uralac® P 4905 饱和羧基聚酯树脂开发一款用于建筑领域的 TGIC 固化体系光泽白色粉末涂料。根据该产品的技术数据表，请提供推荐的起始配方中各组分的具体用量（以总重量 1000 份计），以及该配方在挤出加工时的推荐螺杆转速和固化工艺条件（包括温度和时间）。",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0027",
+      "question": "我们计划开发一款用于地坪施工的无溶剂聚氨酯自流平涂料，要求涂层表面光滑无气泡且气味较低。请问ADD-2723是否适用于此场景？如果适用，其推荐添加量是多少，以及在加工过程中需要注意哪些操作细节以确保效果？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0030",
+      "question": "我们计划开发一款用于食品包装的改性离子聚合物材料，拟选用杜邦沙林（Surlyn）PC-350作为基体树脂。在配方设计中，我们考虑添加立达化工的润湿分散剂LD-1029以改善加工流变性。请评估该组合在法规合规性（特别是食品接触方面）以及加工安全性（针对LD-1029的操作防护）上的可行性与注意事项。",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0002",
+      "question": "我们计划升级半导体超纯水系统的抛光段，需要在杜邦FilmTec™ SG30-400/34i和SG30LE-440i两款8英寸反渗透元件中进行选型。请对比这两款元件在纯水流量、运行压力、对异丙醇（Isopropanol）的脱除率以及适用的系统类型方面的主要差异，并说明它们共同配备的iLEC™互锁端盖带来了哪些具体益处？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0031",
+      "question": "我们在开发一款用于航空领域的耐高温密封组件，需要评估两种材料的极限耐温性能。请对比道康宁 XIAMETER™ RBB-2030-40 Base 硅橡胶基础胶与亨斯迈 EPIBOND® 115 A/B 结构胶粘剂，哪一款材料在文档中明确支持更高的长期热老化测试温度？请提供具体的测试温度数值及对应的性能保持情况（如硬度或强度的变化）。",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0020",
+      "question": "我在开发一款对透明度要求较高的溶剂型清漆，计划使用立达化工的LD-2052消泡剂。请问该产品的有效成分含量是多少？在配方设计和工艺上，为了获得最佳消泡效果并控制风险，厂家建议的添加阶段、推荐用量范围以及需要特别注意的潜在缺陷是什么？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0042",
+      "question": "我们工厂正在升级环保设施，计划在硝酸生产线的氨氧化反应器中安装EnviCat N2O-S催化剂以去除氧化亚氮。同时，为了优化后续工艺中使用的溶剂型涂料体系，我们需要评估BYK-332表面活性剂的适用性。请分别说明EnviCat N2O-S的安装位置及其主要成分，以及BYK-332的化学成分及其在溶剂型体系中的主要功能？",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0016",
+      "question": "我们计划开发一种用于一次性医用设备组装的环保型高韧性阻燃塑料基复合板材。该板材配方中使用了丙烯酸酯作为助剂，并采用紫外线/可见光固化工艺进行表面改性或粘接。请结合提供的三份资料，分析以下三个关键问题：1. 根据专利CN 110358321 A，该复合板材中丙烯酸酯的具体质量分数范围是多少？2. 若选用LOCTITE AA 3201作为该医用设备的粘接剂，其是否满足ISO-10993生物相容性要求？3. 在固化LOCTITE AA 3201时，为了获得较好的表干效果，推荐的最小光强是多少？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0048",
+      "question": "我是一家箱包制造企业的工艺工程师，正在评估两种不同的材料改性方案。方案A是开发一种用于亚克力板材的阻燃隔热涂层，方案B是优化箱包用板材级ABS树脂的配方。请帮我对比这两个方案在‘助剂/添加剂用量’和‘关键加工/储存条件’上的具体要求：1. 方案A中，隔热喷涂剂稀释时溶剂的添加比例是多少？涂层固化时的温度范围是多少？2. 方案B中，ABS树脂组合物中助剂（含润滑剂和抗氧剂）的总添加量范围是多少？3. 如果我在方案A的喷涂前处理或稀释过程中使用了水相体系并产生了泡沫，想引入陶氏的XIAMETER™ ACP-1266消泡剂，该消泡剂预稀释物在储存时有何特殊的温度和时效限制？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0033",
+      "question": "在开发水性汽车金属底色漆时，如果我想参考专利CN 105315813 A中实施例3的配方体系，并计划用CLiQSPERSE 132替换原配方中的分散剂，请问原配方中分散剂的化学类型是什么？CLiQSPERSE 132是否属于同一化学类型？此外，根据CLiQSPERSE 132的技术数据表，若该漆中主要使用无机颜料（如铝银浆），推荐的起始添加量范围是多少？",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0010",
+      "question": "我们计划开发一款用于建筑接缝密封的聚脲喷涂材料，要求使用伯氨基封端的EO/PO共聚物作为原料，且必须满足可持续供应链要求（如ISCC Plus认证、非化石来源）。请根据Genamin M 41/2000 MB Terra Terra的技术资料，确认该产品是否适用，并列出其关键的技术参数（摩尔质量、胺值范围、伯胺含量）以及可再生碳指数（RCI）。",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0017",
+      "question": "我们在开发一款建筑用湿气固化密封胶，希望选用DOWSIL™ HP-110 Polymer作为基础聚合物。请提供该产品的典型粘度范围（mPa·s）和密度（g/cm³），并说明为了延长其储存稳定性及增强耐候性，在配方中分别建议添加什么类型的助剂？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0026",
+      "question": "我们工厂正在升级一套化工废水处理与气体净化联合系统。在废水深度处理单元，我们需要去除高浓度的铁离子（Fe³⁺）和铜离子（Cu²⁺），请推荐一款对这两种金属离子具有高选择性且再生剂为盐酸的螯合树脂，并说明其推荐的操作pH范围。在气体净化单元，我们需要从混合气体中优先吸附硫化氢（H₂S）而非二氧化碳（CO₂），请推荐一款孔径为5Å的分子筛，并说明其再生方式。最后，为了评估这两个单元的设备占地与维护成本，请分别提供这两种推荐材料的典型装运密度（或压实堆积密度）以及各自的再生剂用量（或再生条件）。",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0005",
+      "question": "我正在开发一款用于硬质PVC型材的涂料体系，需要同时解决基材加工稳定性和涂层表面质感问题。请帮我确认：1. 用于PVC基材加工时，亚磷酸三（十八烷基）酯（YIPHOS® 2018）的推荐添加量范围是多少？2. 用于该PVC型材表面涂层以提供平滑纹理和消光效果时，ORGASOL® 2002 D NAT 1 的最佳涂层厚度限制是多少？3. 如果我在PVC加工阶段使用METABLEN P-530A作为加工助剂，它相比普通助剂在耐增塑剂性方面有何具体优势？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0018",
+      "question": "我们计划开发一款用于户外透明实心板的聚碳酸酯（PC）共挤产品，基材选用科思创的 Makrolon® ET UV110。为了优化板材的耐候性和抗紫外线性能，我们考虑在挤出工艺中引入离子交换树脂作为辅助改性剂或催化剂载体。请问：1. Makrolon® ET UV110 的推荐注塑/挤出料筒温度是多少？2. 三菱化学的 DIAION™ PK216H 树脂的最高操作温度是多少？3. 基于这两项温度参数，直接将该树脂与 Makrolon® ET UV110 在高温熔融状态下共混加工是否可行？请说明理由。",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0022",
+      "question": "我正在开发一款高性能聚氨酯水性磁漆用于人工彩砂涂层，参考了某专利配方（如实施例16-18），其中使用了陶氏的BD-405作为润湿剂。现在我想评估是否可以用科莱恩（Clariant）的产品进行替代或优化。请对比科莱恩的SAPOGENAT® T 180和GENAMIN C 120这两款产品：1. 哪一款在20°C下是透明液体且无需加热即可直接溶解使用？2. 哪一款的HLB值约为16，更适合用作蜡和溶剂的乳化剂？3. 如果我的体系对pH值敏感，哪一款产品的1%或10g/L水溶液pH值更高（呈碱性）？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0007",
+      "question": "我正在开发一款用于装饰性家具箔的水性高光涂料，需要同时提升涂层的抗划伤性、表面滑爽感，并解决生产及干燥过程中的静电吸附灰尘问题。请根据资料推荐两款合适的添加剂，并说明它们各自的推荐添加量范围（基于总配方或固体涂料）以及关键的储存注意事项。",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0027",
+      "question": "我们计划开发一款用于金属表面的水性防腐涂料，该涂料在制造过程中需要经历高达95°C的高温分散工艺，且最终产品需具备优异的湿态防腐性能以防止罐内腐败。同时，为了提升涂膜的流平性和手感，我们考虑引入有机硅助剂。请根据现有资料，推荐一款适合此高温水性体系的湿态防腐剂，并说明其推荐添加量范围；同时，请评估陶氏的DOWSIL™ ES-5227 DM配方助剂是否适用于该水性涂料体系？如果不适用，请指出其主要应用领域及原因。",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0016",
+      "question": "我在开发一款常温固化的乙烯基酯树脂体系，其中使用了亲水性气相二氧化硅作为流变助剂。为了增强其触变性能并防止贮存期间分层，我想添加毕克的RHEOBYK-R 605。请问该助剂在乙烯基酯树脂中针对气相二氧化硅的推荐添加量范围是多少（基于二氧化硅用量）？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0032",
+      "question": "我在开发一款微发泡塑木复合材料板材，配方中使用了N-β-氨乙基-γ-氨丙基甲基二甲氧基硅烷作为氨基硅烷偶联剂。现在我想在板材表面涂覆一层环保型防腐耐指纹金属表面漆（基于水性环氧树脂体系），请问我板材配方中的这种硅烷偶联剂，是否属于该表面漆专利推荐使用的硅烷偶联剂类型？如果不匹配，该表面漆推荐的具体硅烷偶联剂化学名称是什么？",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_3hop_0004",
+      "question": "我们计划开发一款用于潮湿环境下钢结构防护的高性能醇酸底漆，参考专利CN 117384540 A的技术方案，该方案要求使用含有伯氨基和仲氨基的双氨基硅烷低聚物来增强漆膜疏水性和附着力。同时，为了优化施工性能，我们需要在配方中添加消泡剂。请根据现有资料回答：1. 专利中明确推荐的双氨基硅烷低聚物具体有哪些牌号？2. 如果我们在该醇酸底漆体系中选择使用 TEGO FOAMEX 830 作为消泡剂，根据其安全数据表（MSDS），该产品的化学基础是什么？3. 在操作该消泡剂时，MSDS 建议佩戴何种材质的手套进行手部防护？",
+      "hop": 3,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0056",
+      "question": "我们在开发一款需要高温加工的个人护理产品，计划使用陶氏的 CARBOWAX™ SENTRY™ 聚乙二醇 8000。请提供该产品的 CAS 号、熔点范围以及 100°C 时的粘度数据，以便我们评估其加工流动性。",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0039",
+      "question": "我们目前在使用EDL-DF22消泡剂，请问该产品的化学组成是什么？在溶剂型涂料体系中，推荐的添加量范围是多少？",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0037",
+      "question": "我们正在开发一款水性集装箱漆，配方中已经添加了伟利佳® LeAd 250 作为主消泡剂。现在发现漆膜表面偶尔出现缩孔缺陷，且希望进一步降低体系的表面张力以改善流平性。请问：1. 根据文档，LeAd 250 是否具备解决缩孔或显著降低表面张力的功能？2. 如果引入 SURFYNOL® 104 Z 作为辅助助剂，它能否同时解决缩孔和表面张力问题？3. 在添加 SURFYNOL® 104 Z 时，其推荐用量范围是多少，以及它与 LeAd 250 在水溶性上有什么主要区别需要注意？",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0034",
+      "question": "我正在开发一款用于乳制品清洁的工业配方，需要同时具备清洁去污和消泡功能。请根据资料，分别推荐一款来自 Clariant 的非离子表面活性剂和一款来自 BASF 的消泡剂，并说明它们各自的化学本质以及推荐的使用浓度或活性物质含量。",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_1hop_0028",
+      "question": "我们计划开发一款用于塑料表面的UV固化罩光清漆，要求涂层具有高光泽和优异的耐刮擦性。科思创的AgiSyn™ 1010-C80是否适用于此场景？如果适用，请提供该产品的理论官能度、25℃下的粘度范围以及推荐的储存温度条件。",
+      "hop": 1,
+      "question_type": ""
+    },
+    {
+      "set_id": "agentic_1",
+      "set_name": "库内自生成试题",
+      "question_id": "q_2hop_0039",
+      "question": "我们计划开发一款用于船舶防腐的高性能环氧涂料，需要同时提升涂层对金属基材的附着力以及改善其在潮湿环境下的电气绝缘性能。根据现有资料，晨光化工的CG-O187（3-(2,3-环氧丙氧)丙基三甲氧基硅烷）是否满足这些功能需求？如果我们在配方中引入科莱恩（Clariant）的Polyglykol 4000 PS作为辅助组分，该聚乙二醇的物理形态（粉末或液体）会对我们的液态涂料生产工艺带来什么潜在影响？",
+      "hop": 2,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0420",
+      "question": "对比环氧乳液和聚氨酯分散体(PUD)在半球发射率方面的差异，分别适用于什么场景？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0793",
+      "question": "我需要开发一款用于工业厂房的质感产品，要求：1)附着力1级；2)干燥时间表干≤2h；3)耐沾污性好。请给出完整的配方框架建议，包括基料、颜料/填料、助剂的选择及用量范围，并说明每种材料的选择理由。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0352",
+      "question": "聚羧酸钠分散剂在使用过程中有哪些安全注意事项？需要参考什么安全数据表？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0594",
+      "question": "弹性拉毛涂料的粘结强度和延伸率之间有什么关系？如何平衡两者？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0526",
+      "question": "在保温系统场景中，需要成本低的地坪产品，应该选择什么类型的产品？推荐哪些关键原材料？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0637",
+      "question": "在体育馆木地板场景下，如果需要更高的耐水性的填料来替代常规选择，有哪些选项？各自有什么优缺点？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0208",
+      "question": "油性木器漆(聚氨酯)的附着力技术指标是多少？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0801",
+      "question": "我需要开发一款用于住宅内墙装修的地坪产品，要求：1)VOC≤80g/L；2)耐沾污性≤15%；3)色彩稳定。请给出完整的配方框架建议，包括基料、颜料/填料、助剂的选择及用量范围，并说明每种材料的选择理由。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0753",
+      "question": "在别墅外墙场景下使用的功能性涂料出现涂膜开裂，可能的原因有哪些？如何解决？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0131",
+      "question": "硅灰石在建筑涂料配方中的推荐添加量是多少？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0236",
+      "question": "JS防水涂料(聚合物水泥)的主要成分有哪些？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0244",
+      "question": "内墙丝光乳胶漆的主要成分有哪些？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0843",
+      "question": "抗菌涂料配方中使用纳米氧化锌，但客户反馈出现涂膜硬度不够。请分析原因，推荐2-3种替代方案，并对比每种方案对干燥时间和耐碱性的影响及成本变化。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0639",
+      "question": "在阳台防水场景下，如果需要更好的施工性的树脂来替代常规选择，有哪些选项？各自有什么优缺点？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q1019",
+      "question": "环氧地坪漆(水性)需要升级为满足GB 18582-2020(建筑用墙面涂料中有害物质限量)的版本。当前配方中的硫酸钡和水性固化剂可能不达标。请给出配方调整方案，预估调整后的成本变化，并分析对新版产品关键性能的影响。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0422",
+      "question": "对比Texanol成膜助剂和HPMC增稠剂(羟丙基甲基纤维素)在理论涂布率方面的差异，分别适用于什么场景？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0499",
+      "question": "需要改善防霉涂料的耐冲击性，应该调整配方中哪些组分？为什么？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0143",
+      "question": "酞菁绿G在建筑涂料配方中的推荐添加量是多少？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0641",
+      "question": "在历史建筑保护场景下，如果需要更好的耐候性的树脂来替代常规选择，有哪些选项？各自有什么优缺点？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0573",
+      "question": "使用水性木器漆后出现涂膜脱落/附着力差的问题，可能是什么原因？从配方角度应如何改进？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0037",
+      "question": "金红石型钛白粉R-902+的吸油量是多少？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0373",
+      "question": "有机硅消泡剂有哪些可替代的材料？矿物油消泡剂是否可以作为替代品？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0320",
+      "question": "用于食品加工厂的建筑涂料，其耐碱性通常需要达到什么标准？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q1094",
+      "question": "在别墅外墙场景下，某涂料出现涂膜脱落/附着力差，经分析可能与填料类原材料有关。请追溯：1)哪些填料可能导致此问题；2)如何确认具体是哪种材料；3)确认后的替代方案；4)替代后对配方其他组分的影响。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0043",
+      "question": "氧化铁红110的吸油量是多少？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0368",
+      "question": "IPBC防霉剂有哪些可替代的材料？TBZ(特丁嗪)是否可以作为替代品？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0279",
+      "question": "在工业厂房场景中，通常使用哪种颜料？请举例说明其作用。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0125",
+      "question": "氧化铁红110在建筑涂料中的主要作用是什么？成本低这一优势体现在哪里？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0316",
+      "question": "用于住宅内墙装修的建筑涂料，其抗菌率通常需要达到什么标准？",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "coatings_set1",
+      "set_name": "建筑涂料测试问题集1",
+      "question_id": "Q0296",
+      "question": "建筑涂料中常用的溶剂有哪些？请说明各自的特点。",
+      "hop": null,
+      "question_type": ""
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_application_to_formula_0006",
+      "question": "我们医院正在推进绿色医院建筑改造，需要为病房和公共区域墙面选择一种装饰涂料。该涂料必须满足以下严苛条件：1. 具备极强的抗菌性能（杀菌率99.99%）且抗菌效果持久；2. 能够耐受高频次的酒精擦拭消毒以及碘酒污渍的清洗，不留痕迹；3. 表面硬度高，抗划伤，耐磨损；4. 环保性能优异，VOC含量低，无苯和游离甲醛。请问是否有符合这些医疗环境特殊要求的涂料配方推荐？",
+      "hop": null,
+      "question_type": "application_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0015",
+      "question": "我正在开发一种用于板材表面的水性纳米聚合物涂覆组合物，该体系以脂肪族异氰酸酯与聚醚多元醇聚合而成的树脂为核心。如果我在配方中选用乙二醇丁醚作为成膜助剂，请问该配方通常还包含哪些关键组分（如消泡剂、调节剂、交联剂等）及其大致作用或类型？",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0014",
+      "question": "在制备含羟基聚酯树脂时，如果我想使用脂环族二羧酸或其酸酐作为多元酸组分(a)，根据该专利实施例，有哪些具体的脂环族二羧酸或酸酐原料可以互换使用？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_application_to_formula_0008",
+      "question": "我正在开发一种用于聚丙烯（PP）基材的水性导电涂层体系。该涂层需要满足以下关键要求：1. 涂膜与PP基材之间具有优异的层间附着力；2. 体系为水性分散液，环保且易于施工；3. 能够良好地分散导电性碳颜料。请问应如何设计改性聚烯烃树脂（组分A）的关键物理化学参数（如熔点、分子量、丙烯含量等）以及分散工艺，以确保上述性能？",
+      "hop": null,
+      "question_type": "application_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0003",
+      "question": "我们正在开发一款用于柔性音箱表面的水性底漆，核心痛点是传统丙烯酸乳液底漆耐水性不足且附着力一般。我们需要一种能显著提升漆膜耐水性、附着力及柔韧性的配方思路，特别是希望了解如何通过乳液改性来实现这些性能，请提供具体的配方组成及关键原料的作用。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0013",
+      "question": "在开发一款针对南方潮湿环境的吸潮耐擦洗腻子膏时，如果希望替换配方中的胶粉组分以优化成本或供应稳定性，根据广州全系建材有限公司的相关专利技术，有哪些具体的原料类型可以作为羟丙基甲基纤维素型腻子胶粉的等效替代或具体实施选项？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0003",
+      "question": "在开发防水保温轻质高强石膏板时，如果我想替换配方中的发泡剂，根据该专利的技术方案，有哪些天然来源的发泡剂可以互换使用？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_application_to_formula_0015",
+      "question": "我们是一家酒盖包装制造商，正在开发具有防伪功能的铝质酒盖。目前使用的软性磁性橡胶卷材辊涂工艺存在接缝问题，导致磁粉吸附出现断点，影响防伪效果和外观质量。我们需要一种能够涂覆在铝卷表面、实现N52钕铁硼强磁效果、吸磁均匀且无断点的磁粉涂料配方及相应的涂装工艺建议。请问有哪些合适的磁粉聚酯涂料配方及关键工艺参数？",
+      "hop": null,
+      "question_type": "application_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0013",
+      "question": "我正在开发一款用于建筑外墙的真石漆艺术涂料，客户特别强调涂层需要具备优异的耐沾污性和自洁功能，同时要求岩片在涂层中分散均匀、不易翘起，且与底材的粘接强度要高。请问有没有基于改性岩片和特定乳液体系的配方思路？",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0012",
+      "question": "在开发一款用于木器表面的高温高湿不泛白清底漆时，如果配方中使用了聚氨酯树脂作为成膜物质，根据相关专利技术，该体系通常还需要搭配哪些关键助剂或溶剂来确保其耐湿热性和渗透性？",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0002",
+      "question": "我正在开发一款用于汽车内饰件的UV双重固化高光油漆，希望提升其在高温高湿环境下的耐发白开裂性能。如果我在配方中使用改性纳米凹凸棒作为关键填料，请问该配方体系通常还包含哪些主要原料？特别是为了进一步优化性能，是否建议添加特定的功能助剂组合？",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_formula_optimize_0006",
+      "question": "我们在生产超高分子量聚乙烯（UHMWPE）板材时，发现由于材料表面能低且无活性官能团，直接涂覆涂料极易出现掉漆、鼓包现象。目前尝试过使用胶粘剂过渡层，但粘合强度不够；使用EVA泡沫复合层又导致板材增重且成本过高。请问在不增加额外复合层或依赖低强度胶粘剂的前提下，如何通过工艺优化来显著提高UHMWPE板材与涂料（如耐磨漆、聚脲等）的界面结合牢度？",
+      "hop": null,
+      "question_type": "formula_optimize"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0009",
+      "question": "在开发基于专利 CN 109627377 A 的超快干丙烯酸树脂体系时，为了调节表干时间和表面硬度，除了甲基丙烯酸异冰片酯外，还可以使用哪些单体作为可互换或协同调节的硬单体/共聚单体？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0012",
+      "question": "我正在开发一种岩棉装饰板的生产工艺，核心诉求是实现板材的防水性能（憎水）以及提高防火等级。请问在岩棉纤维预处理和施胶阶段，应如何配置化学助剂及胶黏剂体系？请提供具体的原料种类及推荐添加比例。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0007",
+      "question": "我需要开发一款反光氟碳漆，要求具备反光功能并解决施工中的气泡和沉降问题。请提供该产品的配方组成及关键原料的大致配比。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_formula_optimize_0004",
+      "question": "我们目前使用的车间底漆主要依赖高含量的锌粉来提供防腐保护，导致原材料成本居高不下。同时，在后续焊接工序中，锌粉容易雾化，影响焊接质量并增加环保处理压力。请问如何优化配方，在保持防腐性能不降低的前提下，显著降低成本并减少焊接时的锌粉雾化现象？",
+      "hop": null,
+      "question_type": "formula_optimize"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0018",
+      "question": "在浩力森涂料开发的适用于湿碰湿工艺的水性漆配方中，为了满足环保及快干要求，水性有机溶剂具体可以使用哪些种类？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0009",
+      "question": "在开发高稳定性石塑地板的PVC石塑层配方时，如果核心基材选用PVC-CPE共混树脂，该配方中还需要添加哪些关键助剂和填料以确保障其加工性能与物理稳定性？请列出具体组分及推荐用量范围。",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_formula_optimize_0005",
+      "question": "我们目前生产的仿天然石材陶瓷砖主要依赖凹凸模具压制来形成表面孔洞和纹理，但客户反馈产品孔洞过于规整、过渡生硬，人工痕迹明显，缺乏天然石材那种不规则的自然美感。请问在陶瓷砖的面料配方或制备工艺上，有什么优化方案可以解决这一问题，使孔洞和纹理更加自然随机？",
+      "hop": null,
+      "question_type": "formula_optimize"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0015",
+      "question": "在开发一款无需添加增塑剂的腻子型硅橡胶组合物时，为了调节材料的机械性能和形态，需要选择聚硅氧烷B（即硅生胶）作为关键组分。请问根据该技术方案，有哪些具体的硅生胶类型可以作为聚硅氧烷B的原料进行互换或组合使用？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0016",
+      "question": "我正在开发一款用于外墙装饰的真石漆乳液，目前遇到的主要痛点是涂层在雨季容易出现水痕泛白，即早期耐水性较差，同时担心高Tg乳液会导致涂层脆裂。请问有没有一种基于自交联技术的配方思路，能够同时提升早期耐水性和柔韧性，并增强对彩砂的粘结力？请提供关键的单体组成及交联体系建议。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_application_to_formula_0009",
+      "question": "我们计划开发一款用于建筑装饰领域的轻质陶瓷砖，核心需求是利用赤泥作为主要原料以实现固废资源化利用。该砖体需要具备轻质、不开裂变形以及具有一定吸水能力的特性，且需满足建筑装饰材料的放射性安全标准。请问基于赤泥基料，应采用怎样的原料配比及关键工艺参数来制备这种轻质陶瓷砖？",
+      "hop": null,
+      "question_type": "application_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0018",
+      "question": "我正在开发一款用于热镀锌金属基材的防锈水性漆，计划使用水溶性硅丙成膜树脂（如Silomer8861乳液）作为主要成膜物质。根据相关专利技术，为了构建完整的防锈涂层体系，除了该成膜树脂外，配方中还需要包含哪些关键原料？请列出这些原料及其在体系中的主要作用或具体类型。",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0014",
+      "question": "我正在开发一款用于海洋钢结构防腐的导电高分子改性水性环氧富锌底漆，计划使用聚苯胺作为关键的导电填料。请问在该体系中，除了聚苯胺外，还需要搭配哪些核心树脂、固化剂及助剂来构建完整的A、B、C组分配方？",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0005",
+      "question": "在配制用于真石漆或仿花岗岩涂料的罩面清漆乳液时，为了提升漆膜的耐水性和交联密度，我们需要添加高密度交联单体。请问在该技术方案中，有哪些具体的单体可以作为高密度交联单体进行互换或组合使用？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0002",
+      "question": "我们是一家精密机床制造商，正在寻找一种适用于机床防护罩的金属闪光漆配方。由于精密机床铸件对高温敏感，无法进行高温烘烤，因此要求该漆具备自干（自然干燥）或低温快干的能力。同时，为了提升产品档次，漆膜需要具有强烈的金属质感、高光泽度以及良好的机械强度（硬度），且施工后不能出现发花或阴影斑纹。请提供符合这些要求的金属闪光漆配方组成及关键工艺参数。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_product_to_formula_0018",
+      "question": "我需要开发一款汽车漆，要求具备高遮盖力、精确的颜色匹配能力以及稳定的粘度控制。请提供该产品的配方组成思路或关键原料体系。",
+      "hop": null,
+      "question_type": "product_to_formula"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_to_formula_and_others_0007",
+      "question": "我正在开发一款用于高温环境的防锈水性漆添加剂，计划使用多聚磷酸铵作为核心阻燃耐高温组分。请问在该类配方体系中，除了多聚磷酸铵外，通常还需要搭配哪些关键原料以实现防锈、成膜及增稠等功能？",
+      "hop": null,
+      "question_type": "ingredient_to_formula_and_others"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0017",
+      "question": "在制备高干燥强度瓷砖坯体时，如果我想调整配方中的长石类原料，除了专利中实施例使用的钾长石外，还有哪些同类型的长石原料可以作为替代选项？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    },
+    {
+      "set_id": "patent",
+      "set_name": "专利配方试题",
+      "question_id": "q_ingredient_interchange_0007",
+      "question": "在开发用于高频印刷电路板的聚亚苯基氧化物（PPO）基清漆时，如果希望使用过氧化物类引发剂来促进固化，根据专利 CN 105612204 B 的配方体系，有哪些具体的引发剂原料可以互换使用？",
+      "hop": null,
+      "question_type": "ingredient_interchange"
+    }
+  ]
+}

@@ -1,0 +1,818 @@
+{
+  "meta": {
+    "created_at": "2026-09-03T14:29:38",
+    "source_path": "/root/projects/Chemical-Graph-RAG/results/benchmark_agentic_1_含专利/evals.json",
+    "config_file": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_1/config.yaml",
+    "dhmf_config_path": "/root/projects/Chemical-Graph-RAG/example/a/config_open.yaml",
+    "query_mode": "agentic",
+    "judge_model": "qwen3.6-27b",
+    "judge_mode": "pairwise",
+    "enable_doc_recall": true,
+    "enable_llm_only": true,
+    "db_path": "/root/projects/Chemical-Graph-RAG/example/a/DB/main.db",
+    "hop_counts": {
+      "1": 100,
+      "2": 50,
+      "3": 50
+    },
+    "seed": 44,
+    "doc_id_min": null,
+    "doc_id_max": null,
+    "n_results": 200,
+    "n_questions": 200,
+    "n_total_planned": 200,
+    "n_skipped_gen_fail": 0,
+    "eval_elapsed_s": 5887.961,
+    "eval_done": true
+  },
+  "summary": {
+    "n_total": 200,
+    "enable_doc_recall": true,
+    "pipeline": {
+      "n_query_fail": 0,
+      "n_judge_fail": 0,
+      "n_ok": 200
+    },
+    "llm_acc": {
+      "counts": {
+        "正确": 192,
+        "错误": 8,
+        "未知": 0
+      },
+      "accuracy": 0.96,
+      "error_rate": 0.04,
+      "n_judged": 200,
+      "n_correct": 192,
+      "n_wrong": 8
+    },
+    "latency": {
+      "mean_query_s": 46.267469567123335,
+      "mean_retrieve_s": 14.113709383409004,
+      "mean_wall_s": 46.296183895523136,
+      "sum_query_s": 9253.493913424667,
+      "sum_retrieve_s": 2822.741876681801,
+      "sum_wall_s": 9259.236779104627,
+      "n_with_query_latency": 200,
+      "mean_search_s": 5.852918248335182,
+      "mean_n_search": 2.59,
+      "mean_n_turns": 3.35,
+      "mean_n_read_doc": 0.69,
+      "mean_n_graph_neighbors": 0.0,
+      "sum_n_search": 518,
+      "sum_n_turns": 670,
+      "mean_precompute_s": 1.15e-06,
+      "sum_precompute_s": 0.00022999999999999998,
+      "mean_precompute_s_per_search": 4.383334421022863e-07,
+      "mean_rewrite_s": 6.840000000000001e-06,
+      "sum_rewrite_s": 0.001368,
+      "mean_rewrite_s_per_search": 2.7095495515093505e-06,
+      "mean_embed_s": 0.731526295,
+      "sum_embed_s": 146.305259,
+      "mean_embed_s_per_search": 0.2689497138163762,
+      "mean_chunk_s": 0.98455056,
+      "sum_chunk_s": 196.910112,
+      "mean_chunk_s_per_search": 0.37956645803530636,
+      "mean_node_s": 5.151872839999999,
+      "sum_node_s": 1030.374568,
+      "mean_node_s_per_search": 2.305964893246173,
+      "mean_keyword_s": 5.80619556,
+      "sum_keyword_s": 1161.239112,
+      "mean_keyword_s_per_search": 2.348525677224325,
+      "mean_expand_s": 0.063851455,
+      "sum_expand_s": 12.770291,
+      "mean_expand_s_per_search": 0.02369008610186575,
+      "mean_rerank_s": 1.374913815,
+      "sum_rerank_s": 274.982763,
+      "mean_rerank_s_per_search": 0.5258745689682177,
+      "mean_total_s": 14.113176645000001,
+      "sum_total_s": 2822.635329,
+      "mean_total_s_per_search": 5.8526790383129565,
+      "stages": {
+        "precompute_s": {
+          "label": "预加载",
+          "mean_per_question_s": 1.15e-06,
+          "sum_s": 0.00022999999999999998,
+          "mean_per_search_s": 4.383334421022863e-07,
+          "n": 200
+        },
+        "rewrite_s": {
+          "label": "改写",
+          "mean_per_question_s": 6.840000000000001e-06,
+          "sum_s": 0.001368,
+          "mean_per_search_s": 2.7095495515093505e-06,
+          "n": 200
+        },
+        "embed_s": {
+          "label": "向量化",
+          "mean_per_question_s": 0.731526295,
+          "sum_s": 146.305259,
+          "mean_per_search_s": 0.2689497138163762,
+          "n": 200
+        },
+        "chunk_s": {
+          "label": "chunk路",
+          "mean_per_question_s": 0.98455056,
+          "sum_s": 196.910112,
+          "mean_per_search_s": 0.37956645803530636,
+          "n": 200
+        },
+        "node_s": {
+          "label": "node路",
+          "mean_per_question_s": 5.151872839999999,
+          "sum_s": 1030.374568,
+          "mean_per_search_s": 2.305964893246173,
+          "n": 200
+        },
+        "keyword_s": {
+          "label": "keyword路",
+          "mean_per_question_s": 5.80619556,
+          "sum_s": 1161.239112,
+          "mean_per_search_s": 2.348525677224325,
+          "n": 200
+        },
+        "expand_s": {
+          "label": "扩展",
+          "mean_per_question_s": 0.063851455,
+          "sum_s": 12.770291,
+          "mean_per_search_s": 0.02369008610186575,
+          "n": 200
+        },
+        "rerank_s": {
+          "label": "重排",
+          "mean_per_question_s": 1.374913815,
+          "sum_s": 274.982763,
+          "mean_per_search_s": 0.5258745689682177,
+          "n": 200
+        },
+        "total_s": {
+          "label": "检索内部合计",
+          "mean_per_question_s": 14.113176645000001,
+          "sum_s": 2822.635329,
+          "mean_per_search_s": 5.8526790383129565,
+          "n": 200
+        }
+      }
+    },
+    "tokens": {
+      "sum_prompt": 7491945,
+      "sum_completion": 178239,
+      "sum_total": 7670184,
+      "mean_prompt": 37459.725,
+      "mean_completion": 891.195,
+      "sum_judge_prompt": 1109922,
+      "sum_judge_completion": 398540,
+      "sum_judge_total": 1508462
+    },
+    "by_hop": {
+      "1": {
+        "n": 100,
+        "llm_acc_counts": {
+          "正确": 100,
+          "错误": 0
+        },
+        "accuracy": 1.0,
+        "mean_query_latency_s": 22.10068656776799,
+        "mean_retrieve_latency_s": 7.639896931258845,
+        "mean_wall_latency_s": 22.12493763997918,
+        "mean_search_s": 5.590669541276924,
+        "mean_n_search": 1.37,
+        "mean_n_turns": 2.6,
+        "mean_precompute_s": 6.2e-07,
+        "mean_precompute_s_per_search": 4.483333333333333e-07,
+        "mean_rewrite_s": 3.6499999999999998e-06,
+        "mean_rewrite_s_per_search": 2.7308333333333336e-06,
+        "mean_embed_s": 0.37580056,
+        "mean_embed_s_per_search": 0.2573384908333333,
+        "mean_chunk_s": 0.54421359,
+        "mean_chunk_s_per_search": 0.3893215166666667,
+        "mean_node_s": 3.61072076,
+        "mean_node_s_per_search": 2.5192265474999997,
+        "mean_keyword_s": 2.42076672,
+        "mean_keyword_s_per_search": 1.9102338716666667,
+        "mean_expand_s": 0.025414720000000002,
+        "mean_expand_s_per_search": 0.018465615,
+        "mean_rerank_s": 0.66248779,
+        "mean_rerank_s_per_search": 0.49568441916666667,
+        "mean_total_s": 7.63954963,
+        "mean_total_s_per_search": 5.590380536666666,
+        "mean_doc_recall": 0.96
+      },
+      "2": {
+        "n": 50,
+        "llm_acc_counts": {
+          "正确": 47,
+          "错误": 3
+        },
+        "accuracy": 0.94,
+        "mean_query_latency_s": 69.69531311233877,
+        "mean_retrieve_latency_s": 18.40683685737662,
+        "mean_wall_latency_s": 69.72390004485379,
+        "mean_search_s": 6.446117065431885,
+        "mean_n_search": 3.68,
+        "mean_n_turns": 4.06,
+        "mean_precompute_s": 1.3199999999999999e-06,
+        "mean_precompute_s_per_search": 3.5478178284300733e-07,
+        "mean_rewrite_s": 9.78e-06,
+        "mean_rewrite_s_per_search": 2.8142201902405983e-06,
+        "mean_embed_s": 1.05776428,
+        "mean_embed_s_per_search": 0.2908587458587331,
+        "mean_chunk_s": 1.5470327999999998,
+        "mean_chunk_s_per_search": 0.41068999983434934,
+        "mean_node_s": 7.0578834,
+        "mean_node_s_per_search": 2.508781652964779,
+        "mean_keyword_s": 6.68031004,
+        "mean_keyword_s_per_search": 2.64510026697809,
+        "mean_expand_s": 0.10622709999999999,
+        "mean_expand_s_per_search": 0.03384293830874341,
+        "mean_rerank_s": 1.95670298,
+        "mean_rerank_s_per_search": 0.5565788514753953,
+        "mean_total_s": 18.4062684,
+        "mean_total_s_per_search": 6.445954080573225,
+        "mean_doc_recall": 0.82
+      },
+      "3": {
+        "n": 50,
+        "llm_acc_counts": {
+          "正确": 45,
+          "错误": 5
+        },
+        "accuracy": 0.9,
+        "mean_query_latency_s": 71.17319202061859,
+        "mean_retrieve_latency_s": 22.76820681374171,
+        "mean_wall_latency_s": 71.21096025728039,
+        "mean_search_s": 5.79608082169693,
+        "mean_n_search": 3.94,
+        "mean_n_turns": 4.14,
+        "mean_precompute_s": 2.04e-06,
+        "mean_precompute_s_per_search": 5.002142857142857e-07,
+        "mean_rewrite_s": 1.028e-05,
+        "mean_rewrite_s_per_search": 2.564404761904762e-06,
+        "mean_embed_s": 1.11673978,
+        "mean_embed_s_per_search": 0.2707013083809524,
+        "mean_chunk_s": 1.30274226,
+        "mean_chunk_s_per_search": 0.32955526980952377,
+        "mean_node_s": 6.32816644,
+        "mean_node_s_per_search": 1.6806811602142857,
+        "mean_keyword_s": 11.70293876,
+        "mean_keyword_s_per_search": 2.934466190380953,
+        "mean_expand_s": 0.09834928,
+        "mean_expand_s_per_search": 0.024189233142857144,
+        "mean_rerank_s": 2.2179767,
+        "mean_rerank_s_per_search": 0.5561646717142857,
+        "mean_total_s": 22.767338919999997,
+        "mean_total_s_per_search": 5.795866500190476,
+        "mean_doc_recall": 0.6466666666666667
+      }
+    },
+    "doc_recall": {
+      "mean_recall": 0.8466666666666667,
+      "vs_accuracy": {
+        "definition": {
+          "hit": "recall == 1.0：全部 gold 文档出现在 retrieval_sources",
+          "partial": "0 < recall < 1：部分 gold 命中",
+          "miss": "recall == 0.0：gold 均未出现在 retrieval_sources",
+          "unknown": "该题无有效 recall 字段"
+        },
+        "table": {
+          "hit_correct": 145,
+          "hit_wrong": 1,
+          "partial_correct": 40,
+          "partial_wrong": 3,
+          "miss_correct": 7,
+          "miss_wrong": 4,
+          "unknown_correct": 0,
+          "unknown_wrong": 0,
+          "hit_unknown": 0,
+          "partial_unknown": 0,
+          "miss_unknown": 0,
+          "unknown_unknown": 0
+        },
+        "matrix": [
+          {
+            "recall": "hit",
+            "accuracy": "正确",
+            "n": 145
+          },
+          {
+            "recall": "hit",
+            "accuracy": "错误",
+            "n": 1
+          },
+          {
+            "recall": "partial",
+            "accuracy": "正确",
+            "n": 40
+          },
+          {
+            "recall": "partial",
+            "accuracy": "错误",
+            "n": 3
+          },
+          {
+            "recall": "miss",
+            "accuracy": "正确",
+            "n": 7
+          },
+          {
+            "recall": "miss",
+            "accuracy": "错误",
+            "n": 4
+          }
+        ],
+        "row_totals": {
+          "hit": 146,
+          "partial": 43,
+          "miss": 11,
+          "unknown": 0
+        },
+        "col_totals": {
+          "正确": 192,
+          "错误": 8,
+          "未知": 0
+        },
+        "n_with_recall": 200,
+        "n_total": 200,
+        "hit_wrong_breakdown": {
+          "query_ok": 1,
+          "query_fail": 0
+        }
+      }
+    },
+    "systems": [
+      "agentic",
+      "llm_only"
+    ],
+    "agentic": {
+      "n_total": 200,
+      "enable_doc_recall": true,
+      "pipeline": {
+        "n_query_fail": 0,
+        "n_judge_fail": 0,
+        "n_ok": 200
+      },
+      "llm_acc": {
+        "counts": {
+          "正确": 192,
+          "错误": 8,
+          "未知": 0
+        },
+        "accuracy": 0.96,
+        "error_rate": 0.04,
+        "n_judged": 200,
+        "n_correct": 192,
+        "n_wrong": 8
+      },
+      "latency": {
+        "mean_query_s": 46.267469567123335,
+        "mean_retrieve_s": 14.113709383409004,
+        "mean_wall_s": 46.296183895523136,
+        "sum_query_s": 9253.493913424667,
+        "sum_retrieve_s": 2822.741876681801,
+        "sum_wall_s": 9259.236779104627,
+        "n_with_query_latency": 200,
+        "mean_search_s": 5.852918248335182,
+        "mean_n_search": 2.59,
+        "mean_n_turns": 3.35,
+        "mean_n_read_doc": 0.69,
+        "mean_n_graph_neighbors": 0.0,
+        "sum_n_search": 518,
+        "sum_n_turns": 670,
+        "mean_precompute_s": 1.15e-06,
+        "sum_precompute_s": 0.00022999999999999998,
+        "mean_precompute_s_per_search": 4.383334421022863e-07,
+        "mean_rewrite_s": 6.840000000000001e-06,
+        "sum_rewrite_s": 0.001368,
+        "mean_rewrite_s_per_search": 2.7095495515093505e-06,
+        "mean_embed_s": 0.731526295,
+        "sum_embed_s": 146.305259,
+        "mean_embed_s_per_search": 0.2689497138163762,
+        "mean_chunk_s": 0.98455056,
+        "sum_chunk_s": 196.910112,
+        "mean_chunk_s_per_search": 0.37956645803530636,
+        "mean_node_s": 5.151872839999999,
+        "sum_node_s": 1030.374568,
+        "mean_node_s_per_search": 2.305964893246173,
+        "mean_keyword_s": 5.80619556,
+        "sum_keyword_s": 1161.239112,
+        "mean_keyword_s_per_search": 2.348525677224325,
+        "mean_expand_s": 0.063851455,
+        "sum_expand_s": 12.770291,
+        "mean_expand_s_per_search": 0.02369008610186575,
+        "mean_rerank_s": 1.374913815,
+        "sum_rerank_s": 274.982763,
+        "mean_rerank_s_per_search": 0.5258745689682177,
+        "mean_total_s": 14.113176645000001,
+        "sum_total_s": 2822.635329,
+        "mean_total_s_per_search": 5.8526790383129565,
+        "stages": {
+          "precompute_s": {
+            "label": "预加载",
+            "mean_per_question_s": 1.15e-06,
+            "sum_s": 0.00022999999999999998,
+            "mean_per_search_s": 4.383334421022863e-07,
+            "n": 200
+          },
+          "rewrite_s": {
+            "label": "改写",
+            "mean_per_question_s": 6.840000000000001e-06,
+            "sum_s": 0.001368,
+            "mean_per_search_s": 2.7095495515093505e-06,
+            "n": 200
+          },
+          "embed_s": {
+            "label": "向量化",
+            "mean_per_question_s": 0.731526295,
+            "sum_s": 146.305259,
+            "mean_per_search_s": 0.2689497138163762,
+            "n": 200
+          },
+          "chunk_s": {
+            "label": "chunk路",
+            "mean_per_question_s": 0.98455056,
+            "sum_s": 196.910112,
+            "mean_per_search_s": 0.37956645803530636,
+            "n": 200
+          },
+          "node_s": {
+            "label": "node路",
+            "mean_per_question_s": 5.151872839999999,
+            "sum_s": 1030.374568,
+            "mean_per_search_s": 2.305964893246173,
+            "n": 200
+          },
+          "keyword_s": {
+            "label": "keyword路",
+            "mean_per_question_s": 5.80619556,
+            "sum_s": 1161.239112,
+            "mean_per_search_s": 2.348525677224325,
+            "n": 200
+          },
+          "expand_s": {
+            "label": "扩展",
+            "mean_per_question_s": 0.063851455,
+            "sum_s": 12.770291,
+            "mean_per_search_s": 0.02369008610186575,
+            "n": 200
+          },
+          "rerank_s": {
+            "label": "重排",
+            "mean_per_question_s": 1.374913815,
+            "sum_s": 274.982763,
+            "mean_per_search_s": 0.5258745689682177,
+            "n": 200
+          },
+          "total_s": {
+            "label": "检索内部合计",
+            "mean_per_question_s": 14.113176645000001,
+            "sum_s": 2822.635329,
+            "mean_per_search_s": 5.8526790383129565,
+            "n": 200
+          }
+        }
+      },
+      "tokens": {
+        "sum_prompt": 7491945,
+        "sum_completion": 178239,
+        "sum_total": 7670184,
+        "mean_prompt": 37459.725,
+        "mean_completion": 891.195,
+        "sum_judge_prompt": 1109922,
+        "sum_judge_completion": 398540,
+        "sum_judge_total": 1508462
+      },
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 100,
+            "错误": 0
+          },
+          "accuracy": 1.0,
+          "mean_query_latency_s": 22.10068656776799,
+          "mean_retrieve_latency_s": 7.639896931258845,
+          "mean_wall_latency_s": 22.12493763997918,
+          "mean_search_s": 5.590669541276924,
+          "mean_n_search": 1.37,
+          "mean_n_turns": 2.6,
+          "mean_precompute_s": 6.2e-07,
+          "mean_precompute_s_per_search": 4.483333333333333e-07,
+          "mean_rewrite_s": 3.6499999999999998e-06,
+          "mean_rewrite_s_per_search": 2.7308333333333336e-06,
+          "mean_embed_s": 0.37580056,
+          "mean_embed_s_per_search": 0.2573384908333333,
+          "mean_chunk_s": 0.54421359,
+          "mean_chunk_s_per_search": 0.3893215166666667,
+          "mean_node_s": 3.61072076,
+          "mean_node_s_per_search": 2.5192265474999997,
+          "mean_keyword_s": 2.42076672,
+          "mean_keyword_s_per_search": 1.9102338716666667,
+          "mean_expand_s": 0.025414720000000002,
+          "mean_expand_s_per_search": 0.018465615,
+          "mean_rerank_s": 0.66248779,
+          "mean_rerank_s_per_search": 0.49568441916666667,
+          "mean_total_s": 7.63954963,
+          "mean_total_s_per_search": 5.590380536666666,
+          "mean_doc_recall": 0.96
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 47,
+            "错误": 3
+          },
+          "accuracy": 0.94,
+          "mean_query_latency_s": 69.69531311233877,
+          "mean_retrieve_latency_s": 18.40683685737662,
+          "mean_wall_latency_s": 69.72390004485379,
+          "mean_search_s": 6.446117065431885,
+          "mean_n_search": 3.68,
+          "mean_n_turns": 4.06,
+          "mean_precompute_s": 1.3199999999999999e-06,
+          "mean_precompute_s_per_search": 3.5478178284300733e-07,
+          "mean_rewrite_s": 9.78e-06,
+          "mean_rewrite_s_per_search": 2.8142201902405983e-06,
+          "mean_embed_s": 1.05776428,
+          "mean_embed_s_per_search": 0.2908587458587331,
+          "mean_chunk_s": 1.5470327999999998,
+          "mean_chunk_s_per_search": 0.41068999983434934,
+          "mean_node_s": 7.0578834,
+          "mean_node_s_per_search": 2.508781652964779,
+          "mean_keyword_s": 6.68031004,
+          "mean_keyword_s_per_search": 2.64510026697809,
+          "mean_expand_s": 0.10622709999999999,
+          "mean_expand_s_per_search": 0.03384293830874341,
+          "mean_rerank_s": 1.95670298,
+          "mean_rerank_s_per_search": 0.5565788514753953,
+          "mean_total_s": 18.4062684,
+          "mean_total_s_per_search": 6.445954080573225,
+          "mean_doc_recall": 0.82
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 45,
+            "错误": 5
+          },
+          "accuracy": 0.9,
+          "mean_query_latency_s": 71.17319202061859,
+          "mean_retrieve_latency_s": 22.76820681374171,
+          "mean_wall_latency_s": 71.21096025728039,
+          "mean_search_s": 5.79608082169693,
+          "mean_n_search": 3.94,
+          "mean_n_turns": 4.14,
+          "mean_precompute_s": 2.04e-06,
+          "mean_precompute_s_per_search": 5.002142857142857e-07,
+          "mean_rewrite_s": 1.028e-05,
+          "mean_rewrite_s_per_search": 2.564404761904762e-06,
+          "mean_embed_s": 1.11673978,
+          "mean_embed_s_per_search": 0.2707013083809524,
+          "mean_chunk_s": 1.30274226,
+          "mean_chunk_s_per_search": 0.32955526980952377,
+          "mean_node_s": 6.32816644,
+          "mean_node_s_per_search": 1.6806811602142857,
+          "mean_keyword_s": 11.70293876,
+          "mean_keyword_s_per_search": 2.934466190380953,
+          "mean_expand_s": 0.09834928,
+          "mean_expand_s_per_search": 0.024189233142857144,
+          "mean_rerank_s": 2.2179767,
+          "mean_rerank_s_per_search": 0.5561646717142857,
+          "mean_total_s": 22.767338919999997,
+          "mean_total_s_per_search": 5.795866500190476,
+          "mean_doc_recall": 0.6466666666666667
+        }
+      },
+      "doc_recall": {
+        "mean_recall": 0.8466666666666667,
+        "vs_accuracy": {
+          "definition": {
+            "hit": "recall == 1.0：全部 gold 文档出现在 retrieval_sources",
+            "partial": "0 < recall < 1：部分 gold 命中",
+            "miss": "recall == 0.0：gold 均未出现在 retrieval_sources",
+            "unknown": "该题无有效 recall 字段"
+          },
+          "table": {
+            "hit_correct": 145,
+            "hit_wrong": 1,
+            "partial_correct": 40,
+            "partial_wrong": 3,
+            "miss_correct": 7,
+            "miss_wrong": 4,
+            "unknown_correct": 0,
+            "unknown_wrong": 0,
+            "hit_unknown": 0,
+            "partial_unknown": 0,
+            "miss_unknown": 0,
+            "unknown_unknown": 0
+          },
+          "matrix": [
+            {
+              "recall": "hit",
+              "accuracy": "正确",
+              "n": 145
+            },
+            {
+              "recall": "hit",
+              "accuracy": "错误",
+              "n": 1
+            },
+            {
+              "recall": "partial",
+              "accuracy": "正确",
+              "n": 40
+            },
+            {
+              "recall": "partial",
+              "accuracy": "错误",
+              "n": 3
+            },
+            {
+              "recall": "miss",
+              "accuracy": "正确",
+              "n": 7
+            },
+            {
+              "recall": "miss",
+              "accuracy": "错误",
+              "n": 4
+            }
+          ],
+          "row_totals": {
+            "hit": 146,
+            "partial": 43,
+            "miss": 11,
+            "unknown": 0
+          },
+          "col_totals": {
+            "正确": 192,
+            "错误": 8,
+            "未知": 0
+          },
+          "n_with_recall": 200,
+          "n_total": 200,
+          "hit_wrong_breakdown": {
+            "query_ok": 1,
+            "query_fail": 0
+          }
+        }
+      }
+    },
+    "llm_only": {
+      "n_total": 200,
+      "enable_doc_recall": false,
+      "pipeline": {
+        "n_query_fail": 0,
+        "n_judge_fail": 0,
+        "n_ok": 200
+      },
+      "llm_acc": {
+        "counts": {
+          "正确": 20,
+          "错误": 180,
+          "未知": 0
+        },
+        "accuracy": 0.1,
+        "error_rate": 0.9,
+        "n_judged": 200,
+        "n_correct": 20,
+        "n_wrong": 180
+      },
+      "latency": {
+        "mean_query_s": 29.520371262493427,
+        "mean_retrieve_s": null,
+        "mean_wall_s": 29.520387980141678,
+        "sum_query_s": 5904.074252498685,
+        "sum_retrieve_s": null,
+        "sum_wall_s": 5904.077596028335,
+        "n_with_query_latency": 200
+      },
+      "tokens": {
+        "sum_prompt": 41017,
+        "sum_completion": 287674,
+        "sum_total": 328691,
+        "mean_prompt": 205.085,
+        "mean_completion": 1438.37,
+        "sum_judge_prompt": 1109922,
+        "sum_judge_completion": 398540,
+        "sum_judge_total": 1508462
+      },
+      "by_hop": {
+        "1": {
+          "n": 100,
+          "llm_acc_counts": {
+            "正确": 4,
+            "错误": 96
+          },
+          "accuracy": 0.04,
+          "mean_query_latency_s": 21.987131686896902,
+          "mean_retrieve_latency_s": null,
+          "mean_wall_latency_s": 21.987149043179816,
+          "mean_search_s": null,
+          "mean_n_search": null,
+          "mean_n_turns": null,
+          "mean_precompute_s": null,
+          "mean_precompute_s_per_search": null,
+          "mean_rewrite_s": null,
+          "mean_rewrite_s_per_search": null,
+          "mean_embed_s": null,
+          "mean_embed_s_per_search": null,
+          "mean_chunk_s": null,
+          "mean_chunk_s_per_search": null,
+          "mean_node_s": null,
+          "mean_node_s_per_search": null,
+          "mean_keyword_s": null,
+          "mean_keyword_s_per_search": null,
+          "mean_expand_s": null,
+          "mean_expand_s_per_search": null,
+          "mean_rerank_s": null,
+          "mean_rerank_s_per_search": null,
+          "mean_total_s": null,
+          "mean_total_s_per_search": null
+        },
+        "2": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 14,
+            "错误": 36
+          },
+          "accuracy": 0.28,
+          "mean_query_latency_s": 36.867272314341974,
+          "mean_retrieve_latency_s": null,
+          "mean_wall_latency_s": 36.86728733756114,
+          "mean_search_s": null,
+          "mean_n_search": null,
+          "mean_n_turns": null,
+          "mean_precompute_s": null,
+          "mean_precompute_s_per_search": null,
+          "mean_rewrite_s": null,
+          "mean_rewrite_s_per_search": null,
+          "mean_embed_s": null,
+          "mean_embed_s_per_search": null,
+          "mean_chunk_s": null,
+          "mean_chunk_s_per_search": null,
+          "mean_node_s": null,
+          "mean_node_s_per_search": null,
+          "mean_keyword_s": null,
+          "mean_keyword_s_per_search": null,
+          "mean_expand_s": null,
+          "mean_expand_s_per_search": null,
+          "mean_rerank_s": null,
+          "mean_rerank_s_per_search": null,
+          "mean_total_s": null,
+          "mean_total_s_per_search": null
+        },
+        "3": {
+          "n": 50,
+          "llm_acc_counts": {
+            "正确": 2,
+            "错误": 48
+          },
+          "accuracy": 0.04,
+          "mean_query_latency_s": 37.23994936183794,
+          "mean_retrieve_latency_s": null,
+          "mean_wall_latency_s": 37.23996649664594,
+          "mean_search_s": null,
+          "mean_n_search": null,
+          "mean_n_turns": null,
+          "mean_precompute_s": null,
+          "mean_precompute_s_per_search": null,
+          "mean_rewrite_s": null,
+          "mean_rewrite_s_per_search": null,
+          "mean_embed_s": null,
+          "mean_embed_s_per_search": null,
+          "mean_chunk_s": null,
+          "mean_chunk_s_per_search": null,
+          "mean_node_s": null,
+          "mean_node_s_per_search": null,
+          "mean_keyword_s": null,
+          "mean_keyword_s_per_search": null,
+          "mean_expand_s": null,
+          "mean_expand_s_per_search": null,
+          "mean_rerank_s": null,
+          "mean_rerank_s_per_search": null,
+          "mean_total_s": null,
+          "mean_total_s_per_search": null
+        }
+      }
+    },
+    "comparison": {
+      "n_paired": 200,
+      "n_pairwise_judged": 200,
+      "both_correct": 19,
+      "agentic_only": 173,
+      "llm_only_only": 1,
+      "both_wrong": 7,
+      "win": {
+        "agentic": 192,
+        "llm_only": 6,
+        "tie": 2
+      },
+      "win_note": "胜负优先取裁判 comparison.winner；缺省则正确>错误",
+      "judgment_crosstab": {
+        "Agentic正确_纯LLM错误": 173,
+        "Agentic正确_纯LLM正确": 19,
+        "Agentic错误_纯LLM错误": 7,
+        "Agentic错误_纯LLM正确": 1
+      }
+    }
+  }
+}

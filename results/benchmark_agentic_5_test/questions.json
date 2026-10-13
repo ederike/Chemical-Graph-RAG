@@ -1,0 +1,409 @@
+{
+  "meta": {
+    "created_at": "2026-09-30T15:23:48",
+    "db_path": "/root/projects/Chemical-Graph-RAG/example/b/DB/main.db",
+    "hop_counts": {
+      "1": 10,
+      "2": 1,
+      "3": 1
+    },
+    "seed": 42,
+    "question_gen_prompt": "QUESTION_GEN_USER",
+    "doc_id_min": null,
+    "doc_id_max": null,
+    "original_pdf_only": true,
+    "n_source_docs": 298,
+    "num_thread": 1,
+    "model": "llm-medium",
+    "total": 12,
+    "success": 12,
+    "failed": 0,
+    "elapsed_s": 0.0,
+    "done": true,
+    "config": {
+      "config_file": "/root/projects/Chemical-Graph-RAG/benchmark/benchmark_agentic_5/config.yaml",
+      "dhmf_config_path": "/root/projects/Chemical-Graph-RAG/example/b/config_open.yaml",
+      "query_mode": "agentic",
+      "db_path": "/root/projects/Chemical-Graph-RAG/example/b/DB/main.db",
+      "hop_counts": {
+        "1": 10,
+        "2": 1,
+        "3": 1
+      },
+      "seed": 42,
+      "doc_id_min": null,
+      "doc_id_max": null,
+      "question_gen_prompt": "QUESTION_GEN_USER",
+      "original_pdf_only": true,
+      "enable_doc_recall": true,
+      "enable_weknora": true,
+      "eval_num_thread": 1,
+      "gen_model": "llm-medium",
+      "judge_model": null,
+      "weknora_base_url": "http://192.168.110.219:8081",
+      "weknora_knowledge_base_id": "677e7f95-5530-4872-8412-55abbe459b7f",
+      "weknora_knowledge_base_name": "test",
+      "weknora_chat_mode": "agent",
+      "weknora_agent_id": "builtin-quick-answer"
+    }
+  },
+  "questions": [
+    {
+      "id": "q_1hop_0001",
+      "hop": 1,
+      "question": "我们在开发一款用于儿童玩具的柔性聚氯乙烯（PVC）糊树脂配方，正在评估伊士曼（Eastman）的苯甲酸酯增塑剂 Benzoflex™ VP-953。请确认该产品是否适用于此类应用，并列出其关键物理参数（比重、粘度、闪点）及酸度上限，以便我们进行工艺和安全评估。",
+      "ground_truth_answer": "Benzoflex™ VP-953 适用于儿童用品和聚氯乙烯糊树脂应用。其关键参数为：比重 1.16（20℃/20℃），粘度 65 cP（25℃），闪点 186 °C（367 °F，闭杯法），酸度最大 0.3 wt%。",
+      "explanation": "依据伊士曼（Eastman）提供的 Benzoflex™ VP-953 技术数据表：1. 在‘应用领域’中明确列出了‘儿童用品 (Childcare items)’和‘聚氯乙烯糊树脂 (Vinyl plastisols)’，证实了其适用性；2. 在‘典型特性’的‘通用特性’部分，查得比重为 1.16（20℃/20℃），粘度为 65 cP（25℃），闪点为 367 °F (186 °C)（Setaflash 闭杯法），酸度（Acidity）最大值为 0.3 wt%。",
+      "source_docs": [
+        {
+          "doc_id": 124,
+          "name": "4936ba9ba2bcd1eff72edfaa21a51394.pdf",
+          "content": "**技术数据表 (Technical Data Sheet)**\n**苯甲酸酯增塑剂 Benzoflex™ VP-953 (Benzoflex™ VP-953 Plasticizer)**\n\n**应用领域 (Applications)**\n*   粘合剂/密封剂 - 建筑与民用 (Adhesives/sealants-b&c)\n*   儿童用品 (Childcare items)\n*   柔性聚氯乙烯 (PVC) 化合物 (Flexible pvc compounds)\n*   玩具 (Toys)\n*   聚氯乙烯糊树脂 (Vinyl plastisols)\n\n**产品描述 (Product Description)**\nBenzoflex™ VP-953 是一种专为聚氯乙烯糊树脂应用设计的苯甲酸酯。Benzoflex™ VP-953 是高溶解性邻苯二甲酸酯增塑剂的优良替代品。\n\n**典型特性 (Typical Properties)**\n\n**通用特性 (General)**\n\n*   **酸度 (Acidity)**：最大 0.3 wt% (0.3 max.)\n*   **颜色 (Color Pt-Co)**：100-140\n*   **折射率 (Refractive Index)**：1.53（测定条件：25℃）\n*   **比重 (Specific Gravity)**：1.16（测定条件：20℃/20℃）\n*   **沸点 (Boiling Point)**：>662 °F (>350 °C)\n*   **闪点 (Flash Point)**：367 °F (186 °C)（测定方法：Setaflash 闭杯法）\n*   **凝固点 (Freezing Point)**：<61 °F (<16 °C)\n*   **蒸气压 (Vapor Pressure)**：<0.0001 torr (<0.0133 Pa)（测定条件：20℃）\n*   **粘度 (Viscosity)**：65 cP (65 mPa·s)（测定条件：25℃）\n*   **重量/体积比 (Wt/Vol)**：9.68 lb/gal (1.16 kg/L)（测定条件：20℃）\n\n**备注 (Comments)**\n此处报告的属性是平均批次的典型值。Eastman 不保证任何特定批次的材料将完全符合所给出的数值。\n\n**免责声明**\nEastman 及其营销关联公司不对本信息、任何产品、方法或装置的使用负责，您必须自行确定其适用性和完整性，以用于您自己的用途，保护环境，并保障您的员工和购买者的健康和安全。不保证任何产品的适销性或适用性，此处内容不免除卖方任何销售条件。\n\n**页脚信息**\n© 2025 Eastman Chemical Company 或其子公司。版权所有。在此处使用，® 表示在美国的注册商标状态。\n10/28/2018 4:41:30 PM"
+        }
+      ],
+      "source_names": [
+        "4936ba9ba2bcd1eff72edfaa21a51394.pdf"
+      ],
+      "source_doc_ids": [
+        124
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 5.414745893096551,
+      "gen_usage": {
+        "prompt_tokens": 1556,
+        "completion_tokens": 329,
+        "total_tokens": 1885
+      }
+    },
+    {
+      "id": "q_1hop_0002",
+      "hop": 1,
+      "question": "我们在采购韩国锦湖石化（Korea Kumho Petrochemical Co., Ltd.）的通用级聚苯乙烯（GPFS）产品，具体涉及牌号 GP125、GP125E、GP125EB、GP125G、GP150E、GP150I 和 GP150K。请确认这些牌号对应的化学成分名称及其 CAS 号，并说明该成分在 SDS 中列出的含量百分比范围。",
+      "ground_truth_answer": "这些牌号对应的化学成分名称为苯乙烯均聚物（或聚苯乙烯，英文 Ethynylbenzene homopolymer; Polystyrene），其 CAS 号为 9003-53-6。根据 SDS 成分/组成信息，该成分的含量百分比为 99–100%。",
+      "explanation": "答案依据韩国锦湖石化有限公司（Korea Kumho Petrochemical Co., Ltd.）提供的安全数据表（SDS）。在“1. 标识”部分确认了产品名称包含 GP125 系列和 GP150 系列等牌号，制造商为韩国锦湖石化。在“3. 成分/组成信息”部分明确列出了成分名称为“苯乙烯均聚物；聚苯乙烯（Ethynylbenzene homopolymer; Polystyrene）”，CAS 号为“9003-53-6”，含量百分比为“99–100%”。",
+      "source_docs": [
+        {
+          "doc_id": 30,
+          "name": "0a08de89a5df8f5df5501b72224f8a1b.pdf",
+          "content": "本文件为安全数据表（Safety Data Sheet），依据危害通识标准（Hazard Communication Standard，29 CFR 1910.1200）编制，产品类别为 GPFS（通用级聚苯乙烯）。文件版本号为 Version 1.0，首次发布日期为 2022 年 10 月 11 日，修订日期为 2023 年 2 月 1 日。SDS 记录编号为 CSSS-TCO-010-153196。\n\n**1. 标识（Identification）**\n产品名称：GP125, GP125E, GP125EB, GP125G, GP150E, GP150I, GP150K。\n同义词：无（原文为“-”）。\nCAS 号：参见第 3 节。\n产品代码：无（原文为“-”）。\n产品用途：通用级 GPFS（General Purpose GPFS）。\n制造商/供应商：韩国锦湖石化有限公司（Korea Kumho Petrochemical Co., Ltd.）。\n地址：韩国蔚山南区庆阳路 260-257 号，邮编 44785（260-257, Cheoyong-ro, Nam-Gu, Ulsan, 44785, Korea）。\n联系人（电子邮箱）：无（原文为“-”）。\n电话：+82-52-279-8852。\n传真：+82-52-279-8840。\n紧急电话号码：1-858-987-0023。\n\n**2. 危险性说明（Hazard(s) identification）**\nGHS 分类：\n物理危害：未分类（Not classified）。\n健康危害：未分类（Not classified）。\n环境危害：未分类（Not classified）。\nGHS 标签要素：\n危害象形图：未使用危害象形图（No hazard pictogram is used）。\n信号词：未使用信号词（No signal word is used）。\n危害声明：不适用（Not applicable）。\n防范声明：\n预防：不适用（Not applicable）。\n响应：不适用（Not applicable）。\n储存：不适用（Not applicable）。\n处置：不适用（Not applicable）。\n其他危害：无数据（Not available）。\n\n**3. 成分/组成信息（Composition / information on ingredients）**\n成分表：\n成分名称：苯乙烯均聚物；聚苯乙烯（Ethynylbenzene homopolymer; Polystyrene）。\nCAS 号：9003-53-6。\n含量百分比：99–100%。\n\n**4. 急救措施（First-aid Measures）**\n急救程序：\n眼睛接触：立即用大量水冲洗眼睛至少 15 分钟。如果刺激持续，请就医检查（Immediately flush eyes with plenty of water at least 15minutes. If irritation persists, get a doctor's examination）。\n皮肤接触：用流动水清洗受污染的皮肤区域。脱去受污染的衣物和鞋子。如果刺激持续，请就医检查（Wash the contaminated skin area with running water. Remove contaminated clothes and shoes. If irritation persists, get a doctor's examination）。\n吸入：饮水清洁喉咙并擤鼻以去除粉尘。将暴露人员移至新鲜空气处。如果未呼吸，进行人工呼吸。如果呼吸困难，给予氧气。寻求医疗救助（Intake the water to clean the throat and blow nose to remove the dust. Remove exposed person to fresh air. Take Artificial respiration if not breathing. Give oxygen, if breathing is difficult. Get medical attention）。\n食入：用水漱口。给予大量水以缓解刺激。如果发生刺激或症状，请就医检查（Rinse mouth with water. Give large amounts of water to relieve stimulus. If irritation or symptoms occurs, get a doctor's examination）。\n给医生的说明：对症治疗（Treat symptoms）。\n\n**5. 消防措施（Fire-fighting measures）**\n易燃特性：无数据（Not available）。\n灭火介质：\n适用灭火介质：二氧化碳（Carbon Dioxide）、水、泡沫。大火：水喷雾、普通泡沫（Water spray, regular foam）。\n不适用灭火介质：不要使用直流水（Do not use direct water）。\n消防设备/说明：穿戴适当的个人防护装备（参见第 8 节 暴露控制/个人防护）。灭火时避免吸入烟雾或气体。如果可以在无风险的情况下进行，将容器移离火场。用水冷却容器，直到火熄灭。保持在上风向，远离低洼区域。避免吸入物质本身或燃烧物（Wear appropriate personal protective equipment (see section 8. EXPOSURE CONTROLS/PERSONAL PROTECTION). Avoid inhalation of smoke or gas when fire fighting. Move container from fire area if it can be done without risk. Cool containers with water until fire is out. Stay upwind and keep out of low areas. Avoid inhalation of substance itself or combustion）。\n危险燃烧产物：燃烧时产生二氧化碳、一氧化碳和苯乙烯等热解产物（Generate pyrolysis such as carbon dioxide, carbon monoxide and styrene when combustion）。\n\n**6. 泄漏应急处理（Accidental release measures）**\n个人预防措施：按照第 8 节“暴露控制/个人防护”执行。穿戴适当的个人防护装备。采取减少粉尘的方式。避免眼睛和皮肤接触。避免吸入物质本身或燃烧物。逆风疏散。禁止无关人员进入。避免接触热源、火花、火焰或其他点火源（Perform in accordance with [See section 8. EXPOSURE CONTROLS / PERSONAL PROTECTION]. Put on appropriate personal protective equipment. Use a way to minimize dust. Avoid contact with eyes and skin. Avoid inhalation of substance itself or combustion. Evacuation against the wind. Keep unauthorized personnel out. Avoid contact with heat, sparks, flame or other ignition sources）。\n环境预防措施：避免泄漏物和径流扩散，避免接触水道、排水沟和下水道。如果发生大量泄漏，通知紧急服务部门（Avoid dispersal of split material and runoff and contact with waterways, drains and sewers. If large spills, advise emergency services）。\n清理方法：\n小量泄漏：消除所有点火源。抑制粉尘产生。收集泄漏物并放入适当的容器中处置。通风泄漏区域并清理泄漏区（For small spills: Remove all sources of ignition. Suppression occurrence of dust. Appropriate container for disposal of spilled material collected. Ventilate leak areas and clearing leak area）。\n大量泄漏：消除所有点火源。抑制粉尘产生。避免进入下水道或水系统。将泄漏物收集在适当的容器中并清理表面。使用适当的容器处置收集到的泄漏物（For large spills: Remove all sources of ignition. Suppression occurrence of dust. Avoid entering to sewers or water system. For disposal of spilled material in appropriate containers collected and clear surface. Appropriate container for disposal of spilled material collected）。\n\n**7. 操作与储存（Handling and storage）**\n操作：在通风良好的地方操作。避免接触热源、火花、火焰或其他点火源。消除所有点火源。使用所有设备后接地。操作后彻底清洗（Handle in a well-ventilated place. Avoid contact with heat, sparks, flame or other ignition sources. Remove all sources of ignition. Use all the equipment after the ground. Wash thoroughly after handling）。\n储存：保存在原容器中并紧密关闭。不要储存在潮湿的地方。避免接触不相容材料（Keep in original container and tightly closed. Do not store where the moisture. Avoid contact with incompatible materials）。\n\n**8. 接触控制/个人防护（Exposure controls / personal protection）**\n控制参数：\n职业接触限值：该混合物没有具有 PEL、TLV 或其他推荐接触限值的成分（This mixture has no ingredients that have PEL, TLV, or other recommended exposure limit）。\n生物限值：成分未注明生物接触限值（No biological exposure limits noted for the ingredient(s)）。\n适当的工程控制：在通风良好的区域使用（Use in a well-ventilated area）。\n个体防护措施，如个人防护装备：\n眼/面防护：佩戴初级眼部防护，如防溅安全眼镜，并配备二级防护面罩。在工作区域附近提供紧急洗眼站和快速淋浴器（Wear primary eye protection such as splash resistant safety goggles with a secondary protection face shield. Provide an emergency eye wash station and quick drench shower in the immediate work area）。\n皮肤防护：如果有直接接触皮肤的危险，佩戴耐化学品的防护手套。佩戴耐热防护手套以耐受熔融产品的温度。如果有直接接触的危险，佩戴耐化学品的防护服（Wear chemical resistant protected gloves if there is hazard potential for direct skin contact. Wear heat resistant protected gloves to withstand the temperature of molten product. Wear chemical resistant protected clothing if there is hazard potential for direct contact）。\n呼吸防护：可能需要呼吸防护。呼吸防护按从最低到最高排列。使用前考虑警告特性。\n- 防尘、防雾、防烟的呼吸防护。\n- 任何配备高效滤盒的空气过滤式呼吸器。\n- 任何配备电动风扇（用于防尘、防雾、防烟）的呼吸防护。\n※ 对于未知浓度或立即危及生命或健康的情况：\n- 自给式呼吸器（压力需求式或其他正压模式组合）。\n- 配备全面罩的供气式呼吸器。\n一般卫生注意事项：处理化学品后，在进食、吸烟、使用洗手间以及工作结束时，彻底清洗双手、前臂和面部。远离食物、饮料和饲料。立即移除所有受污染和受污染的衣物（Wash hands, forearms and face thoroughly after handling chemical products, before eating, smoking and using the lavatory and at the end of the working period. Keep away from foodstuffs, beverages and feed. Immediately remove all soiled and contaminated clothing）。\n\n**9. 物理和化学性质（Physical and chemical properties）**\n外观：\n物理状态：固体（Solid）。\n形态：颗粒状（Pellet）。\n颜色：无色（Colorless）。\n气味：轻微气味（Mild odor）。\n气味阈值：无数据（Not available）。\npH 值：无数据（Not available）。\n蒸气压：无数据（Not available）。\n熔点/凝固点：无数据（Not available）。\n初沸点及沸程：无数据（Not available）。\n闪点：无数据（Not available）。\n蒸发速率：无数据（Not available）。\n易燃性（固体、气体）：无数据（Not available）。\n爆炸极限：无数据（Not available）。\n蒸气密度：无数据（Not available）。\n相对密度：无数据（Not available）。\n溶解度（水）：不溶（Insoluble）。\n分配系数：无数据（Not available）。\n自燃温度：无数据（Not available）。\n分解温度：无数据（Not available）。\n比重：无数据（Not available）。\n相对密度：1.03-1.05。\n空气中易燃极限，上限，体积百分比：无数据（Not available）。\n空气中易燃极限，下限，体积百分比：无数据（Not available）。\nVOC：无数据（Not available）。\n挥发性百分比：无数据（Not available）。\n其他数据：\n粘度：无数据（Not available）。\n\n**10. 稳定性和反应性（Stability and reactivity）**\n化学稳定性：材料在正常条件下稳定（Material is stable under normal conditions）。\n避免条件：不相容材料。避免接触热源、火花、火焰或其他点火源（Incompatible materials. Avoid contact with heat, sparks, flame or other ignition sources）。\n不相容材料：强氧化剂（Strong oxidizing agents）。\n危险分解产物：燃烧可能导致产生碳氧化物、氮氧化物（Combustion may cause carbon oxide, nitrogen oxides）。\n危险反应的可能性：无已知危险反应（No dangerous reactions known）。\n\n**11. 毒理学信息（Toxicological information）**\n毒代动力学、代谢和分布：\n非人类毒理学数据：无数据（Not available）。\n毒理学效应信息：\n急性毒性：\nLD50（经口，大鼠）：无数据（Not available）。\nLD50（经皮，大鼠）：无数据（Not available）。\nLC50（吸入，大鼠）：无数据（Not available）。\n皮肤腐蚀/刺激：未分类（Not classified）。\n严重眼损伤/眼刺激：未分类（Not classified）。\n呼吸或皮肤致敏：未分类（Not classified）。\n生殖细胞致突变性：未分类（Not classified）。"
+        }
+      ],
+      "source_names": [
+        "0a08de89a5df8f5df5501b72224f8a1b.pdf"
+      ],
+      "source_doc_ids": [
+        30
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 6.33810921292752,
+      "gen_usage": {
+        "prompt_tokens": 3596,
+        "completion_tokens": 326,
+        "total_tokens": 3922
+      }
+    },
+    {
+      "id": "q_1hop_0003",
+      "hop": 1,
+      "question": "我们在采购韩国锦湖石化（Korea Kumho Petrochemical Co., Ltd.）生产的 ABS 750 树脂时，需要确认其安全合规性。请问该产品的 GHS 分类状态如何？其 NFPA 健康、易燃性和反应性评级分别是多少？另外，如果发生泄漏，根据 SDS 建议，对于小量泄漏应采取哪些具体的围堵和清理措施？",
+      "ground_truth_answer": "韩国锦湖石化生产的 ABS 750 树脂的 GHS 分类为“不适用”（Not applicable）。其 NFPA 评级为：健康（Health）0 级，易燃性（Flammability）0 级，反应性（Reactivity）0 级。对于小量泄漏，建议措施包括：移除所有点火源、抑制粉尘产生、使用适当的容器处置收集到的泄漏材料、通风泄漏区域并清理泄漏区域。",
+      "explanation": "依据韩国锦湖石化（Korea Kumho Petrochemical Co., Ltd.）发布的 ABS 系列树脂（包含 ABS 750）安全数据表（SDS）：1. 在第 2 节“危险性识别”中，GHS 分类明确标注为“不适用”；2. 在第 2 节 C 项中，NFPA 评级显示健康、易燃性、反应性均为 0；3. 在第 6 节 C 项“围堵和清理的方法与材料”中，针对“小量泄漏”列出了移除点火源、抑制粉尘、容器处置、通风清理四项具体措施。",
+      "source_docs": [
+        {
+          "doc_id": 281,
+          "name": "a618febb1f11fe921936a3290a076b7f.pdf",
+          "content": "**KUMHO PETROCHEMICAL**\n**SAFETY DATA SHEET**\n修订日期（Rev. date）：2023.04.20\n\n**1. 标识 (IDENTIFICATION)**\n\n**A. 产品名称 (PRODUCT NAME)**\n○ ABS 710, ABS 710F, ABS 710G, ABS 720, ABS 720B, ABS 720R, ABS 722, ABS 722P, ABS 722E, ABS 728, ABS 740, ABS 740M, ABS 745, ABS 745HM, ABS 750, ABS 750HC, ABS 750SH, ABS 750F, ABS 750SW, ABS 750P, ABS 765, ABS 772, ABS 775, ABS 775EG, ABS 775K, ABS 775T, ABS775TS, ABS 780, ABS 780F, ABS 780M, ABS EF750, EF780\n\n**B. 推荐用途及使用限制 (Recommended Use and Restriction on Use)**\n○ 一般用途 (General use)：无 (Not available)\n○ 使用限制 (Restriction on Use)：无 (Not available)\n\n**C. 制造商信息 (Information of Manufacturer)**\n– 制造商 (Manufacturer)\n○ 公司名称 (Company name)：Korea Kumho Petrochemical Co., Ltd.\n○ 地址 (Address)：260–257, Cheoyong-ro, Nam-Gu, Ulsan, 44785, Korea\n○ 部门 (Dept.)：Quality Assurance Team\n○ 负责人 (Person in charge)：（空白）\n○ 电话号码 (Telephone number)：+82-52-279-8852\n○ 传真号码 (Fax number)：+82-52-279-8840\n○ 紧急联系方式 (Emergency)：（空白）\n\n– 供应商/分销商 (Supplier / distributor)\n○ 公司名称 (Company name)：（空白）\n○ 地址 (Address)：（空白）\n○ 部门 (Dept.)：（空白）\n○ 负责人 (Person in charge)：（空白）\n○ 电话号码 (Telephone number)：（空白）\n○ 传真号码 (Fax number)：（空白）\n○ 紧急联系方式 (Emergency)：（空白）\n\n**2. 危险性识别 (HAZARD IDENTIFICATION)**\n\n**A. GHS 分类 (GHS Classification)**\n不适用 (Not applicable)\n\n**B. GHS 标签要素 (GHS label elements)**\n○ 危险象形图 (Hazard symbols)：不适用 (Not applicable)\n○ 信号词 (Signal word)：不适用 (Not applicable)\n○ 危险性说明 (Hazard statement)：不适用 (Not applicable)\n○ 防范说明 (Precautionary statements)：不适用 (Not applicable)\n\n**C. 未导致分类的其他危险性 (Other hazards which do not result in classification)**\n– NFPA 评级 (NFPA rating)：(0~4 级)：健康 (Health)=0，易燃性 (Flammability)=0，反应性 (Reactivity)=0\n\n**3. 成分/组成信息 (COMPOSITION/INFORMATION ON INGREDIENTS)**\n\n| 化学品名称 (Chemical name) | CAS 号./ECL 号./EINECS 号. (CAS No./ECL No./EINECS No.) | 含量(%) (Contents(%)) |\n| :--- | :--- | :--- |\n| 丙烯腈-丁二烯-苯乙烯共聚物 (Acrylonitrile-butadiene-styrene co-polymer) | 9003-56-9/KE-29398/- | 97~100 |\n| 稳定剂 (Stabilizer) | 专有 (Proprietary) | 0~1 |\n| 润滑剂 (Lubricant) | 专有 (Proprietary) | 0~3 |\n\n※ 参考编号 (Reference No.)：\nECL (Registration number of Korean Existing Chemical List)：韩国现有化学物质清单注册号\nEINECS (Registration number of Europe Existing Chemical List)：欧洲现有化学物质清单注册号\n\n**4. 急救措施 (FIRST-AID MEASURES)**\n\n**A. 眼睛接触 (Eye Contact)**\n– 立即用大量水冲洗眼睛至少 15 分钟。\n– 如果刺激持续，请接受医生检查。\n– 偶尔提起眼睑，充分冲洗眼睑以进行后续处理。\n\n**B. 皮肤接触 (Skin Contact)**\n– 用流动水清洗受污染的皮肤区域。\n– 当接触熔体时，用凉爽的流动水冷却受污染的皮肤。\n– 如果因熔体导致烧伤，请寻求医疗救助。\n\n**C. 吸入 (Inhalation)**\n– 将暴露人员移至新鲜空气处。\n– 将受害者移至新鲜空气处，并使其在舒适的位置休息。\n– 寻求医疗救助。\n\n**D. 误食 (Ingestion)**\n– 用水漱口。\n– 给予大量水。\n– 经口毒性不高。\n– 如果出现刺激或症状，请接受医生检查。\n\n**E. 短期和长期暴露的延迟和即时效应以及慢性效应 (Delay and immediate effects and also chronic effects from short and long term exposure)**\n无 (Not available)\n\n**F. 医生须知 (Notice to Physician)**\n– 治疗方法可能因受害者的状况和事故的具体情况而异。\n\n**5. 消防措施 (FIRE FIGHTING MEASURE)**\n\n**A. 适用（不适用）的灭火介质 (Suitable (Unsuitable) extinguishing media)**\n– 灭火介质 (Extinguishing media)：二氧化碳 (Carbon Dioxide)、干粉 (Dry Chemical)、水 (Water)。\n– 不适用灭火介质 (Unsuitable Extinguishing media)：不要使用直流水 (Do not use direct water)。\n– 大火 (Big Fire)：水喷雾 (Water spray)、常规泡沫 (regular foam)\n\n**B. 化学品引起的特定危害 (Specific hazards arising from the chemical)**\n– 燃烧 (Combustion)：一氧化碳 (Carbon monoxide)、二氧化碳 (Carbon dioxide)、氰化氢 (hydrogen cyanide)\n– 火灾危险等级 (Levels of fire hazard)：无 (Not available)\n\n**C. 消防程序和设备 (Fire fighting procedures and equipments)**\n– 穿戴适当的个人防护装备（参见第 8 节 暴露控制/个人防护）。\n– 灭火时避免吸入烟雾或气体。\n– 如果可以在无风险的情况下进行，将容器移离火场。\n– 用水冷却容器，直到火灾完全扑灭后一段时间。\n\n**6. 意外释放措施 (ACCIDENTAL RELEASE MEASURES)**\n\n**A. 个人预防措施、防护设备和紧急程序 (Personal Precautions, Protective Equipment and Emergency procedures)**\n– 按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。\n– 在可能的情况下，允许熔融材料泄漏物机械和化学固化。\n– 使用能最小化粉尘的方法。\n– 避免与眼睛和皮肤接触。\n– 避免吸入该物质本身或燃烧物。\n– 逆风撤离。\n– 避免接触热源、火花、火焰或其他点火源。\n\n**B. 环境预防措施 (Environmental Precautions)**\n– 避免泄漏物和径流扩散及接触水道、排水沟和下水道。如果大量泄漏，通知紧急服务部门。\n\n**C. 围堵和清理的方法与材料 (Methods and materials for containment and cleaning up)**\n○ 对于小量泄漏 (For small spills)：\n– 移除所有点火源。\n– 抑制粉尘产生。\n– 使用适当的容器处置收集到的泄漏材料。\n– 通风泄漏区域并清理泄漏区域。\n\n○ 对于大量泄漏 (For large spills)：\n– 移除所有点火源。\n– 抑制粉尘产生。\n– 避免进入下水道或水系统。\n– 将收集到的泄漏材料放入适当的容器中处置，并清理表面。\n– 使用适当的容器处置收集到的泄漏材料。\n\n**7. 操作处理和储存 (HANDLING AND STORAGE)**\n\n**A. 操作处理 (Handling)**\n– 按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。\n– 在通风良好的地方处理。\n– 避免接触热源、火花、火焰或其他点火源。\n– 移除所有点火源。"
+        }
+      ],
+      "source_names": [
+        "a618febb1f11fe921936a3290a076b7f.pdf"
+      ],
+      "source_doc_ids": [
+        281
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 6.529934911988676,
+      "gen_usage": {
+        "prompt_tokens": 2848,
+        "completion_tokens": 344,
+        "total_tokens": 3192
+      }
+    },
+    {
+      "id": "q_1hop_0004",
+      "hop": 1,
+      "question": "我们工厂正在评估使用伊士曼（Eastman）生产的56%稀醋酸作为工业清洁剂和衬里工艺的原料。请确认该产品的具体含量范围及目标值，并说明其外观和颜色（铂-钴色度）的技术指标，以便我们制定进料检验标准。",
+      "ground_truth_answer": "伊士曼56%稀醋酸（Eastman™ Dilute Acetic Acid, 56%）的含量（Assay）范围为54.5%-57.5%，目标值为56%。其外观要求为清澈且无悬浮物，颜色（铂-钴色度，Pt-Co）应小于10。",
+      "explanation": "答案依据伊士曼（Eastman）提供的《Eastman™ 稀醋酸，56%》技术数据表。在“典型性质”部分的“一般性质”中，明确列出了“含量 (Assay)”为54.5-57.5 %，且备注指出目标值 (Target) 为56%；“外观 (Appearance)”描述为“清澈且无悬浮物”；“颜色 (Color)”下的“铂-钴色度 (Pt-Co)”指标为<10。这些信息直接对应了客户关于进料检验标准的需求。",
+      "source_docs": [
+        {
+          "doc_id": 248,
+          "name": "985d25a33ac6e869f36fac8ebb00ba59.pdf",
+          "content": "**技术数据表 (Technical Data Sheet)**\n**Eastman™ 稀醋酸，56% (Eastman™ Dilute Acetic Acid, 56%)**\n\n**应用领域 (Applications)**\n*   粘合剂/密封剂 - 建筑与民用 (Adhesives/sealants-b&c)\n*   硬表面护理 (Hard surface care)\n*   工业清洁剂 (Industrial cleaners)\n*   机构用清洁剂 (Institutional cleaners)\n*   中间体 (Intermediates)\n*   衬里 (Linings)\n*   工艺助剂 (Process additives)\n\n**产品描述 (Product Description)**\nEastman™ 提供多种稀释浓度的冰醋酸。许多醋酸用户倾向于以稀释形式储存该材料，以避免冰醋酸所需的加热储罐带来的费用。\n\n**典型性质 (Typical Properties)**\n\n**一般性质 (General)**\n*   **分子量 (Molecular Weight)**：60.06\n*   **经验式 (Empirical Formula)**：C₂H₄O₂\n*   **形态 (Form)**：液体 (Liquid)\n*   **外观 (Appearance)**：清澈且无悬浮物 (Clear and free from suspended matter)\n*   **颜色 (Color)**：\n    *   **铂-钴色度 (Pt-Co)**：<10\n*   **含量 (Assay)**：54.5-57.5 %\n    *   注 a：目标值 (Target) = 56%\n\n**备注 (Comments)**\n此处报告的性质为平均批次的典型值。Eastman 不保证任何特定发货批次中的材料将完全符合所给出的数值。\n\n**免责声明**\nEastman 及其营销关联方不对本信息的使用，或文中提及的任何产品、方法或仪器的使用负责，您必须自行确定其针对您自身用途、环境保护以及您的员工和您的产品购买者的健康与安全的适用性和完整性。不对任何产品的适销性或适用性作出保证，且此处内容不免除卖方销售条件的任何条款。\n\n**页脚信息**\n*   时间戳：8/21/2019 8:08:01 AM\n*   版权：© 2025 Eastman Chemical Company 或其子公司。保留所有权利。在此处使用时，® 表示在美国的注册商标地位。"
+        }
+      ],
+      "source_names": [
+        "985d25a33ac6e869f36fac8ebb00ba59.pdf"
+      ],
+      "source_doc_ids": [
+        248
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 4.9149788620416075,
+      "gen_usage": {
+        "prompt_tokens": 1426,
+        "completion_tokens": 281,
+        "total_tokens": 1707
+      }
+    },
+    {
+      "id": "q_1hop_0005",
+      "hop": 1,
+      "question": "我们在评估使用伊士曼（Eastman）提供的65%水溶液形式的冰醋酸（Dilute Acetic Acid, 65% in Water）来替代纯冰醋酸，以节省加热储罐成本。请问该产品的典型闪点（Tag Open Cup）范围是多少？其在水中的溶解性如何？",
+      "ground_truth_answer": "伊士曼65%水溶液形式的冰醋酸典型闪点（Tag Open Cup）范围为71-91 °C (159-196 °F)；其在水中的溶解性为完全溶解（Complete）。",
+      "explanation": "依据伊士曼（Eastman）发布的《Dilute Acetic Acid, 65% in Water》技术数据表（TDS），在'Typical Properties'表格中明确列出了'Flash Point Tag Open Cup'的典型值为'71-91 °C (159-196 °F)'，以及'Solubility in Water'的典型值为'Complete'。",
+      "source_docs": [
+        {
+          "doc_id": 235,
+          "name": "8fea7cfae570c97b6e51564c21fc0a6a.pdf",
+          "content": "**EASTMAN**\n\n**Technical Data Sheet**\n**Dilute Acetic Acid, 65% in Water**\n\n**Applications**\n*   Intermediates\n*   Process additives\n\n**Product Description**\nEastman™ 提供多种稀释浓度的冰醋酸。许多醋酸用户倾向于以稀释形式储存该材料，以避免冰醋酸所需的加热储罐带来的费用。\n\n**Typical Properties**\n\n| Property | Typical Value, Units |\n| :--- | :--- |\n| **General** | |\n| Form | Liquid |\n| Color | Colorless |\n| Odor | Pungent vinegar |\n| Specific Gravity | >1.0 |\n| Boiling Point | 102-118 °C (224-244 °F) |\n| Solubility in Water | Complete |\n| Flash Point Tag Open Cup | 71-91 °C (159-196 °F) |\n\n**Comments**\n此处报告的属性是平均批次的典型值。Eastman 不保证任何特定批次的材料将完全符合上述给出的数值。\n\nEastman 及其营销关联方不对本信息的使用，或文中提到的任何产品、方法或装置负责，您必须自行判断其针对您自身用途的适用性和完整性，以保护环境，并保障您员工及您产品购买者的健康与安全。不保证任何产品的适销性或特定用途适用性，且此处内容不免除卖方的任何销售条件。\n\n2/28/2018 11:35:39 AM\n\n© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only."
+        }
+      ],
+      "source_names": [
+        "8fea7cfae570c97b6e51564c21fc0a6a.pdf"
+      ],
+      "source_doc_ids": [
+        235
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 4.086953025078401,
+      "gen_usage": {
+        "prompt_tokens": 1296,
+        "completion_tokens": 229,
+        "total_tokens": 1525
+      }
+    },
+    {
+      "id": "q_1hop_0006",
+      "hop": 1,
+      "question": "我们在开发汽车内饰件涂料时，考虑使用伊士曼（Eastman）的氯化聚烯烃 343-1（二甲苯中 50% 固含量）。请确认该产品的氯含量范围、加德纳色值，以及它在高温环境下的耐受能力（具体温度和时间）？",
+      "ground_truth_answer": "伊士曼氯化聚烯烃 343-1（二甲苯中 50% 固含量）的氯含量为 18-23 wt.%，加德纳色值为 8。该产品具有良好的耐高温性能，可耐受 110°C 持续 20 分钟，且热重分析表明其能耐受明显更高的温度。",
+      "explanation": "答案依据伊士曼（Eastman）提供的《Eastman™ 氯化聚烯烃 343-1（二甲苯中 50% 固含量）技术数据表》。在“产品描述”部分明确指出了氯含量为 18-23 wt.%，加德纳色值为 8，以及耐高温性能为 110°C 持续 20 分钟；“典型特性”表格中也再次列出了氯含量和加德纳色值的数据。",
+      "source_docs": [
+        {
+          "doc_id": 152,
+          "name": "5a1d3e620ebd9e0b8ddac004755e9862.pdf",
+          "content": "**EASTMAN**\n\n# 技术数据表 (Technical Data Sheet)\n\n**Eastman™ 氯化聚烯烃 343-1（二甲苯中 50% 固含量）**\n\n## 应用领域 (Applications)\n*   汽车 OEM\n*   汽车塑料\n*   汽车\n*   汽车零部件及配件\n*   通用工业涂料\n\n## 产品描述 (Product Description)\nEastman™ 氯化聚烯烃 343-1 是氯化聚烯烃在二甲苯中的 50% 溶液。其氯含量为 18-23 wt. %，加德纳色值（Gardner color value）为 8。氯化聚烯烃 343-1（二甲苯中 50% 固含量）在室温下呈凝胶状或粘稠液体，加热至 38°C 并搅拌时可液化。CP 343-1 具有良好的耐高温性能。它可以耐受 110°C 持续 20 分钟，且热重分析（thermogravimetric analysis）表明它能耐受明显更高的温度。\n\n## 典型特性 (Typical Properties)\n\n| 特性 (Property) | 测试方法 (Test Method) | 典型值，单位 (Typical Value, Units) |\n| :--- | :--- | :--- |\n| **通用 (General)** | | |\n| 比重 (Specific Gravity) @ 25°C/25°C | | 0.935 |\n| 闪点 (Flash Point) Tag Closed Cup | | 28 °C (83 °F) |\n| 燃点 (Fire Point) | | 52 °C (125 °F) |\n| 颜色，加德纳 (Color, Gardner) | | 8 |\n| 自燃温度 (Autoignition Temperature) | D 2155 | 460 °C (860 °F) |\n| 氯 (Chlorine) | | 18-23 wt % |\n| 固体 CPO 比重 (Specific Gravity, Solid CPO) @ 25°C/25°C | | 0.99-1.03 |\n\n## 备注 (Comments)\n此处报告的特性为平均批次的典型值。Eastman 不保证任何特定批次的材料将完全符合上述给出的数值。\n\nEastman 及其营销关联方不对本信息的使用，或文中提及的任何产品、方法或装置的使用负责，且您必须自行确定其针对您自身用途的适用性和完整性，以及用于环境保护、员工和您的产品购买者的健康和安全。不对任何产品的适销性或特定用途适用性作出保证，且此处内容不免除卖方任何销售条件。\n\n10/12/2023 7:38:58 PM\n\n© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only."
+        }
+      ],
+      "source_names": [
+        "5a1d3e620ebd9e0b8ddac004755e9862.pdf"
+      ],
+      "source_doc_ids": [
+        152
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 4.490987207042053,
+      "gen_usage": {
+        "prompt_tokens": 1576,
+        "completion_tokens": 276,
+        "total_tokens": 1852
+      }
+    },
+    {
+      "id": "q_1hop_0007",
+      "hop": 1,
+      "question": "我们在评估伊士曼（Eastman）生产的 Eastman™ 丁醛（Butyraldehyde, Dry）作为香料中间体时的储存与运输安全条件。请提供该产品的闪点（闭杯法）、自燃温度以及 20℃ 下的蒸气压，并确认其最低纯度指标（Assay）是多少？",
+      "ground_truth_answer": "伊士曼 Eastman™ 丁醛（Butyraldehyde, Dry）的闪点（闭杯法，包括赛塔法和塔格法）均为 -13 ℃ (9 °F)；自燃温度为 199 ℃ (390 °F)（测试方法 E 659）；20℃ 下的蒸气压为 91 mm Hg；其最低纯度指标（Assay）为 99 wt %。",
+      "explanation": "答案依据伊士曼（Eastman）公司出具的 Eastman™ 丁醛（Butyraldehyde, Dry）技术数据表。在“典型性质”部分的“一般性质”中明确列出：闪点（Setaflash Closed Cup 和 Tag Closed Cup）均为 -13 ℃；自燃温度（Autoignition Temperature）为 199 ℃；蒸气压（Vapor Pressure）在 20℃ 下为 91 mm Hg；含量（Assay）最小值为 99 wt %。",
+      "source_docs": [
+        {
+          "doc_id": 115,
+          "name": "417fdc04552bb007b60240468e64555b.pdf",
+          "content": "本文件为伊士曼（EASTMAN）公司出具的技术数据表（Technical Data Sheet），产品为 Eastman™ 丁醛（Butyraldehyde, Dry）。\n\n**应用领域（Applications）**\n该产品适用于以下领域：\n*   汽车零部件及配件\n*   建筑材料\n*   通用工业涂料\n*   玻璃处理\n*   除草剂——用作其他产品的中间体\n*   工业燃料中间体\n*   包装组件（非食品接触用）\n*   油漆及涂料\n*   窗户\n\n**产品描述（Product Description）**\nEastman™ 丁醛用作香料中间体。\n\n**典型性质（Typical Properties）**\n下表列出了该产品的典型物理性质、测试方法及数值：\n\n*   **一般性质（General）**\n    *   **形态（Form）：** 液体（Liquid）\n    *   **气味（Odor）：** 刺鼻（Pungent）\n    *   **蒸气压（Vapor Pressure）：** 在 20℃ 下为 91 mm Hg\n    *   **蒸气密度（Vapor Density）：** 2.5（以空气 = 1 为基准）\n    *   **蒸发速率（Evaporation Rate）：** 7.8（以正丁基乙酸酯 n-butyl acetate = 1 为基准）\n    *   **沸点（Boiling Point）：** 75 ℃ (167 °F)\n    *   **熔点（Melting Point）：** -99 ℃ (-146 °F)\n    *   **闪点（Flash Point）：**\n        *   赛塔闪点闭杯法（Setaflash Closed Cup）：-13 ℃ (9 °F)\n        *   塔格闭杯法（Tag Closed Cup）：-13 ℃ (9 °F)\n    *   **自燃温度（Autoignition Temperature）：** 测试方法为 E 659，数值为 199 ℃ (390 °F)\n    *   **凝固点（Freezing Point）：** -80 ℃\n    *   **含量（Assay）：** 最小值 99 wt %（99 重量% min.）\n    *   **颜色（Color）：** 铂-钴比色法（Pt-Co）数值为 10\n    *   **比重（Specific Gravity）：** 在 20℃/20℃ 条件下为 0.78\n\n**备注（Comments）**\n此处报告的性质是平均批次的典型值。伊士曼（Eastman）不保证任何特定发货批次中的材料将完全符合所给出的数值。\n\n**免责声明**\n伊士曼及其营销关联方不对本信息的使用，或文中提及的任何产品、方法或装置的使用负责，您必须自行判断其针对您自身用途的适用性和完整性，以保护环境，并保障您的员工和购买者的健康与安全。不对任何产品的适销性或适用性作出保证，且此处内容不免除卖方的任何销售条件。\n\n**文档信息**\n*   生成时间：2/28/2018 11:35:39 AM\n*   版权信息：© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only.（© 2025 伊士曼化学公司或其子公司。保留所有权利。此处使用的 ® 仅表示在美国的注册商标状态。）"
+        }
+      ],
+      "source_names": [
+        "417fdc04552bb007b60240468e64555b.pdf"
+      ],
+      "source_doc_ids": [
+        115
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 5.332497061928734,
+      "gen_usage": {
+        "prompt_tokens": 1693,
+        "completion_tokens": 315,
+        "total_tokens": 2008
+      }
+    },
+    {
+      "id": "q_1hop_0008",
+      "hop": 1,
+      "question": "我们计划在 PA66 改性项目中引入三井化学的 TAFMER-M 系列马来酸酐接枝聚烯烃弹性体作为增韧剂。为了平衡加工流动性与材料刚性，我们需要筛选出在 190℃ 下熔融流动速率（MFR）大于 2.0 g/10min 且表面硬度（Shore D）不低于 80 的型号。请问符合这两个条件的具体牌号有哪些？",
+      "ground_truth_answer": "符合 190℃ MFR > 2.0 g/10min 且表面硬度 ≥ 80 的牌号是 MA8510 和 MA9015。其中 MA8510 的 190℃ MFR 为 2.4 g/10min，表面硬度为 86；MA9015 的 190℃ MFR 为 11 g/10min，表面硬度为 89。",
+      "explanation": "依据三井化学株式会社（MITSUI CHEMICALS, INC.）提供的 TAFMER-M 产品资料中的物性指标表：\n1. 筛选 190℃ MFR > 2.0 g/10min 的型号：MD715 (1.5, 不符), MA8510 (2.4, 符合), MA9015 (11, 符合), MH5020 (0.6, 不符), MH5040 (0.5, 不符)。\n2. 在符合第一步的型号中筛选表面硬度 ≥ 80 的型号：MA8510 (86, 符合), MA9015 (89, 符合)。\n因此，最终符合条件的牌号为 MA8510 和 MA9015。",
+      "source_docs": [
+        {
+          "doc_id": 490,
+          "name": "d0aa948bed0af597d3c3298ed300624f.pdf",
+          "content": "三井化学株式会社\nCoatings & Engineering Materials Div\nMITSUI CHEMICALS, INC.\n\n马来酸酐接枝聚烯烃弹性体\n\n产品简述\nTAFMER-M 是一种马来酸酐改性的烯烃共聚物，常被用于改性多种工程塑料，并且拥有良好的改性效果。具有以下特点：\n1、有效马来酸酐含量高，极性强；\n2、游离的马来酸酐少，优良的透明性；\n3、低比重、低玻璃态转移温度、良好的低温抗冲击性；\n4、化学性能稳定。\n\n物性指标\n表格列出了不同型号产品的各项物理性能指标，具体数据如下：\n- 熔融流动速率（MFR）在 190℃ 条件下（测试方法 ASTM D 1238，单位 g/10min）：MD715 为 1.5，MA8510 为 2.4，MA9015 为 11，MH5020 为 0.6，MH5040 为 0.5。\n- 熔融流动速率（MFR）在 230℃ 条件下（测试方法 ASTM D 1238，单位 g/10min）：MD715 为 3.0，MA8510 为 5.0，MA9015 为 23，MH5020 为 1.2，MH5040 为 1.1。\n- 密度（测试方法 ASTM D 1505，单位 Kg/m3）：MD715 为 872，MA8510 为 885，MA9015 为 896，MH5020 为 866，MH5040 为 870。\n- 接枝率*（测试方法 MCI Method，单位 219~229）：MD715 为 1.5，MA8510 为 1，MA9015 为 1.5，MH5020 为 2，MH5040 为 4。\n- 断裂拉伸强度（测试方法 ASTM D 638，单位 MPa）：MD715 为 >10，MA8510 为 >24，MA9015 为 16，MH5020 为 >3，MH5040 为 >8。\n- 断裂伸长率（测试方法 ASTM D 638，单位 %）：MD715 为 >1000，MA8510 为 >1000，MA9015 为 850，MH5020 为 >1000，MH5040 为 >1000。\n- 表面硬度（测试方法 ASTM D 2240，单位 –）：MD715 为 72，MA8510 为 86，MA9015 为 89，MH5020 为 55，MH5040 为 63。\n\n应用\n1、尼龙增韧剂：用于 PA6、PA66 增韧、增强增韧、阻燃增韧、增强阻燃增韧等，提高尼龙的抗冲击性、耐寒性、成型加工性、降低吸水率。\n2、PP、PE 增韧剂：用于 PE、PP 及其改性材料 PA/ PE、PA/PP 合金的相容剂与增韧剂。\n3、电缆料相容剂。\n\n厦门聚优化学品有限公司\nXIAMEN POLYU CHEMICAL CO.,LTD.\n厦门市湖里区五缘湾尚水道 597 号海富中心 A 栋 1002 单元\nTEL: 0592-5516498\nFAX: 0592-5510583"
+        }
+      ],
+      "source_names": [
+        "d0aa948bed0af597d3c3298ed300624f.pdf"
+      ],
+      "source_doc_ids": [
+        490
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 6.966133955866098,
+      "gen_usage": {
+        "prompt_tokens": 1825,
+        "completion_tokens": 420,
+        "total_tokens": 2245
+      }
+    },
+    {
+      "id": "q_1hop_0009",
+      "hop": 1,
+      "question": "我们在开发一款用于汽车内饰的聚氨酯弹性体配方，计划选用伊士曼（Eastman）生产的 Benzoﬂex™ 9-88 增塑剂。请确认该产品的具体型号、制造商，并列出其关键物理性质，包括比重（20°C/20°C）、粘度（25°C）、闪点（闭杯）以及凝固点，以便我们评估其加工安全性和低温性能。",
+      "ground_truth_answer": "该产品型号为 Benzoﬂex™ 9-88，制造商为伊士曼（Eastman）。其关键物理性质如下：比重（20°C/20°C）为 1.12；粘度（25°C）为 105 cP (105 mPa·s)；闪点（闭杯）为 360 °F (182 °C)；凝固点为 -22 °F (-30 °C)。",
+      "explanation": "答案依据伊士曼（Eastman）发布的 Benzoﬂex™ 9-88 增塑剂技术数据表。文档明确指出了产品型号和制造商。在“典型性质”表格中，列出了比重（Specific Gravity @ 20°C/20°C）为 1.12，粘度（Viscosity @ 25°C）为 105 cP，闪点（Flash Point (Setaflash Closed Cup)）为 360 °F (182 °C)，以及凝固点（Freezing Point）为 -22 °F (-30 °C)。这些信息直接对应了客户关于加工安全性和低温性能的询问。",
+      "source_docs": [
+        {
+          "doc_id": 99,
+          "name": "3b2f1c7fc6690edfea01c2de3ea27eb3.pdf",
+          "content": "**技术数据表 (Technical Data Sheet)**\n**产品型号：** Benzoﬂex™ 9-88 增塑剂 (Plasticizer)\n**制造商：** EASTMAN（伊士曼）\n\n**应用领域 (Applications)**\n*   粘合剂/密封剂 - b&c\n*   汽车\n*   地板\n*   聚氨酯\n\n**产品描述 (Product Description)**\nBenzoﬂex™ 9-88 是一种高溶解性增塑剂，多年来已广泛应用于各种聚合物系统和应用中。其多样化用途包括弹性地板、粘合剂、人造革布和填缝剂。\n\n**典型性质 (Typical Properties)**\n\n| 性质 (Property) | 典型值，单位 (Typical Value, Units) |\n| :--- | :--- |\n| **通用 (General)** | |\n| 酸度 (Acidity) (wt%) | 0.1 max. (最大 0.1) |\n| 颜色 Pt-Co (Color Pt-Co) | 40-80 |\n| 折射率 (Refractive Index) @ 25°C | 1.52 |\n| 比重 (Specific Gravity) @ 20°C/20°C | 1.12 |\n| 沸点 (Boiling Point) | 657 °F (347 °C) |\n| 闪点 (Flash Point) (Setaflash Closed Cup) | 360 °F (182 °C) |\n| 凝固点 (Freezing Point) | -22 °F (-30 °C) |\n| 蒸气压 (Vapor Pressure) @ 20°C | <0.00001 torr (<0.0013 Pa) |\n| 粘度 (Viscosity) @ 25°C | 105 cP (105 mPa·s) |\n| 重量/体积 (Wt/Vol) @ 20°C | 9.35 lb/gal (1.12 kg/L) |\n\n**备注 (Comments)**\n此处报告的性质是平均批次的典型值。伊士曼（Eastman）不保证任何特定批次的材料将完全符合上述数值。\n\n**免责声明**\n伊士曼及其营销关联方不对本信息的使用，或此处提及的任何产品、方法或装置的使用负责，您必须自行确定其适用性和完整性，用于您自己的用途、环境保护以及您的员工和您的产品购买者的健康和安全。不保证任何产品的适销性或适用性，此处内容不免除卖方的任何销售条件。\n\n**页脚信息**\n*   时间戳：10/28/2018 4:38:56 PM\n*   版权信息：© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only. (© 2025 伊士曼化学公司或其子公司。保留所有权利。在此处使用，® 仅表示在美国的注册商标状态。)"
+        }
+      ],
+      "source_names": [
+        "3b2f1c7fc6690edfea01c2de3ea27eb3.pdf"
+      ],
+      "source_doc_ids": [
+        99
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 4.505455631995574,
+      "gen_usage": {
+        "prompt_tokens": 1597,
+        "completion_tokens": 371,
+        "total_tokens": 1968
+      }
+    },
+    {
+      "id": "q_1hop_0010",
+      "hop": 1,
+      "question": "我们在评估埃克森美孚（ExxonMobil）Heptene 高碳烯烃作为合成油基础油原料的可行性。请确认该产品的密度（15°C）和比重（20/20°C）的具体规格范围，以及其饱和烃含量（Saturates Content）的最大允许值是多少？",
+      "ground_truth_answer": "埃克森美孚 Heptene 高碳烯烃的密度（15°C）规格范围为 0.704 - 0.715 kg/l；比重（20/20°C）规格范围为 0.705 - 0.716；饱和烃含量（Saturates Content）的最大允许值为 4.0 wt%。",
+      "explanation": "答案依据埃克森美孚（ExxonMobil）Heptene 高碳烯烃的销售规格文档。在“属性”部分中，明确列出了“密度，15° C”的最小值为 0.704，最大值为 0.715，单位为 kg/l；“比重，20/20° C”的最小值为 0.705，最大值为 0.716；“Saturates Content（饱和烃含量）”的最大值为 4.0，单位为 wt%。",
+      "source_docs": [
+        {
+          "doc_id": 418,
+          "name": "2a81d004841782cdbb7a51bea98bed85.pdf",
+          "content": "销售规格\n\nExxonMobil™ Heptene\n高碳烯烃\n\n总览\n供货地区 1：北美洲、拉丁美洲、欧洲\n修订日期：08/29/2024\n\n属性\n外观：最小值 Clear, Free of Suspended Matter（清晰，无悬浮物）；最大值 --；单位 --；测试方法 AMS 77-069、BRCP 4065、EC A-A01\n色度，Pt-Co：最小值 --；最大值 40；单位 --；测试方法 BRC P 4273、ISO 6271-2\n密度，15° C 2：最小值 0.704；最大值 0.715；单位 kg/l；测试方法 ASTM D4052 Calculated（计算值）\nPeroxides, as Active Oxygen（过氧化物，以活性氧计）：最小值 --；最大值 10；单位 wppm；测试方法 ASTM D3703 (mod)、BRC P 4615\nSaturates Content（饱和烃含量）：最小值 --；最大值 4.0；单位 wt%；测试方法 BCI GC-02、BRC P 4790\n比重，20/20° C 2：最小值 0.705；最大值 0.716；单位 --；测试方法 BRC P 4843 Calculated（计算值）\n水含量：最小值 --；最大值 50；单位 wppm；测试方法 ASTM D7039、BRC P 7731\n\n成分\nCarbon No. Distribution, C6 & Lighter（碳数分布，C6 及更轻组分）：最小值 --；最大值 3.0；单位 wt%；测试方法 BCI GC-05、BRC P 4425\nCarbon No. Distribution, C8 & Heavier（碳数分布，C8 及更重组分）：最小值 --；最大值 6.0；单位 wt%；测试方法 BCI GC-05、BRC P 4425\n\n补充信息\n本产品使用受阻酚作为抑制剂。\n除非另有书面约定，适用的采样和测试方法可能会在另行通知的情况下发生变更，摘要可在要求时提供。\nExxonMobil 保留使用其他等效测试方法来认证本产品的权利。\n报告的十进制位数可能与行业标准测试方法中规定的位数不同。\n\n备注\n1 在所标明的可供应区域的一个或多个国家/地区中可能无法供应此产品。请联系您的销售代表以获取完整的可供应国家/地区列表\n2 带有 Test method shown as Calculated（测试方法显示为计算值）的属性是根据另一规格参数确定的\n\n标准免责声明中文译文 www.exxonmobilchemical.com/ContactUs\n\n©2025 埃克森美孚。埃克森美孚（ExxonMobil），埃克森美孚的徽标（ExxonMobil logo）及连接的“X”设计和在本文件中使用的的所有其他产品或服务名称，除非另有标明，否则均为埃克森美孚的商标。未经埃克森美孚的事先书面授权，不得分发、展示、复制或修改本文件。使用者可在埃克森美孚授权的范围内，分发、展示和/或复制本文件，但必须毫无改动并保持其完整性，包括所有的页面、脚注、免责声明及其它信息。使用者不可将本文件全文或部份复制到任何网站。埃克森美孚不保证典型（或其它）数值。本文件包含的所有数据是基于代表性样品的分析，而不是实际运送的产品。本文件所含信息仅是所指定的产品或材料未与其它任何产品或材料结合使用时的相关信息。我们的信息基于收集之特定认为可靠的数据，但是，我们并不明示或暗示地陈述、担保或以其它方式保证此信息或所描述产品、材料或工艺的销售性、适宜于某一特定用途、不侵犯专利权、适用性、准确性、可靠性或完整性。使用者对其感兴趣的领域使用该材料、产品或工艺所做的一切决定负全部责任。我们明确声明将不对由于任何人使用或依赖本文件所含任何信息而导致的与此相关的直接或间接损害或客户任何损失、损害或伤害承担责任。本文件不应视作作者对任何非埃克森美孚产品或工艺的认可，并且我们明确否认任何相反的含蓄。我们、“我们的”、“埃克森美孚化工”埃克森美孚产品方案业务”等词语均为方便而使用，埃克森美孚产品方案业务公司、埃克森美孚公司，或由它们直接或间接控制的任何关联公司中的一家或者多家。\n\nexxonmobilchemical.com\n\n生效日期：08/29/2024 ExxonMobil 页：1 / 1"
+        }
+      ],
+      "source_names": [
+        "2a81d004841782cdbb7a51bea98bed85.pdf"
+      ],
+      "source_doc_ids": [
+        418
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 3.572027852991596,
+      "gen_usage": {
+        "prompt_tokens": 1924,
+        "completion_tokens": 288,
+        "total_tokens": 2212
+      }
+    },
+    {
+      "id": "q_2hop_0001",
+      "hop": 2,
+      "question": "我们是一家建筑密封胶制造商，正在评估伊士曼（Eastman）的 Benzoflex™ LC-531 和 Benzoflex™ 2088 两种增塑剂用于丙烯酸乳液填缝剂（acrylic latex caulks）的配方。请对比这两款产品在25°C下的粘度、20°C下的蒸气压以及酸度指标，并指出哪一款在降低挥发性方面表现更优，同时说明哪一款在酸度控制上更严格。",
+      "ground_truth_answer": "Benzoflex™ LC-531 在25°C下的粘度为 55 cP，20°C下的蒸气压小于 0.0001 torr，酸度最大值为 1 wt%。Benzoflex™ 2088 在25°C下的粘度为 71 cP，20°C下的蒸气压小于 0.00001 torr，酸度最大值为 0.1 wt%。在降低挥发性方面，Benzoflex™ 2088 表现更优，因为其蒸气压上限（<0.00001 torr）远低于 Benzoflex™ LC-531（<0.0001 torr）。在酸度控制上，Benzoflex™ 2088 更严格，其最大酸度限值（0.1 wt%）低于 Benzoflex™ LC-531（1 wt%）。",
+      "explanation": "答案依据伊士曼（Eastman）提供的两份技术资料。Benzoflex™ LC-531 的资料显示其粘度为 55 cP，蒸气压 <0.0001 torr，酸度 max 1 wt%。Benzoflex™ 2088 的资料显示其粘度为 71 cP，蒸气压 <0.00001 torr，酸度 max 0.1 wt%。通过对比两份资料中的具体数值，可以得出 2088 的蒸气压更低（挥发性更低）且酸度限值更严的结论。",
+      "source_docs": [
+        {
+          "doc_id": 37,
+          "name": "0d8710e5244a08f53fc3b49c4c529e30.pdf",
+          "content": "**东曼（EASTMAN）技术资料表**\n\n**Benzoflex™ LC-531 增塑剂**\n\n**应用领域**\n*   粘合剂/密封胶（建筑用）\n\n**产品描述**\nBenzoflex™ LC-531 是专为乳胶密封胶（latex caulks）配制的产品。其设计旨在满足 ASTM C-920 和 ASTM C-834 中规定的严格性能要求，同时也适用于非规格密封胶。\n\n**典型性质**\n\n**通用性质**\n*   **酸度（Acidity）**：最大值为 1 wt%（重量百分比）。\n*   **颜色（Color Pt-Co）**：最大值为 100（铂-钴色标）。\n*   **折射率（Refractive Index）**：在 25°C 条件下为 1.53。\n*   **比重（Specific Gravity）**：在 20°C/20°C 条件下为 1.17。\n*   **沸点（Boiling Point）**：大于 662 °F（大于 350 °C）。\n*   **闪点（Flash Point）**：\n    *   测定方法：闭杯（Closed Cup）\n    *   数值：379 °F（193 °C）。\n*   **凝固点（Freezing Point）**：小于 61 °F（小于 16 °C）。\n*   **蒸气压（Vapor Pressure）**：\n    *   测定温度：20°C\n    *   数值：小于 0.0001 torr（小于 0.0133 Pa）。\n*   **粘度（Viscosity）**：\n    *   测定温度：25°C\n    *   数值：55 cP（55 mPa·s）。\n*   **重量/体积（Wt/Vol）**：9.76 lb/gal（1.17 kg/L）。\n\n**备注**\n此处报告的性质为平均批次的典型值。东曼（Eastman）不保证任何特定发货批次中的材料将完全符合上述给出的数值。\n\n**免责声明**\n东曼及其营销关联方不对本信息的使用，或文中提及的任何产品、方法或装置负责，您必须自行确定其针对您自身用途、环境保护以及您的员工和您的产品购买者的健康与安全的适用性和完整性。不对任何产品的适销性或特定用途适用性作出保证，且此处内容不免除卖方销售条件的任何条款。\n\n**页脚信息**\n*   文档生成时间：10/28/2018 4:40:59 PM\n*   版权信息：© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only.（© 2025 东曼化学公司或其子公司。保留所有权利。在此处使用，® 仅表示在美国的注册商标状态。）"
+        },
+        {
+          "doc_id": 36,
+          "name": "0cab4a54f13d0e9c14fae0469ba95abf.pdf",
+          "content": "**文档标题**：技术数据表 (Technical Data Sheet)\n**产品名称**：Benzoflex™ 2088 增塑剂 (Plasticizer)\n**发布机构**：EASTMAN（伊士曼）\n\n**应用领域 (Applications)**\n*   粘合剂/密封剂 (Adhesives/sealants)\n*   地板 (Flooring)\n*   乙烯基糊树脂 (Vinyl plastisols)\n\n**产品描述 (Product Description)**\nBenzoflex™ 2088 是一种高溶解性增塑剂，以其在聚氯乙烯 (PVC)、聚醋酸乙烯酯 (polyvinyl acetate) 和水基粘合剂系统中的卓越性能而闻名。在粘合剂应用中，它表现出优异的湿粘力 (wet tack)、固化时间 (set times) 和开放时间 (open times)，并能提高丙烯酸乳液填缝剂 (acrylic latex caulks) 的附着力。在 PVC 应用中，它作为快速增塑剂 (fast fuser)，提供低加工温度和低挥发性。\n\n**典型性质 (Typical Properties)**\n\n| 性质 (Property) | 典型值与单位 (Typical Value, Units) |\n| :--- | :--- |\n| **一般性质 (General)** | |\n| 酸度 (Acidity) (wt%) | 0.1 max. (最大 0.1) |\n| 颜色 Pt-Co (Color Pt-Co) | 25-40 |\n| 折射率 (Refractive Index) @ 25°C | 1.54 |\n| 比重 (Specific Gravity) @ 20°C/20°C | 1.16 |\n| 沸点 (Boiling Point) | 673 °F (356 °C) |\n| 闪点 (Flash Point) (Setaflash Closed Cup) | 396 °F (202 °C) |\n| 凝固点 (Freezing Point) | <61 °F (<16 °C) |\n| 蒸气压 (Vapor Pressure) @ 20°C | <0.00001 torr (<0.0013 Pa) |\n| 粘度 (Viscosity) @ 25°C | 71 cP (71 mPa·s) |\n| 重量/体积 (Wt/Vol) @ 20°C | 9.68 lb/gal (1.16 kg/L) |\n\n**备注 (Comments)**\n此处报告的性质是平均批次的典型值。伊士曼 (Eastman) 不保证任何特定发货的材料将完全符合上述给出的数值。\n\n**免责声明**\n伊士曼及其营销关联方不对本信息的使用，或此处提及的任何产品、方法或装置负责，您必须自行确定其针对您自身用途的适用性和完整性，以保护环境，并保护您员工及您产品购买者的健康和安全。不保证任何产品的适销性或特定用途适用性，此处内容不免除卖方的任何销售条件。\n\n**页脚信息**\n*   时间戳：4/19/2022 2:07:17 PM\n*   版权声明：© 2025 Eastman Chemical Company or its subsidiaries. All rights reserved. As used herein, ® denotes registered trademark status in the U.S. only. (© 2025 伊士曼化学公司或其子公司。保留所有权利。在此处使用，® 仅表示在美国的注册商标状态。)"
+        }
+      ],
+      "source_names": [
+        "0d8710e5244a08f53fc3b49c4c529e30.pdf",
+        "0cab4a54f13d0e9c14fae0469ba95abf.pdf"
+      ],
+      "source_doc_ids": [
+        37,
+        36
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 4.932311016134918,
+      "gen_usage": {
+        "prompt_tokens": 2339,
+        "completion_tokens": 458,
+        "total_tokens": 2797
+      }
+    },
+    {
+      "id": "q_3hop_0001",
+      "hop": 3,
+      "question": "我们工厂正在为电子外壳项目评估锦湖石化（Kumho Petrochemical）的三款材料：ABS 750、HAC-8244D 和 HFA 708F。请帮我梳理这三款产品的核心成分构成，特别是 HFA 708F 中用于阻燃的具体助剂及其含量范围。另外，从 GHS 安全分类和 NFPA 评级来看，哪款产品的健康风险最高？其具体的危险象形图、警示词及主要危险性说明（H 代码）是什么？",
+      "ground_truth_answer": "1. 核心成分构成：\n- ABS 750：主要成分为丙烯腈-丁二烯-苯乙烯共聚物（CAS 9003-56-9），含量 97~100%；另含稳定剂（0~1%）和润滑剂（0~3%）。\n- HAC-8244D：主要成分为丙烯腈-丁二烯-苯乙烯（CAS 9003-56-9，含量 35~65%）和聚碳酸酯（CAS 24936-68-3，含量 35~65%），另含添加剂（0~2%）。\n- HFA 708F：主要成分为 ABS 树脂（CAS 9003-56-9，含量 70~80%）。\n\n2. HFA 708F 阻燃助剂：\n- 溴化阻燃剂（Brominated flame retardant，CAS 25713-60-4），含量 15~20%。\n- 三氧化二锑（Antimony Trioxide，CAS 1309-64-4），含量 1~5%。\n- 氯化聚乙烯（Chlorinated Polyethylene，CAS 64754-90-1），含量 1~5%（通常作为协效剂）。\n\n3. 健康风险对比：\n- HFA 708F 的健康风险最高。\n- GHS 分类：致癌性 1B 类，特定目标器官毒性（重复暴露）2 类。\n- NFPA 评级：健康=1，可燃性=1，反应性=0（ABS 750 和 HAC-8244D 均为 0-0-0）。\n- 危险象形图：健康危害（人形上半身与星形图案）。\n- 警示词：危险（Danger）。\n- 主要危险性说明：H350 可能致癌；H373 长期或重复接触可能对器官造成伤害。",
+      "explanation": "1. 成分对比依据：\n- ABS 750 的成分信息来自 Kumho Petrochemical 出具的 ABS 系列（含 ABS 750）安全数据表，其中明确列出丙烯腈-丁二烯-苯乙烯共聚物含量为 97~100%。\n- HAC-8244D 的成分信息来自 Kumho Petrochemical 出具的 HAC-8244D 安全数据表，明确列出 ABS 和聚碳酸酯各占 35~65%。\n- HFA 708F 的成分信息来自 Kumho Petrochemical 出具的 HFA 708F 安全数据表，明确列出 ABS 树脂占 70~80%，并详细列出了溴化阻燃剂、三氧化二锑等阻燃相关助剂及其含量。\n\n2. 安全风险评估依据：\n- ABS 750 和 HAC-8244D 的 SDS 中 GHS 分类均为“不适用”，NFPA 评级均为 0-0-0，表明无显著健康或易燃风险。\n- HFA 708F 的 SDS 中 GHS 分类明确标注为致癌性 1B 类和特定目标器官毒性 2 类，NFPA 健康评级为 1。其标签要素包含“健康危害”象形图、“危险”警示词以及 H350 和 H373 危险性说明。因此，HFA 708F 是三者中健康风险最高的产品。",
+      "source_docs": [
+        {
+          "doc_id": 106,
+          "name": "3e7754a178496e020d05ae37b76f1b07.pdf",
+          "content": "本文件为 Kumho Petrochemical（锦湖石化）出具的安全数据表（SAFETY DATA SHEET），修订日期（Rev. date）为 2023.04.20。\n\n**1. 标识（IDENTIFICATION）**\n\n**A. 产品名称（PRODUCT NAME）**\n产品型号列表如下：ABS 710, ABS 710F, ABS 710G, ABS 720, ABS 720B, ABS 720R, ABS 722, ABS 722P, ABS 722E, ABS 728, ABS 740, ABS 740M, ABS 745, ABS 745HM, ABS 750, ABS 750HC, ABS 750SH, ABS 750F, ABS 750SW, ABS 750P, ABS 765, ABS 772, ABS 775, ABS 775EG, ABS 775K, ABS 775T, ABS775TS, ABS 780, ABS 780F, ABS 780M, ABS EF750, EF780。\n\n**B. 推荐用途及使用限制（Recommended Use and Restriction on Use）**\n*   一般用途（General use）：无（Not available）。\n*   使用限制（Restriction on Use）：无（Not available）。\n\n**C. 制造商信息（Information of Manufacturer）**\n\n**制造商（Manufacturer）**\n*   公司名称（Company name）：Korea Kumho Petrochemical Co., Ltd.\n*   地址（Address）：260–257, Cheoyong–ro, Nam–Gu, Ulsan, 44785, Korea\n*   部门（Dept.）：Quality Assurance Team（质量保证团队）\n*   负责人（Person in charge）：（文档未给出具体姓名）\n*   电话号码（Telephone number）：+82–52–279–8852\n*   传真号码（Fax number）：+82–52–279–8840\n*   紧急情况（Emergency）：（文档未给出具体联系方式）\n\n**供应商/分销商（Supplier / distributor）**\n*   公司名称（Company name）：（文档未给出）\n*   地址（Address）：（文档未给出）\n*   部门（Dept.）：（文档未给出）\n*   负责人（Person in charge）：（文档未给出）\n*   电话号码（Telephone number）：（文档未给出）\n*   传真号码（Fax number）：（文档未给出）\n*   紧急情况（Emergency）：（文档未给出）\n\n**2. 危险性识别（HAZARD IDENTIFICATION）**\n\n**A. GHS 分类（GHS Classification）**\n不适用（Not applicable）。\n\n**B. GHS 标签要素（GHS label elements）**\n*   危险象形图（Hazard symbols）：不适用（Not applicable）。\n*   信号词（Signal word）：不适用（Not applicable）。\n*   危险说明（Hazard statement）：不适用（Not applicable）。\n*   防范说明（Precautionary statements）：不适用（Not applicable）。\n\n**C. 其他不导致分类的危险（Other hazards which do not result in classification）**\n*   NFPA 评级（NFPA rating）（0~4 级）：健康（Health）=0，易燃性（Flammability）=0，反应性（Reactivity）=0。\n\n**3. 成分/组成信息（COMPOSITION/INFORMATION ON INGREDIENTS）**\n\n成分信息表如下：\n*   化学名称（Chemical name）：Acrylonitrile–butadiene–styrene co-polymer（丙烯腈-丁二烯-苯乙烯共聚物）；CAS 号/ECL 号/EINECS 号：9003–56–9/KE–29398/–；含量（Contents）：97~100%。\n*   化学名称（Chemical name）：Stabilizer（稳定剂）；CAS 号/ECL 号/EINECS 号：Proprietary（专有）；含量（Contents）：0~1%。\n*   化学名称（Chemical name）：Lubricant（润滑剂）；CAS 号/ECL 号/EINECS 号：Proprietary（专有）；含量（Contents）：0~3%。\n\n注：参考编号（Reference No.）：ECL（Registration number of Korean Existing Chemical List，韩国现有化学物质清单注册号）；EINECS（Registration number of Europe Existing Chemical List，欧洲现有化学物质清单注册号）。\n\n**4. 急救措施（FIRST-AID MEASURES）**\n\n**A. 眼睛接触（Eye Contact）**\n*   立即用大量清水冲洗眼睛至少 15 分钟。\n*   如果刺激持续，请就医检查。\n*   偶尔提起眼睑，充分清洗眼睑以进行后续处理。\n\n**B. 皮肤接触（Skin Contact）**\n*   用流动水清洗受污染的皮肤区域。\n*   如果接触熔体，用凉爽的流动水冷却受污染的皮肤。\n*   如果因熔体导致烧伤，请寻求医疗救助。\n\n**C. 吸入（Inhalation）**\n*   将暴露人员移至新鲜空气处。\n*   将受害者移至新鲜空气处，并使其在舒适的位置休息。\n*   寻求医疗救助。\n\n**D. 误食（Ingestion）**\n*   用水漱口。\n*   给予大量水。\n*   经口毒性不高。\n*   如果出现刺激或症状，请就医检查。\n\n**E. 延迟和即时效应以及短期和长期暴露的慢性效应（Delay and immediate effects and also chronic effects from short and long term exposure）**\n无（Not available）。\n\n**F. 给医生的提示（Notice to Physician）**\n*   治疗方案可能因受害者状况和事故具体情况而异。\n\n**5. 灭火措施（FIRE FIGHTING MEASURE）**\n\n**A. 适用（不适用）的灭火介质（Suitable (Unsuitable) extinguishing media）**\n*   灭火介质（Extinguishing media）：二氧化碳（Carbon Dioxide）、干粉（Dry Chemical）、水（Water）。\n*   不适用灭火介质（Unsuitable Extinguishing media）：不要使用直流水（Do not use direct water）。\n*   大火（Big Fire）：水喷雾（Water spray）、普通泡沫（regular foam）。\n\n**B. 由化学品引起的特定危害（Specific hazards arising from the chemical）**\n*   燃烧（Combustion）：一氧化碳（Carbon monoxide）、二氧化碳（Carbon dioxide）、氰化氢（hydrogen cyanide）。\n*   火灾危险等级（Levels of fire hazard）：无（Not available）。\n\n**C. 灭火程序和装备（Fire fighting procedures and equipments）**\n*   穿戴适当的个人防护装备（参见第 8 节 暴露控制/个人防护）。\n*   灭火时避免吸入烟雾或气体。\n*   如果可以在无风险的情况下进行，将容器移离火场。\n*   用水冷却容器，直到火灾完全扑灭后很长一段时间。\n\n**6. 意外释放措施（ACCIDENTAL RELEASE MEASURES）**\n\n**A. 个人预防措施、防护装备和应急程序（Personal Precautions, Protective Equipment and Emergency procedures）**\n*   按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。\n*   在可能的情况下，允许熔融材料泄漏物机械和化学固化。\n*   使用减少粉尘的方法。\n*   避免与眼睛和皮肤接触。\n*   避免吸入物质本身或燃烧产物。\n*   逆风撤离。\n*   避免接触热源、火花、火焰或其他点火源。\n\n**B. 环境预防措施（Environmental Precautions）**\n*   避免泄漏物和径流扩散及与水道、排水沟和下水道接触。如果发生大量泄漏，通知紧急服务部门。\n\n**C. 围堵和清理的方法及材料（Methods and materials for containment and cleaning up）**\n*   对于小量泄漏（For small spills）：\n    *   移除所有点火源。\n    *   抑制粉尘产生。\n    *   使用适当的容器处置收集的泄漏材料。\n    *   通风泄漏区域并清理泄漏区域。\n*   对于大量泄漏（For large spills）：\n    *   移除所有点火源。\n    *   抑制粉尘产生。\n    *   避免进入下水道或水系统。\n    *   使用适当的容器收集并清理表面上的泄漏材料。\n    *   使用适当的容器处置收集的泄漏材料。\n\n**7. 操作和储存（HANDLING AND STORAGE）**\n\n**A. 操作（Handling）**\n*   按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。\n*   在通风良好的地方操作。\n*   避免接触热源、火花、火焰或其他点火源。\n*   移除所有点火源。"
+        },
+        {
+          "doc_id": 230,
+          "name": "84c1beaae97fdcca1d97b6f3e9f05570.pdf",
+          "content": "本文件为 Kumho Petrochemical（锦湖石化）出具的安全数据表（SAFETY DATA SHEET）。文件右上角标注产品信息：产品（Product）：HAC-8244D；发布日期（Issue date）：2010.03.10；修订日期（Rev. date）：2018.07.18。\n\n1. 标识（IDENTIFICATION）\n\nA. 产品名称（PRODUCT NAME）\nKUMHO HAC-8244D\n\nB. 推荐用途及使用限制（Recommended Use and Restriction on Use）\n一般用途（General use）：无（Not available）\n使用限制（Restriction on Use）：不适用（Not applicable）\n\nC. 制造商信息（Information of Manufacturer）\n制造商（Manufacturer）\n公司名称（Company name）：Korea Kumho Petrochemical Co., Ltd.\n地址（Address）：260-257, Cheoyong-ro, Nam-Gu, Ulsan, 44785, Korea\n部门（Dept.）：Quality Assurance Team（质量保证团队）\n负责人（Person in charge）：（文档未给出）\n电话号码（Telephone number）：+82-52-279-8852\n传真号码（Fax number）：+82-52-279-8840\n紧急联系方式（Emergency）：（文档未给出）\n\n供应商/分销商（Supplier / distributor）\n公司名称（Company name）：（文档未给出）\n地址（Address）：（文档未给出）\n部门（Dept.）：（文档未给出）\n负责人（Person in charge）：（文档未给出）\n电话号码（Telephone number）：（文档未给出）\n传真号码（Fax number）：（文档未给出）\n紧急联系方式（Emergency）：（文档未给出）\n\n2. 危险性识别（HAZARD IDENTIFICATION）\n\nA. GHS 分类（GHS Classification）：不适用（Not applicable）\n\nB. GHS 标签要素（GHS label elements）\n危险象形图（Hazard symbols）：不适用（Not applicable）\n信号词（Signal word）：不适用（Not applicable）\n危险性说明（Hazard statement）：不适用（Not applicable）\n防范说明（Precautionary statements）：不适用（Not applicable）\n\nC. 其他不导致分类的危险（Other hazards which do not result in classification）\nNFPA 评级（0~4 级）：健康（Health）=0，易燃性（Flammability）=0，反应性（Reactivity）=0\n\n3. 成分/组成信息（COMPOSITION/INFORMATION ON INGREDIENTS）\n\n成分表逐行内容如下：\n第一行：化学名称（Chemical name）为 Acrylonitrile-Butadiene-Styrene（丙烯腈-丁二烯-苯乙烯）；CAS 号/ECL 号/EINECS 号（CAS No./ECL No./EINECS No.）为 9003-56-9/KE-29398/-；含量（Contents(%)）为 35~65。\n第二行：化学名称为 Polycarbonate（聚碳酸酯）；CAS 号/ECL 号/EINECS 号为 24936-68-3/-/-；含量为 35~65。\n第三行：化学名称为 Additives（添加剂）；CAS 号/ECL 号/EINECS 号为 Proprietary（专有）；含量为 0~2。\n\n表格下方注释：\n参考编号（Reference No.）：ECL（Registration number of Korean Existing Chemical List，韩国现有化学物质清单注册号）；EINECS（Registration number of Europe Existing Chemical List，欧洲现有化学物质清单注册号）。\n\n4. 急救措施（FIRST-AID MEASURES）\n\nA. 眼睛接触（Eye Contact）\n立即用大量水冲洗眼睛至少 15 分钟。\n如果刺激持续，请就医检查。\n\nB. 皮肤接触（Skin Contact）\n用流动水或肥皂清洗受污染的皮肤区域。\n脱去受污染的衣服和鞋子。\n如果刺激持续，请寻求医生关注。\n\nC. 吸入（Inhalation）\n饮水清洁喉咙并擤鼻以清除灰尘。\n立即将受害者移至新鲜空气处。\n如果未呼吸，进行人工呼吸。\n如果呼吸困难，给予氧气。\n寻求医疗救助。\n\nD. 误食（Ingestion）\n用水漱口。\n给予大量水以缓解刺激。\n如果发生刺激或症状，请就医检查。\n\nE. 延迟和即时效应以及短期和长期暴露的慢性效应（Delay and immediate effects and also chronic effects from short and long term exposure）\n塑料加工过程中产生的高温蒸汽可能导致眼睛和呼吸道刺激。\n\nF. 给医生的提示（Notice to Physician）\n治疗可能因受害者状况和事故具体情况而异。\n\n5. 灭火措施（FIRE FIGHTING MEASURE）\n\nA. 适用（不适用）的灭火介质（Suitable (Unsuitable) extinguishing media）\n灭火介质（Extinguishing media）：二氧化碳（Carbon Dioxide）、水（Water）、泡沫（foam）。\n不适用灭火介质（Unsuitable Extinguishing media）：不要使用直流水（Do not use direct water）。\n大火（Large fire）：水喷雾（Water spray）、普通泡沫（regular foam）。\n\nB. 化学品引起的特定危害（Specific hazards arising from the chemical）\n燃烧（Combustion）：\n火灾可能导致刺激性、腐蚀性和/或有毒气体。\n燃烧时会产生二氧化碳、一氧化碳和苯乙烯等热解产物。\n火灾危险等级（Levels of fire hazard）：\n容器如果暴露于火中可能会破裂或爆炸。\n粉尘/空气混合物可能会点燃或爆炸。\n\nC. 灭火程序和装备（Fire fighting procedures and equipments）\n穿戴适当的个人防护装备（参见第 8 节 暴露控制/个人防护）。\n灭火时避免吸入烟雾或气体。\n在可能的情况下，无风险地将容器移离火场。\n用水冷却容器，直到火完全扑灭。\n处于上风向并远离低洼地区。\n避免吸入物质本身或燃烧产物。\n\n6. 意外释放措施（ACCIDENTAL RELEASE MEASURES）\n\nA. 个人预防措施、防护装备和应急程序（Personal Precautions, Protective Equipment and Emergency procedures）\n按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。\n采取措施减少粉尘。\n避免接触眼睛和皮肤。\n避免吸入物质本身或燃烧产物。\n逆风疏散。\n禁止无关人员进入。\n避免接触热源、火花、火焰或其他点火源。\n\nB. 环境预防措施（Environmental Precautions）\n避免泄漏物和径流扩散及接触水道、排水沟和下水道。如果大量泄漏，通知紧急服务部门。\n\nC. 控制和清理的方法与材料（Methods and materials for containment and cleaning up）\n对于小量泄漏（For small spills）：\n移除所有点火源。\n抑制粉尘产生。\n使用适当的容器收集泄漏物以便处置。\n通风泄漏区域并清理泄漏区域。\n对于大量泄漏（For large spills）：\n移除所有点火源。\n抑制粉尘产生。\n避免进入下水道或水系统。\n收集泄漏物并用适当的容器处置，清理表面。\n使用适当的容器收集泄漏物以便处置。\n\n7. 操作和储存（HANDLING AND STORAGE）\n\nA. 操作（Handling）\n按照“参见第 8 节 暴露控制/个人防护”执行。穿戴适当的个人防护装备。"
+        },
+        {
+          "doc_id": 240,
+          "name": "9369ccb105b9ec06fc1e98bee1747c32.pdf",
+          "content": "本文件为 Kumho Petrochemical（锦湖石化）出具的安全数据表（SAFETY DATA SHEET）。文件右上角标注：产品（Product）：HFA 708F；发布日期（Issue date）：2016.02.17；修订日期（Rev. date）：2018.07.19。\n\n1. 标识（IDENTIFICATION）\n\nA. 产品名称（PRODUCT NAME）\n- KUMHO HFA 708F\n\nB. 推荐用途及使用限制（Recommended Use and Restriction on Use）\n- 一般用途（General use）：无（Not available）\n- 使用限制（Restriction on Use）：不适用（Not applicable）\n\nC. 制造商信息（Information of Manufacturer）\n- 制造商（Manufacturer）\n  - 公司名称（Company name）：Korea Kumho Petrochemical Co., Ltd.\n  - 地址（Address）：260-257, Cheoyong-ro, Nam-Gu, Ulsan, 44785, Korea\n  - 部门（Dept.）：质量保证团队（Quality Assurance Team）\n  - 负责人（Person in charge）：文档未给出\n  - 电话号码（Telephone number）：+82-52-279-8852\n  - 传真号码（Fax number）：+82-52-279-8840\n  - 紧急联系方式（Emergency）：文档未给出\n- 供应商/分销商（Supplier / distributor）\n  - 公司名称（Company name）：文档未给出\n  - 地址（Address）：文档未给出\n  - 部门（Dept.）：文档未给出\n  - 负责人（Person in charge）：文档未给出\n  - 电话号码（Telephone number）：文档未给出\n  - 传真号码（Fax number）：文档未给出\n  - 紧急联系方式（Emergency）：文档未给出\n\n2. 危险性识别（HAZARD IDENTIFICATION）\n\nA. GHS 分类（GHS Classification）：不适用（Not applicable）\n- 致癌性（Carcinogenicity）：1B 类（Category 1B）\n- 特定目标器官毒性（重复暴露）（Specific target organ toxicity (Repeated exposure)）：2 类（Category 2）\n\nB. GHS 标签要素（GHS label elements）\n- 危险象形图（Hazard symbols）：文档中显示一个红色边框的菱形象形图，内部为黑色“健康危害”符号（人形上半身与星形图案）。\n- 警示词（Signal word）：危险（Danger）\n- 危险性说明（Hazard statement）：\n  - H350 可能致癌（May cause cancer）\n  - H373 长期或重复接触可能对器官造成伤害（May cause damage to organs through prolonged or repeated exposure）（参见 SDS 第 11 节）\n- 防范说明（Precautionary statements）：\n  - 预防（Prevention）：\n    - P201 使用前获取特别指示（Obtain special instructions before use）。\n    - P202 在已阅读并理解所有安全预防措施之前，请勿操作（Do not handle until all safety precautions have been read and understood）。\n    - P260 请勿吸入粉尘/烟雾/气体/雾/蒸气/喷雾（Do not breathe dust/fume/gas/mist/vapours/spray）。\n    - P281 按要求使用个人防护装备（Use personal protective equipment as required）。\n  - 响应（Response）：\n    - P308+P313 如暴露或担心暴露：寻求医疗建议/帮助（If exposed or concerned: Get medical advice/attention）。\n    - P314 如感觉不适，寻求医疗建议/帮助（Get medical advice/attention if you feel unwell）。\n  - 储存（Storage）：\n    - P405 上锁存放（Store locked up）。\n  - 处置（Disposal）：\n    - P501 按照当地/区域/国家/国际法规处置内容物/容器（Dispose of contents/container in accordance with local/regional/national/international regulation）。\n\nC. 其他不导致分类的危险性（Other hazards which do not result in classification）\n- NFPA 评级（0~4 级）：健康（Health）=1，可燃性（Flammability）=1，反应性（Reactivity）=0\n\n3. 成分/组成信息（COMPOSITION/INFORMATION ON INGREDIENTS）\n\n成分表逐行内容如下：\n- 化学名称：ABS Resin（ABS 树脂）；CAS 号/ECL 号/EINECS 号：9003-56-9/KE-29398/-；含量（%）：70~80\n- 化学名称：Brominated flame retardant（溴化阻燃剂）；CAS 号/ECL 号/EINECS 号：25713-60-4/2000-3-1422/-；含量（%）：15~20\n- 化学名称：Chlorinated Polyethylene（氯化聚乙烯）；CAS 号/ECL 号/EINECS 号：64754-90-1/KE-5477/-；含量（%）：1~5\n- 化学名称：Antimony Trioxide（三氧化二锑）；CAS 号/ECL 号/EINECS 号：1309-64-4/KE-9846/215-175-0；含量（%）：1~5\n- 化学名称：Antioxidant（抗氧化剂）；CAS 号/ECL 号/EINECS 号：2082-79-3/KE-3070/218-216-0；含量（%）：0.1~10\n- 化学名称：Wax（蜡）；CAS 号/ECL 号/EINECS 号：85116-93-4/KE-14846/285-547-5；含量（%）：0.1~5\n\n注释：\n- ※ 参考编号（Reference No.）：ECL（韩国现有化学品清单注册号，Registration number of Korean Existing Chemical List）\n- EINECS（欧洲现有化学品清单注册号，Registration number of Europe Existing Chemical List）\n\n4. 急救措施（FIRST-AID MEASURES）\n\nA. 眼睛接触（Eye Contact）\n- 立即用大量水冲洗眼睛至少 15 分钟（Immediately flush eyes with plenty of water at least 15 minutes）。\n- 如刺激持续，请就医检查（If irritation persists, get a doctor's examination）。\n\nB. 皮肤接触（Skin Contact）\n- 用流动水清洗受污染的皮肤区域（Wash the contaminated skin area with running water）。\n- 如刺激持续，请寻求医生帮助（If irritation persists, get a doctor's attention）。\n\nC. 吸入（Inhalation）\n- 立即将患者移至新鲜空气处（Remove victim to fresh air immediately）。\n- 如未呼吸，进行人工呼吸（Take Artificial respiration if not breathing）。\n- 呼吸困难时使用呼吸器（Use respirator when breathing is difficult）。\n- 寻求医疗帮助（Get medical attention）。\n\nD. 误食（Ingestion）\n- 不要催吐（Do not induce vomiting）。\n- 如患者无意识，不要喂食任何东西（Do not feed anything if that is not conscious）。\n- 如患者有意识，给予 2~4 杯水或牛奶（Give 2~4 cups water or milk if conscious）。\n- 寻求医疗帮助（Get medical attention）。\n\nE. 给医生的提示（Notice to Physician）\n- 治疗可能因患者状况和事故具体情况而异（Treatment may vary with condition of victim and specifics of incident）。\n\n5. 灭火措施（FIRE FIGHTING MEASURE）\n\nA. 适用（不适用）的灭火介质（Suitable (Unsuitable) extinguishing media）\n- 灭火介质（Extinguishing media）：二氧化碳（Carbon Dioxide）、泡沫（foam）、干粉灭火介质（powder extinguishing media）\n- 不适用灭火介质（Unsuitable Extinguishing media）：请勿使用直流水（Do not use direct water）。\n- 大型火灾（Large fire）：抗醇泡沫（Alcohol-resistant foam）。\n\nB. 由化学品引起的特定危险（Specific hazards arising from the chemical）\n- 燃烧产物（Combustion）：二氧化碳（Carbon dioxide）、一氧化碳（carbon monoxide）\n- 火灾危险等级（Levels of fire hazard）：\n  - 火灾可能产生刺激性或有毒气体（There is potential for caused by the fire that irritating or toxic gases）。\n  - 蒸气比空气重（Vapors are heavier than air）。\n  - 容器在受热时可能破裂或爆炸（Containers may rupture or explode if exposed）。\n\nC. 灭火程序和设备（Fire fighting procedures and equipments）\n- 穿戴适当的个人防护装备（参见第 8 节 暴露控制/个人防护）（Wear appropriate personal protective equipment (see section 8. EXPOSURE CONTROLS/PERSONAL PROTECTION)）。\n- 使用水雾保持受火容器冷却（Use water spray to keep fire-exposed containers cool）。\n- 如可无风险操作，将容器移离火场（Move container from fire area if it can be done without risk）。\n- 用水压制可能导致火势蔓延（Suppression using water can be spread fire）。\n- 避免吸入物质本身或燃烧产物（Avoid inhalation of substance itself or combustion）。\n- 处于上风向并远离低洼区域（Stay upwind and keep out of low areas）。\n\n6. 意外释放措施（ACCIDENTAL RELEASE MEASURES）\n\nA. 个人预防措施、防护设备和应急程序（Personal Precautions, Protective Equipment and Emergency procedures）\n- 按照「参见第 8 节 暴露控制/个人防护」执行。穿戴适当的个人防护装备（Perform in accordance with \"See section 8. EXPOSURE CONTROLS / PERSONAL PROTECTION\". Put on appropriate personal protective equipment）。\n- 避免接触眼睛和皮肤（Avoid contact with eyes and skin）。\n- 避免吸入物质本身或燃烧产物（Avoid inhalation of substance itself or combustion）。\n- 逆风撤离（Evacuation against the wind）。\n- 避免接触热源、火花、火焰或其他点火源（Avoid contact with heat, sparks, flame or other ignition sources）。\n\nB. 环境预防措施（Environmental Precautions）\n- 避免溢漏物和径流扩散及接触水道、排水沟和下水道。如大量溢漏，通知紧急服务部门（Avoid dispersal of spilled material and runoff and contact with waterways, drains and sewers. If large spills, advise emergency services）。"
+        }
+      ],
+      "source_names": [
+        "3e7754a178496e020d05ae37b76f1b07.pdf",
+        "84c1beaae97fdcca1d97b6f3e9f05570.pdf",
+        "9369ccb105b9ec06fc1e98bee1747c32.pdf"
+      ],
+      "source_doc_ids": [
+        106,
+        230,
+        240
+      ],
+      "gen_status": 1,
+      "gen_error": null,
+      "gen_latency_s": 8.719514225842431,
+      "gen_usage": {
+        "prompt_tokens": 7047,
+        "completion_tokens": 951,
+        "total_tokens": 7998
+      }
+    }
+  ]
+}
