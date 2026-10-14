@@ -55,7 +55,7 @@ graph.build()               # 实体变成 node
 graph.vectorization()       # 默认只嵌 chunk 和 node
 ```
 
-`main.py` 里目前打开的是 `extract`、`build`、`vectorization`。前面几步保持注释，是因为这份库的识别、总结和分块已经跑过，重跑会按各步自己的“已完成则跳过”规则补缺，而不是清空重来。要整段重做，先调对应的 `*_clear`。
+`main.py` 里这些调用目前都注释着。直接运行只打开库。要补某一步，取消对应那一行的注释；要整段重做，先调对应的 `*_clear`。每一步读哪张表、配置在哪一段，根目录 `README.md` 有按步骤写的说明。
 
 问答：
 
